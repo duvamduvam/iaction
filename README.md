@@ -16,7 +16,9 @@
 
 🇫🇷 [Version française](README.fr.md)
 
-<!-- screenshot: coming soon (demo-project captures) -->
+<img src="assets/screenshots/workspace.png" alt="IAction — project workspace: an agent jams a funk groove in Reaper through MCP" width="100%" />
+
+*A real session: the agent builds an 8-bar funk groove in the Reaper DAW through a project-scoped MCP server — file tree on the left, session history and MCP status on the right. (Development build, under the project's working title; UI currently in French.)*
 
 </div>
 
@@ -70,6 +72,9 @@ All of it wrapped in an unapologetic **neon synthwave UI** — because a tool yo
 - Package an orchestration as a **recurring task** (systemd timers): daily mailbox triage, weekly quality reviews, doc-site audits… delivered disarmed, with a "report-only" rehearsal mode before you arm anything.
 
 ### 📊 Local supervision & observability
+
+<img src="assets/screenshots/supervision.png" alt="IAction — Supervision dashboard: local usage analytics per project, model and period" width="100%" />
+
 - A **Supervision dashboard** computed entirely on your machine: conversations, turns, tokens by project, by model, by period — including the share used autonomously by orchestrations.
 - A consolidated application journal (JSONL on disk), a log explorer, an error-aware System page, and a versioned ticket backlog. **No silent failures** is a design rule of the project.
 
@@ -92,6 +97,14 @@ React UI (ui/)  ⇄  Tauri IPC  ⇄  thin Rust core (src-tauri/)  ⇄  JSON-Line
 - **src-tauri/** — Tauri 2 shell: window, sidecar spawn & supervision, protocol relay, keyring, atomic state storage.
 - **sidecar/** — Node process hosting the AI engines (Claude Agent SDK + neutral OpenAI-compatible engine), knowledge index, router, tasks, journal.
 - The full UI⇄Rust⇄sidecar protocol is specified in [docs/protocol.md](docs/protocol.md) and covered by tests.
+
+## 💻 Platform support
+
+| Platform | Status |
+|---|---|
+| **Linux** | ✅ Development platform — used daily, tested |
+| **Windows** | 🔶 Untested. Tauri 2 (WebView2), the React UI and the Node sidecar are portable in principle, and the Rust core guards its unix-specific paths — but nobody has tried yet, and **scheduled tasks rely on systemd user timers (Linux-only)**. WSL2 + WSLg should work. Reports & PRs very welcome. |
+| **macOS** | 🔶 Untested — same story minus WebView2 (WKWebView), scheduled tasks would need a `launchd` port. |
 
 ## 🚀 Quick start (Linux)
 
