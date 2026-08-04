@@ -1,0 +1,21 @@
+{
+  "name": "iaction",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "ui",
+    "sidecar"
+  ],
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "npm run build -w sidecar && tauri build",
+    "tauri": "tauri",
+    "ui:build": "npm run build -w ui",
+    "sidecar:build": "npm run build -w sidecar",
+    "sidecar:test": "npm run test -w sidecar"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

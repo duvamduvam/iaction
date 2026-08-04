@@ -1,0 +1,172 @@
+/*
+ * IAction — thème « outrun / neon drive » (rétro-futuriste néon assumé).
+ * Tokens de design system : fonds, accents néon, texte, bordures,
+ * rayons, ombres/glows, typographie. Palette violet-nuit + trio néon
+ * cyan/magenta/violet — le néon irrigue davantage la surface (dégradés sur
+ * les éléments actifs, glows plus larges) tout en gardant le texte courant
+ * sur des tons sobres pour ne jamais sacrifier la lisibilité.
+ */
+
+:root {
+  /* Fonds — les surfaces (panneaux, zones creuses) sont légèrement
+     translucides pour laisser transparaître le fond « courbure d'espace-
+     temps » (horizon-grid.svg). Pas de flou d'arrière-plan sur les grandes
+     surfaces (retour utilisateur) : l'alpha reste assez haut pour que le
+     texte se lise directement sur les lignes atténuées de la grille. */
+  --bg-0: #0d0a1f; /* fond de page (violet-nuit) */
+  --bg-1: rgba(23, 16, 46, 0.8); /* panneaux */
+  --bg-2: rgba(34, 25, 70, 0.8); /* panneaux surélevés / zones techniques */
+  --bg-inset: rgba(10, 7, 24, 0.72); /* zones creuses : streams, logs, éditeur */
+
+  /* Accents néon */
+  --neon-cyan: #00e5ff;
+  --neon-cyan-dim: #00e5ff66;
+  --neon-magenta: #ff2e97;
+  --neon-magenta-dim: #ff2e9766;
+  /* Troisième accent : sélections + teinte médiane des dégradés signature. */
+  --neon-violet: #a855f7;
+  --neon-violet-dim: #a855f766;
+
+  /* Couleurs de statut */
+  /* Turquoise plutôt que le vert menthe #34d399 : c'était la seule teinte
+     pastel/désaturée de l'interface, en rupture avec le trio néon saturé.
+     Le turquoise reste dans la famille cyan (teinte 172° vs 186°) donc il se
+     fond dans le thème, tout en gardant une lecture « sain / en ligne ». */
+  --status-ok: #00f5d4; /* turquoise : running + ready */
+  --status-warn: #fbbf24; /* ambre : (re)starting */
+  /* Rouge franc plutôt que rose : sur fond violet-nuit, l'ancien #fb7185
+     devenait trop proche du magenta #ff2e97 — l'erreur doit rester
+     identifiable au premier coup d'œil, y compris à côté d'une bulle/bouton
+     magenta. */
+  --status-error: #ff3131; /* rouge : dead / erreur */
+
+  /* Texte */
+  --text-0: #e6ecf5; /* texte principal */
+  --text-1: #9a93b8; /* texte atténué / labels — gris légèrement violacé, accordé aux fonds */
+  --text-2: #6c6493; /* texte discret / placeholders — idem, un cran plus sombre */
+
+  /* Bordures */
+  --border-0: #2a2050;
+  --border-1: #3a2d68;
+  --border-cyan: #00e5ff40;
+  --border-magenta: #ff2e9740;
+  --border-violet: #a855f740;
+
+  /* Rayons */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+
+  /* Ombres / glows — volontairement contenus (retour de l'utilisateur sur la
+     V2 « renforcée » : halos trop envahissants autour des bulles de chat, des
+     sélections et du texte). Un liseré net + un halo court translucide :
+     l'identité néon est portée par le fond et les dégradés, plus par
+     l'étalement des ombres. */
+  --glow-cyan: 0 0 0 1px var(--border-cyan), 0 0 14px -6px var(--neon-cyan-dim);
+  --glow-magenta: 0 0 0 1px var(--border-magenta), 0 0 14px -6px var(--neon-magenta-dim);
+  --glow-violet: 0 0 0 1px var(--border-violet), 0 0 14px -6px var(--neon-violet-dim);
+  --glow-ok: 0 0 10px -2px #00f5d480;
+  --glow-warn: 0 0 10px -2px #fbbf2480;
+  --glow-error: 0 0 10px -2px #ff313180;
+  --shadow-panel: 0 4px 24px -8px rgba(0, 0, 0, 0.55);
+
+  /* Dégradé signature : porté par les éléments « actifs » (onglet courant,
+     boutons primaires, titre de marque) pour affirmer l'identité outrun sans
+     l'étaler en aplat partout. */
+  --gradient-neon: linear-gradient(90deg, #ff2e97, #a855f7, #00e5ff);
+
+  /* Typographie */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Roboto Mono", "Liberation Mono",
+    monospace;
+
+  /* Rythme */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* Lueur d'horizon en haut de page (violet-magenta assourdi) : cohérente
+     avec la grille en perspective posée en bas de `.app-shell` (voir
+     App.css) — la page « respire » entre deux lueurs, sans aplat franc. */
+  background: radial-gradient(ellipse at top, #241a45 0%, var(--bg-0) 55%);
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  min-height: 100%;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* Focus clavier visible partout */
+:focus-visible {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Scrollbars discrètes */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-1) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border-1);
+  border-radius: var(--radius-sm);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-2);
+}
+
+/* Sélection de texte : le violet est réservé aux « sélections » (voir aussi
+   l'option choisie dans les questions de l'agent, App.css) — le distingue du
+   magenta/cyan portés par les accents actifs habituels. */
+::selection {
+  background: var(--neon-violet-dim);
+  color: var(--text-0);
+}

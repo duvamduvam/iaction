@@ -1,0 +1,23 @@
+# Manifeste de la tâche « qualite-iaction » — gabarit VERSIONNÉ, non installé.
+# Boucle d'amélioration continue : docs/etude-logs.md § 2.7, tranche L5.
+# Forme du manifeste : docs/protocol.md § « Méthodes T1 — tâches planifiées ».
+#
+# Installation : voir le README.md de ce dossier. La tâche est livrée
+# DÉSARMÉE (enabled: false) — le rodage « rapport seul » se fait à la main,
+# avec « Lancer maintenant », avant tout armement du timer.
+name: qualite-iaction
+description: Revue qualité hebdomadaire — agrège le journal applicatif et les événements d'usage locaux, puis PROPOSE des tickets (aucune écriture dans docs/tickets.md).
+orchestration: qualite-iaction
+# Cadence hebdomadaire, syntaxe OnCalendar systemd : tous les lundis à 09h00.
+# (Horaire choisi pour ne pas
+# empiler plusieurs runs LLM sur la même minute au réveil de la machine.)
+schedule: "Mon *-*-* 09:00"
+inputs:
+  date: "{{today}}"
+  # Facultatif : chemin ABSOLU du dépôt iaction sur ce poste. S'il est
+  # renseigné, l'agent lit docs/tickets.md en LECTURE SEULE pour ne pas
+  # proposer un doublon d'un ticket déjà ouvert. Laisser vide sinon.
+  depot: ""
+report: rapports/{{today}}.md
+# Désarmée par défaut : c'est un gabarit, l'utilisateur arme lui-même après rodage.
+enabled: false

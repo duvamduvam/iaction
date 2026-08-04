@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- « Monogramme IA » : les initiales en géométrie pure (barre + lambda)
+       dans un ensō pointillé — la marque de l'app, version badge. -->
+  <defs>
+    <radialGradient id="mon-bg" cx="50%" cy="42%" r="75%">
+      <stop offset="0%" stop-color="#101a33"/>
+      <stop offset="100%" stop-color="#070b16"/>
+    </radialGradient>
+    <linearGradient id="mon-a" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7c6cf9"/>
+      <stop offset="100%" stop-color="#e879f9"/>
+    </linearGradient>
+    <filter id="mon-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="12" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#mon-bg)"/>
+  <g filter="url(#mon-glow)" fill="none" stroke-linecap="round">
+    <circle cx="256" cy="256" r="176" stroke="#22d3ee" stroke-width="10"
+      pathLength="100" stroke-dasharray="4 4" opacity="0.8"/>
+    <path d="M 182 190 V 322" stroke="#22d3ee" stroke-width="26"/>
+    <path d="M 246 322 L 300 190 L 354 322" stroke="url(#mon-a)" stroke-width="26" stroke-linejoin="round"/>
+    <path d="M 271 264 H 329" stroke="url(#mon-a)" stroke-width="20"/>
+  </g>
+</svg>

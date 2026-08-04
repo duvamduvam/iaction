@@ -1,0 +1,25 @@
+# Orchestration de la tâche « qualite-iaction » (docs/protocol.md § O1).
+# Une seule étape : l'analyse ET la rédaction du rapport sont le même
+# raisonnement (les tickets proposés découlent directement des agrégats).
+name: qualite-iaction
+description: Revue qualité hebdomadaire du journal applicatif et des événements d'usage.
+inputs:
+  - name: date
+    label: Date du jour (AAAA-MM-JJ)
+  - name: depot
+    label: Chemin absolu du dépôt iaction (facultatif, pour relire docs/tickets.md)
+steps:
+  - id: rapport
+    agent: analyste-qualite
+    task: |
+      Produis la revue qualité de la semaine écoulée (7 derniers jours).
+      Date du jour : {{date}}.
+      Dépôt iaction (peut être vide) : {{depot}}
+
+      Applique ta méthode : agrégats sur les journaux LOCAUX uniquement,
+      puis rapport Markdown complet en réponse finale, section
+      « Tickets proposés » comprise. N'écris aucun fichier.
+    needs: []
+limits:
+  maxParallel: 1
+  maxDurationMin: 20

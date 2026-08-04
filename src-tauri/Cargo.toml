@@ -1,0 +1,44 @@
+[package]
+name = "iaction"
+version = "0.1.0"
+description = "IAction — desktop multi-fournisseur pour le développement assisté par IA"
+authors = ["duvamduvam"]
+edition = "2021"
+
+[lib]
+name = "iaction_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Trousseau OS. "sync-secret-service" pilote le Secret Service (GNOME Keyring,
+# KWallet…) via libdbus, en synchrone — recommandé par la doc de la crate même pour
+# du code déjà async, car l'accès au trousseau reste de toute façon bloquant. Les
+# features "apple-native"/"windows-native" n'entraînent aucune dépendance sur Linux
+# (leurs deps sont gated par `target_os` dans le Cargo.toml de `keyring`) : elles ne
+# servent qu'à préparer la compilation future sur macOS/Windows.
+keyring = { version = "3", features = ["sync-secret-service", "apple-native", "windows-native"] }
+# Sélecteur de dossier natif (page Agent : choix du répertoire projet).
+tauri-plugin-dialog = "2"
+
+# Lecture de l'image du presse-papier SYSTÈME, côté natif. Indispensable sous
+# WebKitGTK (moteur Tauri Linux) : une capture d'écran présente dans le
+# presse-papier n'est PAS exposée à l'événement `paste` du DOM — on la lit donc
+# ici. `wayland-data-control` ajoute le repli Wayland (wlr-data-control) en plus
+# de X11/XWayland. `image` (PNG seul) encode le RGBA brut renvoyé par arboard.
+arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Accès direct à la webview WebKitGTK, Linux uniquement. Sert à autoriser le
+# micro (`getUserMedia`) pour la dictée vocale : WebKitGTK le refuse par défaut
+# (réglage `enable-media-stream` désactivé + demande de permission rejetée).
+# ⚠ Version épinglée sur celle qu'embarque déjà `wry` (le moteur webview de
+# Tauri 2) — cf. Cargo.lock — pour partager la même pile GTK au lieu d'en
+# compiler une seconde. À réaligner si une mise à jour de tauri/wry la change.
+[target."cfg(target_os = \"linux\")".dependencies]
+webkit2gtk = "=2.0.2"

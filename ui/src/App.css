@@ -1,0 +1,5865 @@
+.app-shell {
+  /* Pleine largeur : l'ancien plafond (1760px) laissait de larges marges
+     vides sur les écrans 4K/mise à l'échelle — l'app occupe tout l'écran,
+     seul le padding garde le contenu décollé des bords. */
+  padding: var(--space-5) var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 100%;
+  /* Hauteur bornée au viewport (pas seulement `min-height`) : nécessaire
+     pour que `.app-content` (flex:1 ci-dessous) ait une hauteur DÉFINIE à
+     distribuer — condition requise par la page Agent pour que son panneau
+     latéral/sa conversation/son éditeur défilent chacun en interne plutôt
+     que de pousser la hauteur de la page entière (voir `.agent-page`
+     ci-dessous). Sans `overflow:hidden` ici : les autres pages, dont le
+     contenu peut dépasser 100vh, débordent toujours visiblement et le
+     scroll de la fenêtre les gère exactement comme avant — rien ne change
+     pour elles.
+  */
+  height: 100vh;
+}
+
+/* Fond « courbure d'espace-temps » (variante v2-orbe, couleurs Neon Drive) :
+   grille en perspective déformée par un puits de gravité, orbe coucher-de-
+   soleil posé dans la dépression — SVG statique généré par
+   scripts/gen-horizon-grid.py et servi depuis ui/public/. `position:fixed` +
+   `z-index:-1` : le fond se pose sur un pseudo-élément (aucun JSX), reste
+   indépendant du défilement et ne capte jamais le clic. Atténué (`opacity`)
+   + estompé vers le haut (`mask-image`) pour laisser l'en-tête respirer. */
+.app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: url("/horizon-grid.svg");
+  background-size: cover;
+  background-position: center bottom;
+  background-repeat: no-repeat;
+  -webkit-mask-image: linear-gradient(to top, black 60%, transparent 97%);
+  mask-image: linear-gradient(to top, black 60%, transparent 97%);
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* ---------- En-tête ---------- */
+
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-bottom: 0;
+  border-bottom: 1px solid var(--border-0);
+}
+
+.app-header__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Titre de marque : texte en dégradé signature (magenta → violet → cyan).
+   `filter: drop-shadow` plutôt que `text-shadow` : ce dernier ignore la
+   transparence du remplissage en dégradé (color:transparent) et ne
+   produirait aucune lueur visible — drop-shadow, lui, suit la forme réelle
+   des pixels rendus quelle que soit leur couleur. */
+.brand__title {
+  font-family: var(--font-mono);
+  font-size: 1.6rem;
+  letter-spacing: 0.12em;
+  background: var(--gradient-neon);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 6px var(--neon-violet-dim));
+}
+
+.brand__title em {
+  font-style: normal;
+  background: inherit;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+.brand__subtitle {
+  font-size: 0.8rem;
+  color: var(--text-1);
+}
+
+/* ---------- Badge de statut ---------- */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 999px;
+  border: 1px solid var(--border-1);
+  background: var(--bg-1);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-0);
+}
+
+.status-badge__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-2);
+  flex: none;
+}
+
+.status-badge--ok {
+  border-color: #00f5d455;
+  box-shadow: var(--glow-ok);
+}
+.status-badge--ok .status-badge__dot {
+  background: var(--status-ok);
+  box-shadow: 0 0 8px 1px var(--status-ok);
+}
+
+.status-badge--warn {
+  border-color: #fbbf2455;
+  box-shadow: var(--glow-warn);
+}
+.status-badge--warn .status-badge__dot {
+  background: var(--status-warn);
+  box-shadow: 0 0 8px 1px var(--status-warn);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.status-badge--error {
+  border-color: #ff313155;
+  box-shadow: var(--glow-error);
+}
+.status-badge--error .status-badge__dot {
+  background: var(--status-error);
+  box-shadow: 0 0 8px 1px var(--status-error);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.status-badge__meta {
+  color: var(--text-1);
+  font-size: 0.75rem;
+}
+
+/* ---------- Encart conso ---------- */
+
+.app-header__right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.usage-widget {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 999px;
+  border: 1px solid var(--border-1);
+  background: var(--bg-1);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.usage-widget__claude {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.usage-widget__placeholder {
+  color: var(--text-2);
+  cursor: default;
+}
+
+/* Encart contexte (voir ContextWidget) et sonde système minimale
+   (CPU/RAM/GPU, poll 5 s — voir SystemStatsWidget) : même pastille ovale que
+   `.usage-widget`, pour que les trois encarts de l'en-tête se lisent comme
+   une même famille. */
+.context-widget,
+.system-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 999px;
+  border: 1px solid var(--border-1);
+  background: var(--bg-1);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-1);
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* Bouton « Compacter » de l'encart contexte : n'apparaît que quand la jauge
+   dépasse COMPACT_BUTTON_RATIO (voir contextBus.ts) et qu'une page a
+   enregistré l'action — même vocabulaire visuel que la pastille hôte. */
+.context-widget__compact {
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--border-cyan);
+  background: transparent;
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.context-widget__compact:hover {
+  background: var(--neon-cyan-dim);
+  color: var(--text-0);
+}
+
+/* Largeur stable : « 8 % » et « 100 % » occupent la même place (chiffres à
+   chasse fixe + réserve de 4 caractères), l'encart ne « respire » pas au fil
+   des mesures. */
+.system-stats .usage-donut__text {
+  min-width: 4ch;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bouton « Terminal » : une action dans la barre d'onglets, pas un onglet —
+   même métrique que .nav-item, démarquée par une teinte légèrement magenta. */
+.nav-item--action {
+  color: var(--neon-magenta);
+  opacity: 0.85;
+}
+
+.nav-item--action:hover {
+  color: var(--neon-magenta);
+  opacity: 1;
+  text-shadow: 0 0 8px var(--neon-magenta-dim);
+}
+
+/* Compteur local « conso hebdo Fable » (voir ui/src/fableUsage.ts). */
+/* Bandeau « Conversation vidée · Annuler » (Ctrl+K sans confirmation) : le
+   vidage écrase et persiste, l'annulation est le filet qui remplace la modale. */
+.cleared-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cleared-notice__undo {
+  padding: 1px 10px;
+  font-size: 0.74rem;
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+}
+
+.cleared-notice__dismiss {
+  margin-left: auto;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.cleared-notice__dismiss:hover {
+  color: var(--text-0);
+}
+
+/* Alerte « fenêtre saturée » dans l'encart conso (voir pickSaturatedWindow). */
+.usage-widget__alert {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--status-error);
+  color: var(--status-error);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* Note de fin de tour anormale (limite atteinte, max d'étapes…) : plus visible
+   que la note grise ordinaire. */
+.chat-bubble__note--strong {
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--status-warn);
+  background: #fbbf2411;
+}
+
+/* Bouton d'initialisation du relevé Claude (micro-tour à la demande). */
+.usage-widget__init {
+  appearance: none;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 2px 7px;
+  margin-left: 4px;
+  cursor: pointer;
+}
+
+.usage-widget__init:hover:not(:disabled) {
+  color: var(--text-0);
+  border-color: var(--neon-cyan);
+}
+
+.usage-widget__init:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.usage-gauge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: default;
+}
+
+.usage-gauge__label {
+  color: var(--text-1);
+  font-size: 0.7rem;
+}
+
+.usage-gauge__track {
+  width: 36px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-0);
+  overflow: hidden;
+}
+
+.usage-gauge__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+/* Jauges de conso : glow renforcé (halo plus large) pour rester lisible
+   dans le style « neon drive » — toujours un simple halo, jamais un flou qui
+   avalerait le pourcentage affiché juste à côté. */
+.usage-gauge--ok .usage-gauge__fill {
+  background: var(--status-ok);
+  box-shadow: 0 0 10px 1px #00f5d4aa;
+}
+
+.usage-gauge--warn .usage-gauge__fill {
+  background: var(--status-warn);
+  box-shadow: 0 0 10px 1px #fbbf24aa;
+}
+
+.usage-gauge--error .usage-gauge__fill {
+  background: var(--status-error);
+  box-shadow: 0 0 10px 1px #ff3131aa;
+}
+
+.usage-gauge__pct {
+  color: var(--text-1);
+  font-size: 0.7rem;
+  /* Assez large pour « 100% » comme pour « $12.34 » (jauge OpenRouter). */
+  min-width: 2.2em;
+  white-space: nowrap;
+}
+
+/* Camemberts de conso (composant Donut de App.tsx) : anneau SVG rempli à
+   hauteur de la part consommée, couleur par seuil (mêmes niveaux ok/warn/
+   error que les jauges linéaires historiques ci-dessus). */
+
+.usage-donut {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: default;
+}
+
+.usage-donut__svg {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+.usage-donut__bg {
+  fill: none;
+  stroke: var(--bg-inset);
+  stroke-width: 4;
+}
+
+.usage-donut__val {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.25s ease;
+}
+
+/* Anneaux de conso (SVG) : même renfort de glow que les jauges linéaires
+   ci-dessus (halo plus visible, toujours en rayon modeste vu la taille
+   réduite de l'anneau). */
+.usage-donut--ok .usage-donut__val {
+  stroke: var(--status-ok);
+  filter: drop-shadow(0 0 5px #00f5d4aa);
+}
+
+.usage-donut--warn .usage-donut__val {
+  stroke: var(--status-warn);
+  filter: drop-shadow(0 0 5px #fbbf24aa);
+}
+
+.usage-donut--error .usage-donut__val {
+  stroke: var(--status-error);
+  filter: drop-shadow(0 0 5px #ff3131aa);
+}
+
+.usage-donut__label {
+  color: var(--text-1);
+  font-size: 0.7rem;
+}
+
+.usage-donut__text {
+  color: var(--text-0);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+/* ---------- Navigation principale (onglets horizontaux, en-tête) ---------- */
+
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.nav-item {
+  appearance: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-1);
+  text-align: center;
+  padding: var(--space-2) var(--space-3) calc(var(--space-2) - 2px);
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    text-shadow 0.15s ease;
+}
+
+/* Pastille « nouveau rapport de tâche » sur l'onglet Supervision (voir
+   App.tsx, sonde tacheAlert) : point cyan pulsant accolé au libellé —
+   signal discret, l'ouverture de la page l'éteint. */
+.nav-item--alert::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--neon-cyan);
+  vertical-align: middle;
+  animation: nav-alert-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes nav-alert-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.nav-item:hover {
+  color: var(--text-0);
+}
+
+/* Onglet actif : soulignement en dégradé signature plutôt qu'un aplat cyan
+   uni — `border-image` peint la bordure déjà réservée (2px, voir `.nav-item`
+   ci-dessus) sans toucher au fond ni au contraste du libellé. */
+.nav-item--active {
+  color: var(--text-0);
+  border-image: var(--gradient-neon) 1;
+  text-shadow: 0 0 8px var(--neon-violet-dim);
+}
+
+/* ---------- Contenu ---------- */
+
+.app-content {
+  flex: 1;
+  min-width: 0;
+  /* Sans ce `min-height:0` : le comportement par défaut des enfants flex
+     (`min-height:auto`) empêcherait cette zone de se limiter à l'espace
+     restant sous l'en-tête, rendant `height:100%` ci-dessous inopérant sur
+     `.page-slot`/`.agent-page`. */
+  min-height: 0;
+}
+
+.page-slot {
+  display: block;
+  /* `.app-content` a désormais une hauteur définie (voir plus haut) : cette
+     règle la propage au slot actif. Sans effet visuel sur les pages qui ne
+     la consomment pas (Configuration/Système, tout en overflow visible par
+     défaut) — seules les pages qui posent la classe `.agent-page` (Projets
+     ET Chat, voir leurs commentaires respectifs) l'utilisent pour bâtir leur
+     mise en page plein viewport avec défilement interne par zone. */
+  height: 100%;
+}
+
+.page-slot--hidden {
+  display: none;
+}
+
+/* Zones de lecture seule (fil de conversation, page de doc, logs…) rendues
+   focusables à la volée par F6 / Alt+flèches (voir focusZone dans App.tsx) :
+   le liseré global `:focus-visible` déborderait de ces grands conteneurs
+   (outline-offset positif, souvent rogné par le parent) — on le rentre. */
+.zone-focusable:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (max-width: 760px) {
+  .app-nav {
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+}
+
+/* ---------- Page générique ---------- */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.page__intro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.page__title {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-0);
+}
+
+/* ---------- Contrôles de formulaire (select / input / textarea unifiés) ----------
+   Mêmes métriques partout dans l'app (Chat, Projets, Configuration, palette
+   Ctrl+Maj+P) : hauteur ~34px, padding, fond --bg-inset, bordure --border-0 →
+   --border-cyan + glow discret au focus, radius --radius-sm, police mono
+   pour les valeurs techniques des <select> (modèles/fournisseurs), flèche
+   personnalisée, état disabled distinct. `:where()` = spécificité nulle :
+   n'importe quelle règle plus spécifique déjà en place (ex. .cmdk-input,
+   volontairement différent) continue à primer sans changement. */
+:where(
+    select,
+    input:not([type="checkbox"]):not([type="radio"]),
+    textarea
+  ) {
+  height: 34px;
+  padding: 0 var(--space-3);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+:where(textarea) {
+  height: auto;
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+:where(select) {
+  /* Valeurs techniques (ids de modèles/fournisseurs) : police mono. */
+  font-family: var(--font-mono);
+  appearance: none;
+  cursor: pointer;
+  padding-right: calc(var(--space-3) + 18px);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238b96ab' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
+  background-size: 10px 6px;
+}
+
+:where(select option) {
+  font-family: var(--font-mono);
+  background: var(--bg-1);
+  color: var(--text-0);
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]))::placeholder,
+:where(textarea)::placeholder {
+  color: var(--text-2);
+}
+
+:where(
+    select:hover:not(:disabled),
+    input:not([type="checkbox"]):not([type="radio"]):hover:not(:disabled),
+    textarea:hover:not(:disabled)
+  ) {
+  border-color: var(--border-1);
+}
+
+:where(
+    select:focus,
+    input:not([type="checkbox"]):not([type="radio"]):focus,
+    textarea:focus
+  ) {
+  outline: none;
+  border-color: var(--neon-cyan);
+  box-shadow: var(--glow-cyan);
+}
+
+:where(
+    select:disabled,
+    input:not([type="checkbox"]):not([type="radio"]):disabled,
+    textarea:disabled
+  ) {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--bg-1);
+}
+
+/* ---------- Panneaux ---------- */
+
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-5);
+  align-items: start;
+}
+
+/* Translucidité des surfaces (tokens --bg-1/2/inset en rgba, voir theme.css) :
+   la grille du fond traverse légèrement panneaux, fenêtre principale et champs
+   de saisie. Pas de backdrop-filter sur les grandes surfaces (retour
+   utilisateur : effet de flou global indésirable) — seuls les menus flottants,
+   qui se posent par-dessus du texte, gardent un léger flou de lisibilité. */
+.slash-menu,
+.file-tree__context-menu {
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.panel {
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.panel__title {
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.panel__title::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--neon-cyan);
+  box-shadow: 0 0 6px 1px var(--neon-cyan);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.field label {
+  font-size: 0.78rem;
+  color: var(--text-1);
+}
+
+.field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.field--inline input {
+  width: 90px;
+}
+
+.field--checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.field--checkbox input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--neon-cyan);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* Bouton primaire : liseré en dégradé signature (technique du double fond —
+   un calque `padding-box` pour l'aplat sombre du bouton, un calque
+   `border-box` pour le dégradé qui transparaît à travers la bordure) plutôt
+   qu'un fond dégradé plein, qui aurait nui au contraste du libellé clair. */
+.btn {
+  appearance: none;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(180deg, #16202f, #101826) padding-box,
+    var(--gradient-neon) border-box;
+  color: var(--text-0);
+  font-size: 0.88rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  transition:
+    box-shadow 0.15s ease,
+    transform 0.05s ease,
+    border-color 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  /* Le liseré reste en dégradé (pas d'override de border-color, qui
+     l'écraserait par un aplat) — seul le halo s'intensifie au survol. */
+  box-shadow: var(--glow-cyan);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn--ghost {
+  border-color: var(--border-1);
+  background: transparent;
+}
+
+.btn--ghost:hover:not(:disabled) {
+  border-color: var(--neon-magenta);
+  box-shadow: var(--glow-magenta);
+}
+
+.result-line {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-1);
+  min-height: 1.4em;
+}
+
+.result-line--ok {
+  color: var(--status-ok);
+}
+
+.result-line--error {
+  color: var(--status-error);
+}
+
+.result-line--warn {
+  color: var(--status-warn);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.result-line__dismiss {
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  line-height: 1;
+}
+
+/* ---------- Sortie de stream ---------- */
+
+.stream-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.stream-entry {
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.stream-entry__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border-0);
+}
+
+.stream-entry__id {
+  color: var(--neon-cyan);
+}
+
+.stream-entry__state--streaming {
+  color: var(--status-warn);
+}
+.stream-entry__state--done {
+  color: var(--status-ok);
+}
+.stream-entry__state--error {
+  color: var(--status-error);
+}
+
+.stream-entry__body {
+  position: relative;
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: var(--text-0);
+}
+
+.cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 1em;
+  margin-left: 2px;
+  background: var(--neon-cyan);
+  box-shadow: 0 0 6px 1px var(--neon-cyan-dim);
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.empty-hint {
+  color: var(--text-2);
+  font-size: 0.85rem;
+}
+
+/* ---------- Journal applicatif (page Système, tranche L3) ----------
+   Panneau principal de la page Système : erreurs par criticité lues dans
+   `app.jsonl` via `log.read` (docs/protocol.md § L1, docs/etude-logs.md
+   § 2.6). Repose sur `.panel` pour le cadre ; tout ce qui suit n'ajoute que
+   la rangée de compteurs, les filtres et la liste dépliable.
+
+   Accessibilité : les cinq niveaux ne se distinguent JAMAIS par la seule
+   couleur — chacun porte un glyphe (✖ ● ▲ ■ ·) et son libellé en toutes
+   lettres, la teinte n'étant qu'un renfort. */
+
+.journal-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.journal-actions {
+  gap: var(--space-2);
+}
+
+/* Rangée de compteurs : <fieldset> dépouillé de ses styles UA. */
+.journal-counters {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0; /* neutralise le min-width:min-content implicite des fieldsets */
+}
+
+.journal-counters__legend {
+  padding: 0 0 var(--space-2);
+  font-size: 0.78rem;
+  color: var(--text-1);
+}
+
+.journal-counters__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Chip filtrante : pastille + libellé + nombre. Bordure neutre au repos,
+   teinte du niveau à l'état actif (jamais l'inverse : au repos, la lisibilité
+   prime sur la couleur). */
+.journal-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: 999px;
+  border: 1px solid var(--border-1);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease;
+}
+
+.journal-chip:hover {
+  border-color: var(--neon-cyan);
+}
+
+.journal-chip__glyph {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.journal-chip__count {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.journal-chip--active {
+  color: var(--text-0);
+  box-shadow: var(--glow-cyan);
+}
+
+/* Teintes par niveau — renfort de la forme, jamais son remplaçant. */
+.journal-chip--fatal .journal-chip__glyph,
+.journal-level--fatal .journal-level__glyph {
+  color: var(--neon-magenta);
+}
+.journal-chip--error .journal-chip__glyph,
+.journal-level--error .journal-level__glyph {
+  color: var(--status-error);
+}
+.journal-chip--warn .journal-chip__glyph,
+.journal-level--warn .journal-level__glyph {
+  color: var(--status-warn);
+}
+.journal-chip--info .journal-chip__glyph,
+.journal-level--info .journal-level__glyph {
+  color: var(--neon-cyan);
+}
+.journal-chip--debug .journal-chip__glyph,
+.journal-level--debug .journal-level__glyph {
+  color: var(--text-2);
+}
+
+.journal-chip--fatal.journal-chip--active {
+  border-color: var(--neon-magenta);
+  box-shadow: var(--glow-magenta);
+}
+.journal-chip--error.journal-chip--active {
+  border-color: var(--status-error);
+  box-shadow: var(--glow-error);
+}
+.journal-chip--warn.journal-chip--active {
+  border-color: var(--status-warn);
+  box-shadow: var(--glow-warn);
+}
+.journal-chip--info.journal-chip--active {
+  border-color: var(--neon-cyan);
+}
+.journal-chip--debug.journal-chip--active,
+.journal-chip--tous.journal-chip--active {
+  border-color: var(--neon-violet);
+  box-shadow: var(--glow-violet);
+}
+
+.journal-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+/* La recherche prend la place restante — `.field--inline input` plafonne à
+   90px, largeur pensée pour les petits champs numériques. */
+.journal-filters__search {
+  flex: 1 1 220px;
+}
+
+.journal-filters__search input {
+  width: 100%;
+  min-width: 160px;
+}
+
+/* Liste : zone de focus à part entière (roving tabindex, voir PAGE_ZONES
+   dans App.tsx) — les flèches y parcourent les entrées, Entrée déplie. */
+.journal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 380px;
+  overflow-y: auto;
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.journal-item {
+  border-bottom: 1px solid var(--border-0);
+}
+
+.journal-item:last-child {
+  border-bottom: none;
+}
+
+/* Ligne d'entrée : niveau, horodatage, scope, message, chevron. Le message
+   occupe l'espace restant et se tronque plutôt que de casser l'alignement. */
+.journal-row {
+  appearance: none;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 5.5rem 5.5rem 7rem 1fr auto;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--text-0);
+  font-family: var(--font-mono);
+  font-size: 0.79rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.journal-row:hover {
+  background: #ffffff08;
+}
+
+.journal-level {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  color: var(--text-1);
+}
+
+.journal-level__glyph {
+  font-size: 0.85rem;
+}
+
+/* Fatal et error : le message lui-même prend la teinte de statut, pour que la
+   ligne se repère au balayage — le glyphe reste le porteur non coloré. */
+.journal-item--fatal .journal-row__msg {
+  color: var(--neon-magenta);
+}
+
+.journal-item--error .journal-row__msg {
+  color: var(--status-error);
+}
+
+.journal-row__ts,
+.journal-row__scope {
+  color: var(--text-1);
+}
+
+.journal-row__msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journal-row__chevron {
+  color: var(--text-2);
+}
+
+/* Détail déplié : fields, corrélation, stack. */
+.journal-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3) var(--space-5);
+  border-top: 1px dashed var(--border-0);
+  font-size: 0.78rem;
+}
+
+.journal-detail__ts {
+  font-family: var(--font-mono);
+  color: var(--text-2);
+}
+
+.journal-kv {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+}
+
+.journal-kv__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+}
+
+.journal-kv__row dt {
+  color: var(--text-2);
+}
+
+.journal-kv__row dd {
+  margin: 0;
+  color: var(--text-0);
+  overflow-wrap: anywhere;
+}
+
+.journal-stack {
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 220px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: #00000040;
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Confirmation de purge : mêmes fondations que `.orch-modal`, en plus étroit
+   (une question, deux boutons). */
+.journal-confirm {
+  width: min(460px, 100%);
+}
+
+/* ---------- Backlog de tickets (page Système, tranche TK1) ----------
+   Panneau de LECTURE de `docs/tickets.md` (docs/protocol.md § TK1). Réutilise
+   volontairement les briques du Journal juste au-dessus — `.journal-counters`,
+   `.journal-chip`, `.journal-filters` — c'est la même page, les deux panneaux
+   doivent se lire comme un seul objet.
+
+   Accessibilité : la priorité ne se distingue JAMAIS par la seule couleur —
+   glyphe en rampe de remplissage (⬤ ◐ ○) + libellé « P1/P2/P3 » écrit. */
+
+.tickets-chip--P1 .journal-chip__glyph {
+  color: var(--status-error);
+}
+.tickets-chip--P2 .journal-chip__glyph {
+  color: var(--status-warn);
+}
+.tickets-chip--P3 .journal-chip__glyph {
+  color: var(--neon-cyan);
+}
+.tickets-chip--archives .journal-chip__glyph {
+  color: var(--text-2);
+}
+
+.tickets-chip--P1.journal-chip--active {
+  border-color: var(--status-error);
+  box-shadow: var(--glow-error);
+}
+.tickets-chip--P2.journal-chip--active {
+  border-color: var(--status-warn);
+  box-shadow: var(--glow-warn);
+}
+.tickets-chip--P3.journal-chip--active {
+  border-color: var(--neon-cyan);
+}
+.tickets-chip--archives.journal-chip--active {
+  border-color: var(--neon-violet);
+  box-shadow: var(--glow-violet);
+}
+
+/* Liste : zone de focus à part entière (roving tabindex, voir PAGE_ZONES). */
+.tickets-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.tickets-item {
+  border-bottom: 1px solid var(--border-0);
+}
+
+.tickets-item:last-child {
+  border-bottom: none;
+}
+
+/* Un ticket archivé est estompé : présent quand on le demande, jamais au
+   premier plan du backlog. */
+.tickets-item--archive .tickets-row {
+  opacity: 0.68;
+}
+
+/* Ligne : type, priorité, identifiant, titre, statut, chevron. Le titre prend
+   la place restante et se tronque plutôt que de casser l'alignement. */
+.tickets-row {
+  appearance: none;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 3.6rem 4.6rem 4.2rem 1fr 7.5rem auto;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--text-0);
+  font-family: var(--font-mono);
+  font-size: 0.79rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tickets-row:hover {
+  background: #ffffff08;
+}
+
+/* Badge de type : pastille bordée, le mot lui-même porte l'information. */
+.tickets-badge {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-1);
+  color: var(--text-1);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.tickets-badge--bug {
+  border-color: var(--status-error);
+  color: var(--status-error);
+}
+.tickets-badge--feat {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+}
+.tickets-badge--tech {
+  border-color: var(--neon-violet);
+  color: var(--neon-violet);
+}
+.tickets-badge--doc {
+  border-color: var(--text-2);
+  color: var(--text-2);
+}
+
+.tickets-prio {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  color: var(--text-1);
+}
+
+.tickets-prio__glyph {
+  font-size: 0.7rem;
+}
+
+.tickets-prio--P1 {
+  color: var(--status-error);
+}
+.tickets-prio--P2 {
+  color: var(--status-warn);
+}
+
+.tickets-row__id {
+  color: var(--text-2);
+}
+
+.tickets-row__titre {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tickets-row__statut {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Détail déplié : le corps de la section, rendu par le composant Markdown. */
+.tickets-detail {
+  padding: var(--space-2) var(--space-3) var(--space-3) var(--space-5);
+  border-top: 1px dashed var(--border-0);
+  font-size: 0.82rem;
+}
+
+/* ---------- Logs ---------- */
+
+.logs-panel {
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+}
+
+.logs-panel > summary {
+  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-1);
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.logs-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.logs-panel__count {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-2);
+}
+
+.logs-panel__body {
+  position: relative;
+  border-top: 1px solid var(--border-0);
+  padding: var(--space-3) var(--space-4);
+  max-height: 260px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-1);
+  background: var(--bg-inset);
+}
+
+.log-line {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  padding: 1px 0;
+  border-bottom: 1px solid #ffffff08;
+}
+
+.log-line:last-child {
+  border-bottom: none;
+}
+
+/* ---------- Page Configuration ---------- */
+
+/* Sous-navigation interne (Projets / Fournisseurs / Modèles / Applications) :
+   une seule section visible à la fois — remplace l'ancien empilement
+   vertical des 4 sections. Les sections restent montées en permanence
+   (masquées via CSS, même pattern que .page-slot) pour préserver leur état
+   local (formulaires en cours, catalogue de modèles déjà chargé…). */
+.config-subnav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: var(--space-1);
+}
+
+.config-subnav__item {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-1);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.config-subnav__item:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.config-subnav__item--active {
+  color: var(--text-0);
+  border-color: var(--border-cyan);
+  background: var(--bg-2);
+  box-shadow: var(--glow-cyan);
+}
+
+.config-panel--hidden {
+  display: none;
+}
+
+.config-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.config-section__title {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-0);
+}
+
+/* ---------- Section Projets ---------- */
+
+.project-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.project-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.project-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.project-card__name {
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.project-card__path {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-1);
+  overflow-wrap: break-word;
+}
+
+.project-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.project-form__path-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.project-form__path-row input {
+  flex: 1;
+}
+
+/* ---------- Page Fournisseurs ---------- */
+
+.provider-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.provider-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.provider-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.provider-card__label {
+  font-weight: 600;
+  color: var(--text-0);
+  margin-right: var(--space-2);
+}
+
+.provider-card__id {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-2);
+}
+
+.provider-card__needs-key {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--border-1);
+  color: var(--text-1);
+}
+
+.provider-card__needs-key--yes {
+  border-color: var(--border-magenta);
+  color: var(--neon-magenta);
+}
+
+.provider-card__needs-key--no {
+  border-color: var(--border-cyan);
+  color: var(--neon-cyan);
+}
+
+.provider-card__url {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-1);
+}
+
+.provider-card__headers {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-2);
+}
+
+.provider-card__key {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-0);
+}
+
+.provider-card__actions {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-0);
+}
+
+.provider-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---------- Section Routage automatique (R1, « model: auto ») ----------
+   Une ligne par tier : libellé + moteur + fournisseur (si neutre) + modèle. */
+
+.routing-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.routing-row__tier {
+  min-width: 5.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-1);
+}
+
+.routing-row input {
+  min-width: 12rem;
+}
+
+/* ---------- Section Modèles OpenRouter ---------- */
+
+.model-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.model-catalog__toolbar {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.model-catalog__toolbar input[type="search"] {
+  flex: 1;
+  min-width: 200px;
+}
+
+.model-catalog__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.model-catalog__disclaimer {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-2);
+  border-top: 1px solid var(--border-0);
+  padding-top: var(--space-2);
+}
+
+.model-favorites-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.model-chip {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--neon-magenta);
+  border: 1px solid var(--border-magenta);
+  border-radius: 999px;
+  padding: 2px var(--space-3);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.model-chip:hover {
+  box-shadow: 0 0 10px -4px var(--neon-magenta-dim);
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.model-star {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.model-star--active {
+  color: var(--neon-magenta);
+  text-shadow: 0 0 6px var(--neon-magenta-dim);
+}
+
+.model-row__id {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-row__price,
+.model-row__context {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.model-row__bench {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--neon-cyan);
+  border: 1px solid var(--border-cyan);
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Section Applications (Lot 5) ---------- */
+
+.app-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.app-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.app-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.app-card__label {
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.app-card__command {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-1);
+  overflow-wrap: break-word;
+}
+
+.app-card__extensions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.app-extension-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--neon-cyan);
+  border: 1px solid var(--border-cyan);
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  background: transparent;
+  white-space: nowrap;
+}
+
+.app-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---------- Page Chat ----------
+   Disposition « zen » alignée sur la page Projets (voir plus bas, section
+   « Page Agent ») : panneau latéral gauche à sections dépliantes + zone
+   principale plein viewport à défilement interne. La mécanique de mise en
+   page (plein viewport, panneau latéral, sections, liste de sessions) est
+   FACTORISÉE avec la page Projets plutôt que dupliquée — ChatPage.tsx pose
+   directement les classes `.agent-page`/`.agent-layout`/`.agent-sidebar`/
+   `.agent-main__content` sur son propre balisage (ces classes ne sont donc
+   plus exclusives à AgentPage.tsx, voir leurs commentaires respectifs) ; la
+   liste de sessions (`.session-list`/`.session-item`) était déjà partagée.
+   `.chat-page` ne porte plus de règles de mise en page lui-même : c'est
+   juste un point d'extension pour d'éventuels réglages propres au Chat. */
+
+.chat-log {
+  position: relative;
+  flex: 1;
+  min-height: 320px;
+  max-height: 55vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+}
+
+.chat-bubble {
+  max-width: 72%;
+  min-width: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.chat-bubble__content {
+  min-width: 0;
+}
+
+.chat-bubble--user {
+  align-self: flex-end;
+  background: linear-gradient(180deg, #241a2b, #17101d);
+  border: 1px solid var(--border-magenta);
+  /* Glow renforcé (voir --glow-magenta) : halo net mais toujours en
+     étalement négatif, pour ne pas déborder sur les bulles voisines. */
+  box-shadow: var(--glow-magenta);
+  color: var(--text-0);
+}
+
+.chat-bubble--assistant {
+  align-self: flex-start;
+  /* Plus large que la bulle utilisateur : les réponses portent souvent des
+     tableaux / du code qui respirent mal à 72 %. */
+  max-width: 88%;
+  background: linear-gradient(180deg, #101f28, #0c1720);
+  border: 1px solid var(--border-cyan);
+  box-shadow: var(--glow-cyan);
+  color: var(--text-0);
+}
+
+.chat-bubble__error {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: #ff313122;
+  border: 1px solid #ff313155;
+  color: var(--status-error);
+  font-size: 0.8rem;
+}
+
+.chat-bubble__note {
+  margin-top: var(--space-2);
+  font-size: 0.75rem;
+  color: var(--status-warn);
+}
+
+.chat-bubble__usage {
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-2);
+}
+
+/* R1 — badge « ⚡ auto : tier → modèle » des tours routés (infobulle = raisons du classement). */
+.chat-bubble__route {
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--neon-cyan-dim);
+}
+
+/* R4 — indicateur discret « historique compacté (N tours résumés) » en tête
+   de transcription : les anciens tours partent en résumé à l'envoi, la
+   transcription affichée reste intégrale. Clic → modale du résumé. */
+.chat-compaction {
+  appearance: none;
+  align-self: center;
+  border: 1px dashed var(--border-0);
+  border-radius: var(--radius-md);
+  background: transparent;
+  padding: 2px var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.chat-compaction:hover {
+  color: var(--text-1);
+  border-color: var(--border-cyan);
+}
+
+/* R4 — modale du résumé de compaction (mêmes fondations que .orch-modal). */
+.compaction-modal {
+  width: min(640px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel), var(--glow-cyan);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.compaction-modal__meta {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-2);
+}
+
+.compaction-modal__summary {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-1);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.chat-composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-radius: var(--radius-lg);
+  transition: outline-color 0.15s ease;
+  outline: 2px dashed transparent;
+  outline-offset: 4px;
+}
+
+/* ---------- Menu « / » du composeur (slash-commands/skills du projet) ---------- */
+/* Ancré au composeur, juste au-dessus du textarea (voir AgentPage.tsx,
+   `slashMenu`) — même famille visuelle que `.file-tree__context-menu`. */
+
+.slash-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin: 0 0 var(--space-2);
+  z-index: 20;
+  list-style: none;
+  padding: var(--space-1);
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-md);
+  box-shadow:
+    var(--shadow-panel),
+    var(--glow-cyan);
+}
+
+.slash-menu__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.slash-menu__item:hover,
+.slash-menu__item--selected {
+  background: var(--bg-2);
+}
+
+.slash-menu__item--selected .slash-menu__name {
+  color: var(--neon-cyan);
+}
+
+.slash-menu__name {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-0);
+}
+
+.slash-menu__description {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-menu__hint {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-2);
+  opacity: 0.75;
+}
+
+/* Glisser-déposer d'un fichier sur le composeur (voir Attachments.tsx). */
+.chat-composer--dragover {
+  outline-color: var(--neon-cyan);
+}
+
+.chat-composer__row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+}
+
+/* Colonne d'icônes à gauche du textarea (trombone, micro, mode conversation) —
+   identique dans le Chat et dans Projets. Empilées verticalement, elles ne
+   mangent plus qu'une seule largeur de bouton : toute la place gagnée revient à
+   la zone de saisie. `align-self: flex-start` cale le haut de la colonne sur le
+   haut du textarea (la rangée, elle, s'aligne en bas pour le bloc d'envoi), et
+   `flex: none` l'empêche de s'étirer ou de se déformer quand la saisie grandit.
+   `align-items: stretch` donne d'office la même largeur aux trois boutons. */
+.chat-composer__tools {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-self: flex-start;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.chat-composer textarea {
+  flex: 1;
+  /* Zone de saisie confortable (~5 lignes), redimensionnable à la souris
+     (resize:vertical hérité des contrôles unifiés) sans jamais avaler la
+     conversation. */
+  min-height: 110px;
+  max-height: 38vh;
+}
+
+/* Message mis en file pendant qu'un tour est en cours (voir handleSend). */
+.composer-queued {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px dashed var(--border-cyan);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+  font-size: 0.8rem;
+  color: var(--text-1);
+}
+
+.composer-queued__label {
+  flex: none;
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.composer-queued__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-queued__cancel {
+  flex: none;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.composer-queued__cancel:hover {
+  color: var(--status-error);
+}
+
+/* ---------- Pièces jointes (Attachments.tsx) ---------- */
+
+.attachment-picker {
+  flex: none;
+  padding: var(--space-2) var(--space-3);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.attachment-picker__input {
+  display: none;
+}
+
+.attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.attachment-tray--sent {
+  margin-top: var(--space-2);
+}
+
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 220px;
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-2);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  font-size: 0.76rem;
+  color: var(--text-1);
+}
+
+.attachment-chip--button {
+  appearance: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.attachment-chip--button:hover {
+  border-color: var(--neon-cyan);
+  box-shadow: var(--glow-cyan);
+}
+
+.attachment-chip--ref {
+  font-style: italic;
+  color: var(--text-2);
+}
+
+.attachment-chip__thumb {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+.attachment-chip__icon {
+  flex: none;
+  font-size: 1rem;
+}
+
+/* Vignette d'image encore en cours de chargement (collage d'une capture via le
+   presse-papier natif) : même gabarit que la vignette finale, avec un anneau
+   qui tourne, pour un retour visuel immédiat. */
+.attachment-chip__thumb--loading {
+  display: inline-block;
+  position: relative;
+  background: var(--surface-2, rgba(127, 127, 127, 0.15));
+}
+
+.attachment-chip__thumb--loading::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  border: 2px solid rgba(127, 127, 127, 0.35);
+  border-top-color: var(--accent, #6aa0ff);
+  animation: attachment-thumb-spin 0.7s linear infinite;
+}
+
+@keyframes attachment-thumb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.attachment-chip__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.attachment-chip__name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip__size {
+  font-size: 0.68rem;
+  color: var(--text-2);
+}
+
+.attachment-chip__remove {
+  flex: none;
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  font-size: 0.95rem;
+  line-height: 1;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.attachment-chip__remove:hover {
+  color: var(--status-error);
+}
+
+/* Enveloppe interne de la lightbox dans <Modal> : transparente pour la mise
+   en page, l'image est centrée par le flex du dialog et le bouton Fermer se
+   positionne contre le <dialog> (plein viewport), comme l'ancien overlay. */
+.attachment-lightbox {
+  display: contents;
+}
+
+.attachment-lightbox img {
+  max-width: 90vw;
+  max-height: 85vh;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+}
+
+.attachment-lightbox__close {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  width: 32px;
+  height: 32px;
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  color: var(--text-0);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.attachment-lightbox__close:hover {
+  border-color: var(--neon-magenta);
+  box-shadow: var(--glow-magenta);
+}
+
+/* ---------- Page Agent ---------- */
+
+.chat-page,
+.agent-page {
+  position: relative;
+  /* Page « zen » plein viewport (Lot Sidebar, étendu au Chat) : hauteur
+     bornée à celle du slot parent (voir `.page-slot`/`.app-content`/
+     `.app-shell` plus haut) et `overflow:hidden` ICI SEULEMENT — les autres
+     pages (`.page` seul) ne sont pas concernées et gardent leur défilement
+     de page normal. Partagée par les pages Projets (AgentPage.tsx) ET Chat
+     (ChatPage.tsx), qui posent toutes deux la classe `.agent-page` sur leur
+     racine plutôt que de dupliquer ces règles. `min-height:0` : requis pour
+     que `.agent-layout` (flex:1 ci-dessous) puisse réellement se limiter à
+     l'espace disponible plutôt que de pousser la hauteur au contenu — c'est
+     le piège classique des chaînes flex imbriquées sans `min-height:0` à
+     chaque niveau. */
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-page--empty {
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: 420px;
+}
+
+.agent-session-indicator {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-0);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.agent-session-indicator--active {
+  color: var(--neon-cyan);
+  border-color: var(--border-cyan);
+  box-shadow: var(--glow-cyan);
+}
+
+.agent-engine-indicator {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-0);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.agent-engine-indicator--claude {
+  color: var(--neon-cyan);
+  border-color: var(--border-cyan);
+  box-shadow: var(--glow-cyan);
+}
+
+.agent-engine-indicator--neutral {
+  color: var(--neon-magenta);
+  border-color: var(--border-magenta);
+  box-shadow: var(--glow-magenta);
+}
+
+/* Blocs d'un tour assistant (texte / raisonnement / outil), dans l'ordre d'arrivée. */
+
+.agent-text-block {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.agent-text-block + .agent-text-block,
+.chat-bubble__content > * + * {
+  margin-top: var(--space-2);
+}
+
+/* ---------- Rendu Markdown (Markdown.tsx) — transcriptions Agent/Chat ---------- */
+/* `.chat-bubble`/`.agent-text-block` posent `white-space:pre-wrap` (hérité) :
+   on le réinitialise ICI pour laisser le flux Markdown normal (paragraphes,
+   listes…) s'afficher — seuls les blocs `pre`/`code` en ont explicitement
+   besoin, réappliqué plus bas. Titres sobres (pas énormes : c'est une
+   transcription, pas un document), jamais de débordement horizontal. */
+
+.md {
+  white-space: normal;
+  overflow-wrap: break-word;
+  min-width: 0;
+}
+
+.md > *:first-child {
+  margin-top: 0;
+}
+.md > *:last-child {
+  margin-bottom: 0;
+}
+
+.md p {
+  margin: var(--space-2) 0;
+  line-height: 1.55;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: var(--space-3) 0 var(--space-1);
+  color: var(--text-0);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.md h1 {
+  font-size: 1.15rem;
+}
+.md h2 {
+  font-size: 1.08rem;
+}
+.md h3 {
+  font-size: 1.02rem;
+}
+.md h4,
+.md h5,
+.md h6 {
+  font-size: 0.95rem;
+  color: var(--text-1);
+}
+
+.md ul,
+.md ol {
+  margin: var(--space-2) 0;
+  padding-left: 1.4em;
+}
+
+.md li + li {
+  margin-top: 2px;
+}
+
+.md li > ul,
+.md li > ol {
+  margin: 2px 0;
+}
+
+.md a {
+  color: var(--neon-cyan);
+  text-decoration: underline;
+  text-decoration-color: var(--border-cyan);
+  cursor: pointer;
+  overflow-wrap: break-word;
+}
+
+.md a:hover {
+  text-decoration-color: var(--neon-cyan);
+}
+
+.md strong {
+  color: var(--text-0);
+}
+
+.md hr {
+  margin: var(--space-3) 0;
+  border: none;
+  border-top: 1px solid var(--border-0);
+}
+
+.md blockquote {
+  margin: var(--space-2) 0;
+  padding: var(--space-1) var(--space-3);
+  border-left: 2px solid var(--border-cyan);
+  color: var(--text-1);
+}
+
+.md blockquote p {
+  margin: var(--space-1) 0;
+}
+
+.md :not(pre) > code {
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  border: 1px solid var(--border-0);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--neon-cyan);
+  white-space: break-spaces;
+  overflow-wrap: break-word;
+}
+
+/* Référence de fichier cliquable dans un code inline de transcription (page
+   Agent, voir Markdown.tsx `onFileRef`) — même chip que `.md :not(pre) > code`
+   ci-dessus, avec un signal de clic en plus (souligné pointillé + survol
+   cyan) pour se distinguer d'un simple `<code>` non cliquable. */
+.md__file-ref {
+  display: inline;
+  padding: 1px 5px;
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--neon-cyan);
+  cursor: pointer;
+  text-decoration: underline dotted var(--border-cyan);
+  text-underline-offset: 2px;
+}
+
+.md__file-ref:hover,
+.md__file-ref:focus-visible {
+  border-color: var(--border-cyan);
+  text-decoration-color: var(--neon-cyan);
+  outline: none;
+}
+
+.md pre {
+  position: relative;
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-2);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.md pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-0);
+  white-space: pre;
+}
+
+.md__table-wrap {
+  margin: var(--space-2) 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.md table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  min-width: 100%;
+}
+
+.md th,
+.md td {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-0);
+  text-align: left;
+  vertical-align: top;
+  /* Le texte des cellules revient à la ligne (colonnes descriptives) plutôt
+     que d'élargir le tableau au point d'être rogné ; `.md__table-wrap`
+     (overflow-x:auto) reste le filet pour les tableaux à colonnes nombreuses. */
+  overflow-wrap: break-word;
+}
+
+.md th {
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-weight: 600;
+  /* En-têtes courts : gardés sur une ligne pour rester lisibles. */
+  white-space: nowrap;
+}
+
+.thinking-block {
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+
+.thinking-block summary {
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.76rem;
+  color: var(--text-2);
+  list-style: none;
+}
+
+.thinking-block summary::-webkit-details-marker {
+  display: none;
+}
+
+.thinking-block__content {
+  padding: 0 var(--space-2) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.tool-activity {
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-size: 0.8rem;
+}
+
+.tool-activity summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  list-style: none;
+  color: var(--text-1);
+}
+
+.tool-activity summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-activity__name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.tool-activity__preview {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-activity__status {
+  font-family: var(--font-mono);
+  flex: none;
+}
+
+.tool-activity__status--ok {
+  color: var(--status-ok);
+}
+
+.tool-activity__status--error {
+  color: var(--status-error);
+}
+
+.tool-activity__status--pending {
+  color: var(--status-warn);
+}
+
+.tool-activity__detail {
+  padding: 0 var(--space-2) var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tool-activity__result {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.tool-activity__result--error {
+  color: var(--status-error);
+}
+
+.pretty-json {
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--bg-2);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* ---------- Diff Edit/Write (permission) ---------- */
+
+.diff-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.diff-block {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.diff-block--removed {
+  background: #2a1418;
+  border: 1px solid #ff313155;
+  color: #ffb3b3;
+}
+
+.diff-block--added {
+  background: #12241c;
+  border: 1px solid #00f5d455;
+  color: #a7f3d0;
+}
+
+.diff-line {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* Question posée par l'agent (outil AskUserQuestion) : rendu lisible dans la
+   modale de permission, au lieu du JSON brut — voir AskUserQuestionBody. */
+.ask-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Indice sous un champ (ex. « répondez à chaque question avant d'envoyer »). */
+.field__hint {
+  margin: var(--space-1) 0 0;
+  font-size: 0.78rem;
+  color: var(--status-warn);
+}
+
+.ask-question__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.ask-question__chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-cyan);
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ask-question__multi {
+  color: var(--text-2);
+  font-size: 0.72rem;
+}
+
+.ask-question__text {
+  margin: 0 0 var(--space-2);
+  color: var(--text-0);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.ask-question__options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ask-question__option {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.ask-question__option:hover,
+.ask-question__option:focus-visible {
+  border-color: var(--neon-cyan);
+  background: var(--bg-2);
+}
+
+/* Choix retenu : état PERSISTANT (le survol seul ne suffisait pas à savoir
+   quelle réponse était sélectionnée une fois la souris partie). Violet plutôt
+   que cyan : le violet est réservé aux « sélections » dans la palette
+   (voir aussi `::selection` du texte, theme.css) — distinct du survol
+   (encore cyan juste au-dessus) et de l'action (dégradé signature). */
+.ask-question__option--picked {
+  border-color: var(--border-violet);
+  background: var(--bg-2);
+  box-shadow:
+    inset 3px 0 0 var(--neon-violet),
+    var(--glow-violet);
+}
+
+.ask-question__label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  color: var(--text-0);
+  font-weight: 600;
+  font-size: 0.86rem;
+}
+
+/* Largeur réservée : les libellés restent alignés, coché ou non. */
+.ask-question__check {
+  flex: none;
+  width: 12px;
+  color: var(--neon-cyan);
+}
+
+.ask-question__desc {
+  color: var(--text-1);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.ask-question__preview {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 160px;
+}
+
+.bash-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bash-block__desc {
+  margin: 0;
+  color: var(--text-1);
+  font-size: 0.85rem;
+}
+
+.bash-block__command {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-2);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-0);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-height: 200px;
+  overflow: auto;
+}
+
+/* ---------- Page Agent : panneau latéral + onglets ---------- */
+
+.agent-layout {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-4);
+  flex: 1;
+  min-height: 0;
+}
+
+.agent-main__content {
+  flex: 1;
+  min-width: 0;
+  /* Voir le commentaire de `.agent-page` : requis pour que `.agent-tabs__body`
+     (flex:1 plus bas) se limite à l'espace disponible au lieu de le pousser. */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---------- Panneaux latéraux gauche/droit (SidebarSection.tsx) : même
+   style de base. Page Projets (AgentPage.tsx) : deux instances de part et
+   d'autre de `.agent-main__content`. Page Chat (ChatPage.tsx) : une seule
+   instance à gauche (`--left`) — `--left`/`--right` ne diffèrent que sur le
+   côté où respirer pour la scrollbar interne. ---------- */
+
+.agent-sidebar {
+  flex: none;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.agent-sidebar--right {
+  padding-right: 0;
+  padding-left: 2px;
+}
+
+.sidebar-section {
+  flex: none;
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+
+.sidebar-section__head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  border: none;
+  color: var(--text-0);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  text-align: left;
+}
+
+.sidebar-section__head:hover {
+  color: var(--neon-cyan);
+}
+
+.sidebar-section--open .sidebar-section__head {
+  border-bottom: 1px solid var(--border-0);
+}
+
+.sidebar-section__title {
+  flex: 1;
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: inherit;
+}
+
+.sidebar-section__count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-1);
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+}
+
+.sidebar-section__chevron {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--text-2);
+  transition: transform 0.15s ease;
+}
+
+.sidebar-section--open .sidebar-section__chevron {
+  transform: rotate(180deg);
+}
+
+.sidebar-section__body {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Section « Projet » : sélecteur + bouton « + » sur une ligne, chemin en dessous. */
+.sidebar-project-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.sidebar-project-row select {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.sidebar-project-path {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Section « LLM » : champs empilés pleine largeur + indicateurs compacts.
+   `textarea` : nécessaire pour le prompt système du Chat (ex-`.system-prompt
+   textarea`, supprimée — cette section couvre désormais aussi ce cas). */
+.sidebar-section__body .field select,
+.sidebar-section__body .field input:not([type="checkbox"]),
+.sidebar-section__body .field textarea {
+  width: 100%;
+}
+
+.sidebar-indicators {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.sidebar-indicators .agent-engine-indicator,
+.sidebar-indicators .agent-session-indicator {
+  padding: 2px var(--space-2);
+  font-size: 0.68rem;
+}
+
+/* Sélecteur d'agent (« LLM » → Agent, étude orchestration phase O2) : ligne
+   « Configuré par l'agent … » sous le select, une fois une préconfiguration
+   appliquée — bouton ✕ compact pour revenir au mode manuel. */
+.agent-preset__applied {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  font-size: 0.75rem;
+  color: var(--text-1);
+}
+
+.agent-preset__clear {
+  flex: none;
+  width: 1.4em;
+  height: 1.4em;
+  line-height: 1;
+  border: 1px solid var(--border-0);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.agent-preset__clear:hover:not(:disabled) {
+  color: var(--neon-cyan);
+  border-color: var(--border-cyan);
+}
+
+.agent-preset__clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Section « Fichiers » : FileTree embarqué, défilement borné à sa section
+   (voir `.sidebar-filetree .file-tree` ci-dessous) — pas au panneau entier. */
+.sidebar-filetree .file-tree {
+  width: 100%;
+  min-height: 160px;
+  max-height: 40vh;
+}
+
+/* Section « Connaissances » : documents épinglés par projet. */
+.knowledge-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.knowledge-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+
+.knowledge-item__open {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-0);
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+}
+
+.knowledge-item__open:hover {
+  color: var(--neon-cyan);
+}
+
+.knowledge-item__remove {
+  flex: none;
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.knowledge-item__remove:hover {
+  color: var(--status-error);
+}
+
+/* Sous-groupes de la section « Connaissances » (dossier auto
+   `.iaction/connaissances/` + sources détectées CLAUDE.md/.claude/memory) :
+   un sous-titre discret par groupe (Épinglées / Automatiques / Détectées),
+   la même liste `.knowledge-item` que ci-dessus dans chacun. */
+.knowledge-group + .knowledge-group {
+  margin-top: var(--space-3);
+}
+
+.knowledge-group__title {
+  margin: 0 0 var(--space-1);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+.knowledge-item__tag {
+  flex: none;
+  font-size: 0.68rem;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.knowledge-item__pin {
+  flex: none;
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 0.68rem;
+  padding: 1px var(--space-1);
+}
+
+.knowledge-item__pin:hover:not(:disabled) {
+  color: var(--neon-cyan);
+  border-color: var(--border-cyan);
+}
+
+.knowledge-item__pin:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* R5 — bloc RAG en tête de la section « Connaissances » : sélecteur du mode
+   (injection intégrale / RAG search_knowledge), état de l'index d'embeddings
+   local et bouton « Indexer maintenant » (voir docs/spec-r5-rag.md §4). */
+.knowledge-rag {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-0);
+}
+
+.knowledge-rag__status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 0.72rem;
+  color: var(--text-2);
+}
+
+.knowledge-rag__stale {
+  color: var(--status-warn);
+}
+
+.knowledge-rag__index {
+  align-self: flex-start;
+}
+
+.knowledge-rag__error {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--status-error);
+}
+
+/* ---------- Historique de sessions (section « Sessions » page Projets,
+   panneau « Historique » page Chat — même liste, deux conteneurs). ---------- */
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Bouton « + Nouvelle session » en tête de la section Sessions. */
+.session-list__new {
+  width: 100%;
+  margin-bottom: var(--space-2);
+}
+
+.session-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+
+.session-item--active {
+  border-color: var(--border-cyan);
+  box-shadow: var(--glow-cyan);
+}
+
+.session-item__title {
+  flex: 1 1 100%;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-0);
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+}
+
+.session-item--active .session-item__title {
+  color: var(--neon-cyan);
+}
+
+.session-item__title:hover:not(:disabled) {
+  color: var(--neon-cyan);
+}
+
+.session-item__title:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.session-item__title-input {
+  flex: 1 1 100%;
+  height: auto;
+  padding: 1px var(--space-1);
+  font-size: 0.82rem;
+  border-color: var(--border-cyan);
+}
+
+.session-item__meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-2);
+  overflow: hidden;
+}
+
+.session-item__engine {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item__actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+
+.session-item__action {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 2px var(--space-1);
+}
+
+.session-item__action:hover:not(:disabled) {
+  color: var(--text-0);
+  border-color: var(--border-1);
+}
+
+.session-item__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.session-item__confirm {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.74rem;
+  color: var(--status-warn);
+}
+
+.session-item__confirm .btn {
+  padding: 1px var(--space-2);
+  font-size: 0.72rem;
+}
+
+.chat-bubble__knowledge-pill {
+  margin-top: var(--space-1);
+  font-size: 0.72rem;
+  color: var(--text-2);
+}
+
+.tool-activity__mcp-badge {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--neon-magenta);
+  border: 1px solid var(--border-magenta);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+}
+
+/* Section « MCP » : liste lecture seule + compteurs d'usage de la session courante. */
+.mcp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mcp-item {
+  padding: var(--space-2);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-item__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.mcp-item__name {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-0);
+}
+
+.mcp-item__kind {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-2);
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+}
+
+.mcp-item__detail {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-item__usage {
+  font-size: 0.72rem;
+  color: var(--neon-cyan);
+}
+
+/* ---------- Arborescence (FileTree.tsx) ---------- */
+
+/* L'arbre vit dans la section latérale « Fichiers » (SidebarSection) qui porte
+   déjà titre et repli : pas d'en-tête propre, pas de boîte dans la boîte —
+   seul « Rafraîchir » flotte en haut à droite, révélé au survol. */
+.file-tree {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 120px;
+  max-height: 68vh;
+}
+
+.file-tree__refresh {
+  position: absolute;
+  top: 2px;
+  right: var(--space-2);
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.file-tree:hover .file-tree__refresh,
+.file-tree__refresh:focus-visible {
+  opacity: 0.9;
+}
+
+.file-tree__icon-btn {
+  appearance: none;
+  border: 1px solid var(--border-1);
+  background: transparent;
+  color: var(--text-1);
+  border-radius: var(--radius-sm);
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.file-tree__icon-btn:hover {
+  border-color: var(--neon-cyan);
+  color: var(--text-0);
+  box-shadow: var(--glow-cyan);
+}
+
+.file-tree__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+
+.file-tree__hint-block {
+  padding: 0 var(--space-3);
+}
+
+.file-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  color: var(--text-0);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.1s ease;
+}
+
+.file-tree__row:hover {
+  background: var(--bg-2);
+  box-shadow: inset 2px 0 0 var(--neon-cyan-dim);
+}
+
+.file-tree__row--dim {
+  opacity: 0.45;
+}
+
+.file-tree__chevron {
+  flex: none;
+  width: 10px;
+  color: var(--text-2);
+  font-size: 0.68rem;
+  transition: transform 0.12s ease;
+}
+
+.file-tree__chevron--open {
+  transform: rotate(90deg);
+}
+
+.file-tree__chevron--spacer {
+  visibility: hidden;
+}
+
+/* Icônes SVG : trait fin `currentColor`, teinte par famille d'extensions
+   (voir EXT_KINDS dans FileTree.tsx). Dossiers en cyan, familles de fichiers
+   sur les accents du thème, fichiers « sans famille » neutres. */
+.file-tree__icon {
+  flex: none;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.file-tree__icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.file-tree__icon--dir,
+.file-tree__icon--dir-open {
+  color: var(--neon-cyan);
+  opacity: 0.8;
+}
+
+.file-tree__icon--code {
+  color: var(--neon-cyan);
+  opacity: 0.65;
+}
+
+.file-tree__icon--data {
+  color: var(--status-warn);
+  opacity: 0.7;
+}
+
+.file-tree__icon--doc {
+  color: var(--neon-magenta);
+  opacity: 0.75;
+}
+
+.file-tree__icon--img {
+  color: var(--status-ok);
+  opacity: 0.7;
+}
+
+.file-tree__icon--media,
+.file-tree__icon--archive,
+.file-tree__icon--plain {
+  color: var(--text-2);
+}
+
+/* Guides d'indentation : chaque niveau replié derrière un filet vertical. */
+.file-tree__children {
+  margin-left: 13px;
+  padding-left: 5px;
+  border-left: 1px solid var(--border-0);
+}
+
+.file-tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-tree__hint {
+  padding: 2px var(--space-2);
+  font-size: 0.76rem;
+  color: var(--text-2);
+}
+
+.file-tree__hint--error {
+  color: var(--status-error);
+}
+
+.empty-hint--error {
+  color: var(--status-error);
+}
+
+/* ---------- Renommage inline (arbre) ---------- */
+
+.file-tree__rename {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+}
+
+.file-tree__rename-input {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  padding: 1px var(--space-1);
+  font-size: 0.82rem;
+  border-color: var(--border-cyan);
+}
+
+.file-tree__rename-error {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--status-error);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+/* ---------- Menu contextuel fichier (Lot 5) ---------- */
+
+.file-tree__context-menu {
+  position: fixed;
+  z-index: 150;
+  min-width: 200px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-md);
+  box-shadow:
+    var(--shadow-panel),
+    var(--glow-cyan);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+}
+
+.file-tree__context-menu-item {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-0);
+  font-size: 0.82rem;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.file-tree__context-menu-item:hover {
+  background: var(--bg-2);
+  color: var(--neon-cyan);
+}
+
+.file-tree__context-menu-item--danger:hover {
+  background: #ff313122;
+  color: var(--status-error);
+}
+
+/* ---------- Modale de confirmation de suppression (fichier/dossier) ---------- */
+/* Réutilise `.permission-overlay`/`.permission-modal` (voir plus bas) pour le
+   fond et la structure, avec une teinte « danger » (rouge) plutôt que magenta. */
+
+.delete-confirm-modal {
+  width: min(480px, 100%);
+  border-color: #ff313155;
+  box-shadow:
+    var(--shadow-panel),
+    var(--glow-error);
+}
+
+.delete-confirm__path {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-1);
+  overflow-wrap: break-word;
+}
+
+.delete-confirm__warning {
+  margin: 0;
+  color: var(--status-error);
+  font-size: 0.85rem;
+}
+
+.file-tree__notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.78rem;
+  color: var(--status-error);
+  border-top: 1px solid var(--border-0);
+  background: var(--bg-2);
+}
+
+.file-tree__notice-dismiss {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  line-height: 1;
+}
+
+/* ---------- Onglets (Conversation + fichiers ouverts) ---------- */
+
+.agent-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-0);
+}
+
+.agent-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.82rem;
+  color: var(--text-1);
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  cursor: pointer;
+  background: transparent;
+  max-width: 200px;
+}
+
+.agent-tab:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.agent-tab--active {
+  color: var(--text-0);
+  background: var(--bg-1);
+  border-color: var(--border-cyan);
+  box-shadow: 0 -2px 8px -4px var(--neon-cyan-dim);
+}
+
+.agent-tab__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tab__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--neon-magenta);
+  box-shadow: 0 0 4px 1px var(--neon-magenta-dim);
+  flex: none;
+}
+
+/* Onglets de CONVERSATION (voir `openConversationIds`, AgentPage.tsx) :
+   même métrique que les onglets de fichier, marqués par un liseré cyan à
+   l'état actif — le cyan est la couleur des conversations dans la palette,
+   le magenta restant celle du « fichier modifié ». */
+.agent-tab--conv.agent-tab--active {
+  border-color: var(--border-cyan);
+  box-shadow: inset 0 2px 0 var(--neon-cyan);
+}
+
+/* Point d'activité : la conversation de CET onglet a un tour en cours, y
+   compris quand elle n'est pas affichée — c'est le seul signal qu'un agent
+   travaille en arrière-plan. Pulsation lente, désactivée si l'utilisateur
+   préfère les animations réduites. */
+.agent-tab__dot--streaming {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 4px 1px var(--neon-cyan-dim);
+  animation: agent-tab-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes agent-tab-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-tab__dot--streaming {
+    animation: none;
+  }
+}
+
+/* Bouton « + » : ouvre une nouvelle conversation (même action que Ctrl+N). */
+.agent-tab--new {
+  appearance: none;
+  justify-content: center;
+  min-width: 30px;
+  max-width: 30px;
+  font-size: 1rem;
+  color: var(--text-2);
+}
+
+.agent-tab--new:hover {
+  color: var(--neon-cyan);
+}
+
+.agent-tab__close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  /* Cible cliquable confortable (la croix seule est minuscule) sans élargir
+     l'onglet : le padding vertical est absorbé par la hauteur de l'onglet. */
+  padding: 4px 5px;
+  border-radius: var(--radius-sm);
+  flex: none;
+}
+
+.agent-tab__close:hover:not(:disabled) {
+  color: var(--status-error);
+  background: var(--bg-2);
+}
+
+/* Fermeture refusée pendant un tour (perdre de vue un agent qui travaille) —
+   voir `closeConversationTab`, AgentPage.tsx. */
+.agent-tab__close:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.agent-tabs__notice {
+  font-size: 0.78rem;
+  color: var(--status-warn);
+}
+
+/* R3 — bandeau de débord (Chat + Projets) : ⚠ actif (payant), ⛔ plafond
+   atteint (repli local) — voir docs/spec-r3-debord.md §3. */
+.debord-notice {
+  padding: 4px 8px;
+  border: 1px solid var(--status-warn);
+  border-radius: 4px;
+}
+
+.debord-notice--blocked {
+  color: var(--status-error);
+  border-color: var(--status-error);
+}
+
+.agent-tabs__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  flex: 1;
+  min-height: 0;
+}
+
+/* `.chat-log` (règle de base ci-dessus) se borne à `max-height:55vh` — un
+   plafond utile seulement pour un contexte qui défile en page normale.
+   Toute page portant `.agent-page` (Projets ET Chat, tous deux plein
+   viewport à défilement interne, voir plus haut) a besoin que son fil
+   remplisse l'espace réellement disponible à la place : ce sélecteur plus
+   spécifique s'en charge pour les deux. */
+.agent-page .chat-log {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+/* ---------- Éditeur de fichier (FileEditor.tsx) ---------- */
+
+.file-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1;
+  min-height: 0;
+}
+
+.file-editor__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.file-editor__path {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-editor__toolbar-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.file-editor__banner {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  background: #fbbf2422;
+  border: 1px solid #fbbf2455;
+  color: var(--status-warn);
+}
+
+.file-editor__banner--error {
+  background: #ff313122;
+  border-color: #ff313155;
+  color: var(--status-error);
+}
+
+.file-editor__content {
+  /* `flex:1;min-height:0` (plutôt qu'un `max-height` en vh) : cette boîte
+     remplit exactement l'espace restant sous la barre d'outils/les bannières
+     de l'onglet fichier, dans la page Agent désormais bornée au viewport
+     (voir `.agent-page`). C'est cette hauteur RÉELLEMENT bornée qui permet à
+     CodeMirror (`height="100%"` ci-dessous, voir FileEditor.tsx) de se
+     dimensionner correctement et de faire défiler `.cm-scroller` en interne
+     au lieu de couper le fichier en bas de fenêtre sans pouvoir défiler.
+     `overflow:hidden` ici : le défilement du contenu est délégué à
+     `.cm-scroller` (CodeMirror), pas à cette boîte — éviter une double
+     barre de défilement. */
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.file-editor__content > div {
+  /* Enveloppe insérée par @uiw/react-codemirror (classe `cm-theme`/`cm-theme-*`
+     selon le thème clair/sombre de la lib, d'où le sélecteur générique `> div`
+     plutôt qu'un nom de classe précis) : sans hauteur définie, elle retombe
+     sur `auto`, le `height:100%` posé sur `.cm-editor` ci-dessous n'a alors
+     plus de base à 100% DE QUOI se calculer, et CodeMirror grandit avec tout
+     le fichier au lieu de défiler — coupé net par l'`overflow:hidden` de
+     `.file-editor__content` en bas de fenêtre, sans aucun défilement
+     possible. Les autres enfants directs (`.file-editor__error`,
+     `.file-editor__binary`, `.file-editor__image-wrap`) sont eux aussi des
+     div : la règle s'y applique sans effet visible indésirable (texte/svg
+     alignés en haut, juste plus d'espace vide en dessous). */
+  height: 100%;
+  min-height: 0;
+}
+
+/* Fichiers Markdown : aperçu rendu par défaut, mini-barre Aperçu/Éditer
+   locale au contenu (voir MarkdownFileView dans FileEditor.tsx). Même chaîne
+   de hauteurs que ci-dessus : chaque niveau borne le suivant, le défilement
+   vit dans `.file-editor__md-render` (aperçu) ou `.cm-scroller` (édition). */
+.file-editor__md {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.file-editor__md-bar {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-0);
+}
+
+.file-editor__md-toggle {
+  font-size: 0.72rem;
+  padding: 2px 10px;
+}
+
+.file-editor__md-toggle--active {
+  color: var(--neon-cyan);
+  border-color: var(--neon-cyan);
+}
+
+.file-editor__md-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-editor__md-body > div {
+  height: 100%;
+  min-height: 0;
+}
+
+.file-editor__md-render {
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+}
+
+.file-editor__hint {
+  padding: var(--space-4);
+}
+
+.file-editor__binary,
+.file-editor__error {
+  padding: var(--space-4);
+  color: var(--text-1);
+  font-size: 0.85rem;
+}
+
+.file-editor__error {
+  color: var(--status-error);
+}
+
+.file-editor__image-wrap {
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-image:
+    linear-gradient(45deg, #ffffff10 25%, transparent 25%),
+    linear-gradient(-45deg, #ffffff10 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #ffffff10 75%),
+    linear-gradient(-45deg, transparent 75%, #ffffff10 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0px;
+}
+
+.file-editor__image {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* CodeMirror : fond transparent pour hériter du thème néon, hauteur pleine
+   (bornée par `.file-editor__content`, voir plus haut) — `.cm-scroller` fait
+   le défilement interne du contenu du fichier, jamais `.cm-editor` lui-même
+   (qui reste à 100% de haut, sans quoi CodeMirror grandit avec le fichier au
+   lieu de défiler). */
+.file-editor__content .cm-editor {
+  background: transparent !important;
+  height: 100%;
+}
+
+.file-editor__content .cm-gutters {
+  background: transparent !important;
+}
+
+.file-editor__content .cm-scroller {
+  font-family: var(--font-mono);
+  overflow: auto;
+}
+
+/* ---------- Scanlines CRT (zones techniques) ----------
+   Voile de lignes horizontales quasi transparentes, posé en pseudo-élément
+   sur les zones où le regard reste posé longtemps (éditeur, fil de
+   conversation, logs, flux d'exécution) — un repère « écran cathodique »
+   discret qui appuie l'identité outrun sans fatiguer en usage prolongé :
+   l'opacité effective (≈2 %) reste sous le seuil de gêne visuelle, et
+   `pointer-events:none` garantit que le voile ne capte jamais un clic/une
+   sélection de texte. `position:relative` déjà posé sur chacune de ces
+   zones (voir leurs règles respectives) sert de repère pour `inset:0`. */
+.file-editor__content::after,
+.chat-log::after,
+.logs-panel__body::after,
+.stream-entry__body::after,
+.orch-run-flow::after,
+.md pre::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.035) 0px,
+    rgba(255, 255, 255, 0.035) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+@media (max-width: 900px) {
+  .agent-layout {
+    flex-direction: column;
+  }
+  .agent-sidebar {
+    width: 100%;
+    /* Empilé au-dessus du contenu principal (écran étroit) : chaque panneau
+       garde son propre plafond et défile en interne, `.agent-main__content`
+       récupère le reste de la hauteur disponible. */
+    max-height: 45vh;
+    padding-right: 2px;
+    padding-left: 0;
+  }
+  /* Ordre empilé demandé : gauche → droite → contenu (l'ordre en flex-row
+     large — gauche, contenu, droite — suit simplement l'ordre du DOM, voir
+     AgentPage.tsx, donc seul le panneau droit et le contenu ont besoin d'un
+     `order` explicite ici). Page Chat (ChatPage.tsx) : pas de panneau droit,
+     la règle `--right` ne matche simplement rien — le panneau gauche unique
+     se retrouve bien au-dessus du fil sans configuration supplémentaire. */
+  .agent-sidebar--right {
+    order: 2;
+  }
+  .agent-main__content {
+    order: 3;
+  }
+  .sidebar-filetree .file-tree {
+    max-height: 30vh;
+  }
+}
+
+/* ---------- Modale de permission ---------- */
+
+.permission-overlay {
+  position: fixed;
+  inset: 0;
+  /* Pas de backdrop-filter plein écran : crash du renderer logiciel (voir .modal-dialog::backdrop). */
+  background: #05070cd9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  z-index: 100;
+}
+
+.permission-modal {
+  width: min(640px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border-magenta);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    var(--shadow-panel),
+    var(--glow-magenta);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.permission-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.permission-modal__head h3 {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  color: var(--text-0);
+  overflow-wrap: break-word;
+}
+
+.permission-modal__badge {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--status-warn);
+  border: 1px solid #fbbf2455;
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  white-space: nowrap;
+}
+
+.permission-modal__body {
+  min-height: 0;
+}
+
+.permission-modal__remember {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-1);
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.permission-modal__remember input {
+  accent-color: var(--neon-cyan);
+}
+
+.permission-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.btn--allow {
+  /* Fond plein (pas le double calque de `.btn`) : Confirmer/Refuser sont des
+     actions de statut (vert/rouge), pas des actions « de marque » — le
+     dégradé néon n'a pas sa place sur leur bordure. */
+  background: linear-gradient(180deg, #16202f, #101826);
+  border-color: #00f5d455;
+}
+
+.btn--allow:hover:not(:disabled) {
+  border-color: var(--status-ok);
+  box-shadow: var(--glow-ok);
+}
+
+.btn--deny {
+  border-color: #ff313155;
+  background: transparent;
+}
+
+.btn--deny:hover:not(:disabled) {
+  border-color: var(--status-error);
+  box-shadow: var(--glow-error);
+}
+
+/* ---------- Palette de bascule (Ctrl+Maj+P — anciennement Ctrl+K) ---------- */
+
+.cmdk-overlay {
+  position: fixed;
+  inset: 0;
+  /* Pas de backdrop-filter plein écran : crash du renderer logiciel (voir .modal-dialog::backdrop). */
+  background: #05070cd9;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  padding-left: var(--space-5);
+  padding-right: var(--space-5);
+  z-index: 200;
+}
+
+.cmdk-panel {
+  width: min(560px, 100%);
+  max-height: 60vh;
+  background: var(--bg-1);
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    var(--shadow-panel),
+    var(--glow-cyan);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cmdk-input {
+  height: auto;
+  border: none;
+  border-bottom: 1px solid var(--border-0);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  padding: var(--space-4);
+  outline: none;
+}
+
+.cmdk-input:focus {
+  border-color: var(--border-0);
+  box-shadow: none;
+}
+
+.cmdk-input::placeholder {
+  color: var(--text-2);
+}
+
+.cmdk-list {
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.cmdk-empty {
+  padding: var(--space-3) var(--space-3);
+  color: var(--text-2);
+  font-size: 0.88rem;
+}
+
+.cmdk-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.cmdk-item--active {
+  background: var(--bg-2);
+  box-shadow: 0 0 0 1px var(--border-cyan);
+}
+
+.cmdk-item__name {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.cmdk-item__path {
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmdk-notice {
+  padding: var(--space-2) var(--space-4);
+  color: var(--status-warn);
+  font-size: 0.82rem;
+  border-top: 1px solid var(--border-0);
+}
+
+.cmdk-hint {
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  border-top: 1px solid var(--border-0);
+}
+
+/* ---------- Badges de détection projet (.iaction/CLAUDE.md/.claude) ---------- */
+
+.project-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.project-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-1);
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  background: transparent;
+  white-space: nowrap;
+}
+
+.project-badge--link {
+  cursor: pointer;
+}
+
+.project-badge--link:hover {
+  border-color: var(--neon-cyan);
+  color: var(--text-0);
+  box-shadow: var(--glow-cyan);
+}
+
+/* ---------- Panneau Ollama (modèles chargés en mémoire, voir OllamaPanel.tsx) ---------- */
+
+.ollama-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+}
+
+.ollama-panel__title {
+  font-size: 0.75rem;
+  color: var(--text-1);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ollama-panel__empty {
+  font-size: 0.82rem;
+  color: var(--text-2);
+}
+
+.ollama-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ollama-panel__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.82rem;
+  color: var(--text-0);
+}
+
+.ollama-panel__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-ok);
+  box-shadow: 0 0 6px 1px var(--status-ok);
+  flex: none;
+}
+
+.ollama-panel__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.ollama-panel__vram {
+  color: var(--text-2);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.ollama-panel__action {
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.72rem;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+  flex: none;
+}
+
+.ollama-panel__load {
+  align-self: flex-start;
+}
+
+.ollama-panel__spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--border-1);
+  border-top-color: var(--neon-cyan);
+  animation: ollama-spin 0.7s linear infinite;
+  flex: none;
+}
+
+@keyframes ollama-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- Page Orchestration (agents & orchestrations, phase O1) ---------- */
+
+.orch-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.orch-context-select {
+  min-width: 220px;
+}
+
+.orch-panel--hidden {
+  display: none;
+}
+
+.orch-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.orch-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.orch-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.orch-card--error {
+  border-color: var(--status-error);
+}
+
+.orch-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.orch-card__name {
+  font-weight: 600;
+  color: var(--text-0);
+  font-family: var(--font-mono);
+}
+
+.orch-card__desc {
+  color: var(--text-1);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.orch-card__badges {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.orch-badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-1);
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  white-space: nowrap;
+}
+
+.orch-badge--scope-global {
+  border-color: var(--border-cyan);
+  color: var(--neon-cyan);
+}
+
+.orch-badge--scope-claude-code,
+.orch-badge--readonly {
+  border-color: var(--border-magenta);
+  color: var(--neon-magenta);
+}
+
+.orch-chip {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-1);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+}
+
+/* ---------- Modale native <dialog> (Modal.tsx) ---------- */
+
+/* Le <dialog> ouvert via showModal() vit dans le top layer (au-dessus de
+   tout, pas de z-index) : il reprend la géométrie de l'ancien overlay
+   (plein viewport, contenu centré) et neutralise les styles UA du dialog
+   (bordure, padding, max-width/height, fond, couleur). */
+.modal-dialog {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  padding: var(--space-5);
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-dialog[open] {
+  display: flex;
+}
+
+/* Voile sombre (SANS backdrop-filter : un blur plein viewport fait crasher le
+   WebKitWebProcess en rendu logiciel — WEBKIT_DISABLE_DMABUF_RENDERER, voir
+   scripts/dev.sh ; constaté le 2026-07-31 à l'ouverture d'une modale. Voile
+   légèrement plus opaque pour compenser la lisibilité). */
+.modal-dialog::backdrop {
+  background: #05070cd9;
+}
+
+/* ---------- Éditeur (agent / orchestration) : panneau modal à onglets ---------- */
+
+.orch-modal {
+  width: min(880px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel), var(--glow-cyan);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.orch-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.orch-modal__head h3 {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  color: var(--text-0);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  overflow-wrap: break-word;
+}
+
+.orch-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.orch-modal__actions {
+  justify-content: flex-end;
+}
+
+.orch-tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-0);
+  padding-bottom: var(--space-2);
+}
+
+.orch-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.orch-tab:hover {
+  color: var(--text-0);
+}
+
+.orch-tab--active {
+  color: var(--text-0);
+  border-color: var(--border-cyan);
+  background: var(--bg-2);
+  box-shadow: var(--glow-cyan);
+}
+
+.orch-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.orch-yaml-editor {
+  width: 100%;
+  min-height: 360px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* ---------- Éditeur d'orchestration : entrées / étapes / DAG ---------- */
+
+.orch-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.orch-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.orch-step-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--bg-2);
+}
+
+.orch-step-row__line {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.orch-step-row__needs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.orch-need-checkbox {
+  font-size: 0.8rem;
+}
+
+.orch-dag {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+.orch-dag li {
+  border-left: 2px solid var(--border-1);
+  padding-left: var(--space-3);
+}
+
+.orch-dag__id {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.orch-dag__agent {
+  color: var(--neon-cyan);
+}
+
+.orch-dag__needs {
+  color: var(--text-2);
+}
+
+/* ---------- Exécutions (phase O3) : liste + détail d'un run ---------- */
+
+.orch-runs-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .orch-runs-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.orch-run-list-col {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.orch-run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.orch-run-list-item {
+  width: 100%;
+  appearance: none;
+  text-align: left;
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  cursor: pointer;
+}
+
+.orch-run-list-item:hover {
+  border-color: var(--border-cyan);
+}
+
+.orch-run-list-item--selected {
+  border-color: var(--border-cyan);
+  box-shadow: var(--glow-cyan);
+  background: var(--bg-2);
+}
+
+.orch-run-list-item__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.orch-run-list-item__name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.orch-run-list-item__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--text-2);
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+}
+
+/* Pilule de statut de run — mêmes teintes que .status-badge (ok/warn/error). */
+.orch-run-status {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  white-space: nowrap;
+  border: 1px solid var(--border-1);
+  color: var(--text-1);
+}
+
+.orch-run-status--running {
+  color: var(--status-warn);
+  border-color: #fbbf2455;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.orch-run-status--success {
+  color: var(--status-ok);
+  border-color: #00f5d455;
+}
+
+.orch-run-status--partial {
+  color: var(--status-warn);
+  border-color: #fbbf2455;
+}
+
+.orch-run-status--failed {
+  color: var(--status-error);
+  border-color: #ff313155;
+}
+
+.orch-run-status--aborted {
+  color: var(--neon-magenta);
+  border-color: var(--border-magenta);
+}
+
+.orch-run-detail-col {
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+.orch-run-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.orch-run-detail__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.orch-run-detail__head h3 {
+  font-family: var(--font-mono);
+  color: var(--text-0);
+  margin: 0;
+}
+
+.orch-run-detail__head-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* Frise verticale des étapes — même patron que .orch-dag, coloré par statut. */
+.orch-run-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.orch-run-step {
+  border-left: 2px solid var(--border-1);
+  padding-left: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.orch-run-step--running {
+  border-left-color: var(--status-warn);
+}
+
+.orch-run-step--success {
+  border-left-color: var(--status-ok);
+}
+
+.orch-run-step--failed {
+  border-left-color: var(--status-error);
+}
+
+.orch-run-step--skipped,
+.orch-run-step--aborted {
+  border-left-color: var(--neon-magenta);
+}
+
+.orch-run-step__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.orch-run-step__icon {
+  flex: none;
+}
+
+.orch-run-step__id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.orch-run-step__agent {
+  color: var(--text-1);
+}
+
+.orch-run-step__usage {
+  margin-left: auto;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.orch-run-step__flow summary {
+  cursor: pointer;
+  color: var(--text-1);
+  font-size: 0.8rem;
+}
+
+/* Zone de flux mono défilante bornée (texte streamé + lignes outil). */
+.orch-run-flow {
+  position: relative;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.orch-run-flow__thinking {
+  color: var(--text-2);
+  font-style: italic;
+}
+
+.orch-run-flow__tool {
+  color: var(--text-1);
+}
+
+.orch-run-flow__tool--error {
+  color: var(--status-error);
+}
+
+.orch-run-flow__tool-result {
+  color: var(--text-2);
+}
+
+.orch-run-step__output {
+  margin-top: var(--space-2);
+}
+
+.orch-run-step__output-label {
+  color: var(--text-2);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-1);
+}
+
+.orch-run-step__output pre {
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+
+/* ---------- Tâches (T1, docs/etude-taches.md § 3.3) ---------- */
+
+.orch-badge--enabled {
+  border-color: var(--border-cyan);
+  color: var(--neon-cyan);
+}
+
+.orch-badge--disabled {
+  color: var(--text-2);
+}
+
+.orch-badge--invalid {
+  border-color: var(--status-error);
+  color: var(--status-error);
+}
+
+/* Fiche tâche, onglet « Rapports » : liste à gauche, rendu Markdown à droite — même patron que .orch-runs-layout. */
+.orch-tache-reports {
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) 1fr;
+  gap: var(--space-4);
+  align-items: start;
+  min-height: 0;
+}
+
+@media (max-width: 720px) {
+  .orch-tache-reports {
+    grid-template-columns: 1fr;
+  }
+}
+
+.orch-tache-report-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.orch-tache-report-item {
+  width: 100%;
+  appearance: none;
+  text-align: left;
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.orch-tache-report-item:hover {
+  border-color: var(--border-cyan);
+}
+
+.orch-tache-report-item--selected {
+  border-color: var(--border-cyan);
+  box-shadow: var(--glow-cyan);
+  background: var(--bg-2);
+}
+
+.orch-tache-report-item__file {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-0);
+}
+
+.orch-tache-report-item__meta {
+  font-size: 0.72rem;
+  color: var(--text-2);
+}
+
+.orch-tache-reports__content {
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+/* ---------- Timers systemd (T2, docs/protocol.md § T2) ---------- */
+
+.orch-badge--toggle {
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.orch-badge--toggle:hover:not(:disabled) {
+  border-color: var(--neon-cyan);
+}
+
+.orch-badge--toggle:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.orch-badge--sync {
+  border-color: var(--status-warn);
+  color: var(--status-warn);
+}
+
+.orch-tache-timer-info {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-2);
+}
+
+.orch-tache-sync {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---------- LLM utilisés (agents/moteurs d'une tâche, résumé carte + détail fiche) ---------- */
+
+.orch-tache-llm-compact {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-2);
+}
+
+.orch-tache-llm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-1);
+}
+
+.orch-tache-llm-list__item--unknown {
+  color: var(--text-2);
+  font-style: italic;
+}
+
+/* ---------- Supervision (Lot 8, tranche 1) ---------- */
+
+.supervision-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.supervision-range-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.supervision-range-nav .btn {
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.8rem;
+}
+
+.supervision-range-label {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.supervision-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+.supervision-kpi-card {
+  gap: var(--space-2);
+}
+
+.supervision-kpi-value {
+  font-family: var(--font-mono);
+  font-size: 1.9rem;
+  color: var(--text-0);
+  text-shadow: 0 0 6px var(--neon-cyan-dim);
+}
+
+.supervision-kpi-sub {
+  font-size: 0.78rem;
+  color: var(--text-1);
+}
+
+/* R3 — encart « Routage » (voir SupervisionPage.tsx, RoutagePanel). */
+.supervision-routage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.supervision-routage-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.supervision-routage-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 0.82rem;
+  color: var(--text-1);
+}
+
+.supervision-routage-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.supervision-routage-list__label {
+  font-family: var(--font-mono);
+  color: var(--text-0);
+  overflow-wrap: anywhere;
+}
+
+.supervision-models-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.supervision-model-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.supervision-model-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.supervision-model-name__label {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervision-model-name__engine {
+  font-size: 0.72rem;
+  color: var(--text-2);
+}
+
+.supervision-model-bar-track {
+  height: 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.supervision-model-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--neon-cyan), var(--neon-magenta));
+  box-shadow: var(--glow-cyan);
+}
+
+.supervision-model-metrics {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.supervision-chart-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.supervision-hist-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  fill: var(--text-2);
+}
+
+.supervision-hist-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: 0.76rem;
+  color: var(--text-1);
+}
+
+.supervision-legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.supervision-legend-dot--cyan {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 6px 1px var(--neon-cyan-dim);
+}
+
+.supervision-legend-dot--magenta {
+  background: var(--neon-magenta);
+  box-shadow: 0 0 6px 1px var(--neon-magenta-dim);
+}
+
+.supervision-line-ref {
+  stroke: var(--border-1);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.supervision-line-path {
+  stroke: var(--neon-cyan);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 4px var(--neon-cyan-dim));
+}
+
+.supervision-line-dot {
+  fill: var(--bg-1);
+  stroke: var(--neon-cyan);
+  stroke-width: 1.5;
+}
+
+.supervision-claude-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-3);
+}
+
+.supervision-week-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-2);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+}
+
+.supervision-week-card__label {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-1);
+}
+
+.supervision-week-card__value {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  color: var(--text-0);
+}
+
+.supervision-badge {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  color: var(--text-1);
+}
+
+.supervision-badge--saturated {
+  color: var(--status-error);
+  border-color: var(--status-error);
+  box-shadow: var(--glow-error);
+}
+
+/* ---------- Raccourcis clavier (page Configuration) ---------- */
+
+/* Touche isolée, générique : réutilisée par `.shortcut-keys` ci-dessous
+   (tableau des raccourcis) et par toute mention future d'une touche dans le
+   texte courant. */
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6em;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-0);
+  background: var(--bg-2);
+  border: 1px solid var(--border-1);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  line-height: 1.4;
+}
+
+.shortcut-keys {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.shortcut-keys__combo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-keys__plus {
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.shortcuts-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-panel);
+}
+
+.shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.shortcuts-table th,
+.shortcuts-table td {
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-0);
+  vertical-align: top;
+}
+
+.shortcuts-table th {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.shortcuts-table td {
+  color: var(--text-0);
+  font-size: 0.9rem;
+}
+
+.shortcuts-table td:first-child {
+  white-space: nowrap;
+}
+
+.shortcuts-table tr:last-child td {
+  border-bottom: none;
+}
+
+.shortcuts-table__note {
+  margin-top: 4px;
+  color: var(--text-1);
+  font-size: 0.8rem;
+}
+
+/* Sections thématiques de la page « Clavier » (voir ShortcutsSection) :
+   un titre + une phrase d'explication + une table de touches par thème. */
+.shortcuts-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.shortcuts-group__title {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--neon-cyan);
+}
+
+/* ---------- Voix : dictée (micro) & synthèse (lecture) ---------- */
+
+/* Bouton micro du composeur — même gabarit que le trombone (.attachment-picker). */
+.mic-btn {
+  flex: none;
+  padding: var(--space-2) var(--space-3);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+/* Enregistrement en cours : accent magenta, et halo dont l'intensité suit le
+   niveau capté (`--mic-level`, 0→1, posé en style inline par micLevelStyle).
+   Le repli sur la pulsation garde un signe de vie si la variable est absente. */
+.mic-btn--recording {
+  --mic-level: 0;
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+  box-shadow:
+    0 0 0 1px var(--neon-magenta),
+    0 0 calc(6px + 22px * var(--mic-level)) calc(-4px + 4px * var(--mic-level)) var(--neon-magenta);
+  transition: box-shadow 90ms linear;
+}
+
+.mic-btn--recording:hover:not(:disabled) {
+  border-color: var(--neon-magenta);
+}
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    border-color: var(--neon-magenta);
+  }
+  50% {
+    border-color: var(--border-magenta);
+  }
+}
+
+/* Jauge de niveau du micro : barre remplie proportionnellement au RMS.
+   Sert de preuve visuelle immédiate que le micro capte quelque chose —
+   utile en Bluetooth, où un mauvais profil rend le flux totalement muet. */
+.mic-level {
+  --mic-level: 0;
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 56px;
+  height: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-0);
+  overflow: hidden;
+}
+
+/* Variante « avec repère de seuil » (mode conversation) : la jauge est un peu
+   plus haute pour que le trait du seuil reste visible et cliquable au survol. */
+.mic-level--threshold {
+  height: 10px;
+}
+
+/* Repère du seuil de déclenchement, posé par `--mic-threshold` (même échelle
+   que `--mic-level`, cf. micLevelStyle). C'est LA information qui manquait :
+   tant que la barre ne franchit pas ce trait, aucun segment ne part. */
+.mic-level__mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: clamp(0%, calc(var(--mic-threshold, 0) * 100%), 100%);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-0);
+  box-shadow: 0 0 0 1px var(--bg-inset);
+  transition: left 120ms linear;
+}
+
+.mic-level--wide {
+  width: 120px;
+}
+
+/* Dans la colonne d'icônes du composeur, la jauge de niveau se glisse SOUS les
+   boutons : elle en reprend la largeur au lieu de rogner celle du textarea. */
+.chat-composer__tools .mic-level {
+  align-self: stretch;
+  width: auto;
+  margin-top: var(--space-1);
+}
+
+.mic-level__bar {
+  display: block;
+  height: 100%;
+  width: calc(var(--mic-level) * 100%);
+  background: var(--gradient-neon);
+  transition: width 90ms linear;
+}
+
+/* Bouton lecture ⏵/⏹ des bulles assistant terminées — discret au repos,
+   pleinement visible au survol de la bulle. */
+.chat-bubble__tts {
+  margin-top: var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tts-btn {
+  appearance: none;
+  flex: none;
+  border: 1px solid var(--border-1);
+  background: transparent;
+  color: var(--text-2);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 3px 8px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.chat-bubble:hover .tts-btn {
+  opacity: 1;
+}
+
+.tts-btn:hover:not(:disabled) {
+  color: var(--neon-cyan);
+  border-color: var(--border-cyan);
+}
+
+.tts-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.tts-btn--playing {
+  color: var(--neon-magenta);
+  border-color: var(--border-magenta);
+  opacity: 1;
+}
+
+.chat-bubble__tts-progress {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-2);
+}
+
+.chat-bubble__tts-error {
+  font-size: 0.72rem;
+  color: var(--status-error);
+}
+
+/* Onglet « Voix » de la Configuration : deux sections empilées (dictée puis
+   synthèse) dans le même panneau. */
+.voice-section + .voice-section {
+  margin-top: var(--space-5);
+}
+
+.voice-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+}
+
+/* Aide sous un champ de la grille (ex. voix distante en saisie libre) :
+   occupe toute la largeur pour rester lisible, sans casser l'alignement des
+   champs voisins. */
+.voice-form__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+/* Bloc « clé API » d'un usage voix : source de la clé (emprunt à un
+   fournisseur ou clé dédiée), statut, puis éditeur de la clé dédiée. */
+.voice-key {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.voice-key__source {
+  max-width: 420px;
+}
+
+.voice-key__editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* ---------- Mode conversation (composeur du chat) ---------- */
+
+/* Bouton « Mode conversation » — même gabarit que le bouton micro voisin. */
+.conversation-btn {
+  flex: none;
+  padding: var(--space-2) var(--space-3);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+/* Actif : accent magenta comme la dictée (le micro est ouvert), halo dont
+   l'intensité suit le niveau capté (`--mic-level`, posé par micLevelStyle). */
+.conversation-btn--active {
+  --mic-level: 0;
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+  box-shadow:
+    0 0 0 1px var(--neon-magenta),
+    0 0 calc(6px + 20px * var(--mic-level)) calc(-4px + 4px * var(--mic-level)) var(--neon-magenta);
+  transition: box-shadow 90ms linear;
+}
+
+.conversation-btn--active:hover:not(:disabled) {
+  border-color: var(--neon-magenta);
+}
+
+/* Indicateur d'état, affiché en permanence pendant le mode conversation.
+   Information de confidentialité : la teinte dit d'un coup d'œil si le micro
+   est ouvert (magenta) ou si c'est l'assistant qui travaille/parle (cyan). */
+.conversation-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--border-0);
+  border-left-width: 3px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-1);
+}
+
+.conversation-status__label {
+  flex: 1;
+  min-width: 0;
+}
+
+.conversation-status__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-2);
+}
+
+.conversation-status__level {
+  align-self: center;
+  width: 72px;
+}
+
+/* Niveau / seuil en pour mille : deux nombres compacts, volontairement en
+   retrait (opacité réduite), qui doublent le repère de la jauge pour les cas où
+   la comparaison visuelle ne suffit pas. */
+.conversation-status__vad {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.7rem;
+  opacity: 0.65;
+  letter-spacing: 0.02em;
+}
+
+/* Micro OUVERT : calibrage, écoute, parole en cours. */
+.conversation-status--calibrating {
+  border-color: var(--border-0) var(--border-0) var(--border-0) var(--status-warn);
+}
+
+.conversation-status--calibrating .conversation-status__dot {
+  background: var(--status-warn);
+  box-shadow: var(--glow-warn);
+}
+
+.conversation-status--listening,
+.conversation-status--speaking {
+  border-color: var(--border-magenta) var(--border-magenta) var(--border-magenta) var(--neon-magenta);
+  color: var(--neon-magenta);
+}
+
+.conversation-status--listening .conversation-status__dot {
+  background: var(--neon-magenta);
+  animation: conversation-listening 1.6s ease-in-out infinite;
+}
+
+.conversation-status--speaking .conversation-status__dot {
+  background: var(--neon-magenta);
+  box-shadow: 0 0 10px -1px var(--neon-magenta);
+}
+
+/* Micro FERMÉ : c'est l'application qui travaille (transcription, modèle,
+   lecture) — teintes froides, nettement distinctes de l'écoute. */
+.conversation-status--transcribing {
+  border-color: var(--border-violet) var(--border-violet) var(--border-violet) var(--neon-violet);
+  color: var(--neon-violet);
+}
+
+.conversation-status--transcribing .conversation-status__dot {
+  background: var(--neon-violet);
+}
+
+.conversation-status--thinking,
+.conversation-status--playing {
+  border-color: var(--border-cyan) var(--border-cyan) var(--border-cyan) var(--neon-cyan);
+  color: var(--neon-cyan);
+}
+
+.conversation-status--thinking .conversation-status__dot {
+  background: var(--neon-cyan);
+  animation: conversation-listening 1.2s ease-in-out infinite;
+}
+
+.conversation-status--playing .conversation-status__dot {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 10px -1px var(--neon-cyan);
+}
+
+@keyframes conversation-listening {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* Message discret et éphémère (segment ignoré, arrêt automatique) : jamais
+   présenté comme une erreur — pas de rouge, pas de bordure d'alerte. */
+.conversation-notice {
+  margin-bottom: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--text-1);
+}

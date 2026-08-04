@@ -1,0 +1,538 @@
+//! Supervision du sidecar Node et relais du protocole JSON Lines vers l'UI.
+//!
+//! Voir `docs/protocol.md`, section « Côté Rust (supervision + relais) ». Ce module ne
+//! comprend pas le contenu métier des messages : il spawn/supervise le process Node,
+//! relaie ses lignes stdout/stderr vers l'UI via des events Tauri, et expose deux
+//! commandes (`sidecar_request`, `sidecar_status`) pour que l'UI puisse lui parler.
+
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use serde::Serialize;
+use serde_json::Value;
+use tauri::{AppHandle, Emitter, Manager, State};
+
+/// Backoff initial avant la première tentative de redémarrage.
+const INITIAL_BACKOFF_MS: u64 = 500;
+/// Plafond du backoff exponentiel.
+const MAX_BACKOFF_MS: u64 = 8_000;
+/// Nombre d'échecs consécutifs (process mort avant `STABLE_UPTIME`) au-delà duquel
+/// le sidecar passe en état `dead` définitif.
+const MAX_ATTEMPTS: u32 = 5;
+/// Durée de vie au-delà de laquelle un process est considéré comme stable : sa mort
+/// remet le compteur d'échecs consécutifs à zéro.
+const STABLE_UPTIME: Duration = Duration::from_secs(30);
+/// Intervalle de sondage (`try_wait`) pendant qu'un process est supervisé.
+const POLL_INTERVAL: Duration = Duration::from_millis(150);
+/// Granularité du sommeil pendant le backoff, pour rester réactif à un arrêt demandé.
+const SHUTDOWN_CHECK_STEP: Duration = Duration::from_millis(100);
+
+/// État de cycle de vie du sidecar, tel que défini par le protocole.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SidecarLifecycle {
+    Starting,
+    Running,
+    Restarting,
+    Dead,
+}
+
+impl SidecarLifecycle {
+    fn as_str(self) -> &'static str {
+        match self {
+            SidecarLifecycle::Starting => "starting",
+            SidecarLifecycle::Running => "running",
+            SidecarLifecycle::Restarting => "restarting",
+            SidecarLifecycle::Dead => "dead",
+        }
+    }
+}
+
+/// Payload publié sur l'event Tauri `sidecar:status` et renvoyé par la commande
+/// `sidecar_status`. Forme identique dans les deux cas (cf. protocole).
+#[derive(Serialize, Clone, Debug)]
+pub struct StatusPayload {
+    pub state: String,
+    pub pid: Option<u32>,
+    pub attempts: u32,
+}
+
+/// État partagé du sidecar, protégé par un `Mutex` et géré par Tauri via `.manage()`.
+pub struct SidecarState {
+    pub state: SidecarLifecycle,
+    pub pid: Option<u32>,
+    pub attempts: u32,
+    /// stdin du child courant, utilisé par `sidecar_request` pour lui écrire des requêtes.
+    pub stdin: Option<ChildStdin>,
+    /// Handle du child courant (sans stdin, déjà extrait ci-dessus), gardé pour pouvoir
+    /// le sonder (`try_wait`) et le tuer proprement à la fermeture de l'app.
+    child: Option<Child>,
+    /// Positionné à `true` pour indiquer à la boucle de supervision de s'arrêter sans
+    /// redémarrer le sidecar (fermeture de l'application en cours).
+    shutdown: bool,
+}
+
+impl Default for SidecarState {
+    fn default() -> Self {
+        Self {
+            state: SidecarLifecycle::Starting,
+            pid: None,
+            attempts: 0,
+            stdin: None,
+            child: None,
+            shutdown: false,
+        }
+    }
+}
+
+impl SidecarState {
+    fn status_payload(&self) -> StatusPayload {
+        StatusPayload {
+            state: self.state.as_str().to_string(),
+            pid: self.pid,
+            attempts: self.attempts,
+        }
+    }
+}
+
+/// Type de l'état managé par Tauri (`app.manage(...)` / `State<'_, SharedState>`).
+pub type SharedState = Mutex<SidecarState>;
+
+/// Construit la valeur à passer à `Builder::manage`.
+pub fn managed_state() -> SharedState {
+    Mutex::new(SidecarState::default())
+}
+
+/// Verrouille l'état partagé, en récupérant la donnée même si le mutex a été empoisonné
+/// par un panic précédent (on ne veut jamais paniquer sur un chemin d'exécution normal).
+fn lock_state(mutex: &SharedState) -> MutexGuard<'_, SidecarState> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// Détermine le chemin de l'entrypoint du sidecar Node.
+///
+/// `IACTION_SIDECAR` si définie, sinon le sidecar compilé du repo source.
+fn sidecar_entry() -> String {
+    if let Ok(custom) = std::env::var("IACTION_SIDECAR") {
+        return custom;
+    }
+    // TODO(packaging release) : en build release packagé, le sidecar devra être une
+    // ressource embarquée avec l'app plutôt que ce chemin relatif au repo source. Pour
+    // l'instant (Lot 0) on garde le même fallback en debug et en release.
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../sidecar/dist/index.js").to_string()
+}
+
+/// Émet une ligne de journal applicatif vers l'UI via l'event Tauri `app:log`
+/// (voir `docs/protocol.md`, section « Event Tauri `app:log` », et
+/// `docs/etude-logs.md` § 2.3). L'UI la relaie vers `log.append`, seul écrivain
+/// du fichier `app.jsonl` — c'est ce qui rend les pannes de la coquille Rust
+/// visibles en build packagé, où stderr n'a aucune destination.
+///
+/// Best-effort et jamais bloquant : si l'`emit` échoue, on se contente d'un
+/// `eprintln!` et on continue (surtout pas de nouvel `app:log`, qui bouclerait,
+/// ni de panique — cette fonction est appelée depuis la boucle de supervision).
+/// Les `eprintln!` des appelants sont CONSERVÉS : ils restent le canal utile au
+/// terminal en développement.
+///
+/// À NE PAS appeler depuis le relais du stderr sidecar (`spawn_stderr_reader`) :
+/// ces lignes partent déjà sur `sidecar:log`, et les dupliquer ici créerait la
+/// boucle sidecar → stderr → `sidecar:log` → `log.append` → sidecar que le
+/// contrat interdit explicitement.
+pub fn log_app(app: &AppHandle, level: &str, msg: String, fields: Value) {
+    let payload = serde_json::json!({
+        "level": level,
+        "scope": "rust",
+        "msg": msg,
+        "fields": fields,
+    });
+    if let Err(err) = app.emit("app:log", payload) {
+        eprintln!("[sidecar] échec de l'émission de app:log : {err}");
+    }
+}
+
+fn emit_status(app: &AppHandle, state: &SidecarState) {
+    let payload = state.status_payload();
+    if let Err(err) = app.emit("sidecar:status", payload) {
+        eprintln!("[sidecar] échec de l'émission de sidecar:status : {err}");
+        // Dégradation acceptée : l'UI ne verra pas ce changement d'état, mais
+        // l'application continue. Pas de récursion possible — `log_app` ne
+        // rappelle jamais `emit_status`.
+        log_app(
+            app,
+            "warn",
+            "échec de l'émission de sidecar:status".to_string(),
+            serde_json::json!({ "erreur": err.to_string() }),
+        );
+    }
+}
+
+/// Démarre la supervision du sidecar dans un thread dédié. À appeler une fois, depuis
+/// `setup()`.
+pub fn spawn_supervisor(app: AppHandle) {
+    thread::spawn(move || supervise(app));
+}
+
+/// Boucle de supervision : spawn, attend la mort du process, gère le backoff et les
+/// redémarrages, jusqu'à état `dead` ou demande d'arrêt.
+fn supervise(app: AppHandle) {
+    let entry = sidecar_entry();
+
+    // Publie l'état initial "starting" avant la première tentative de spawn.
+    {
+        let shared = app.state::<SharedState>();
+        let guard = lock_state(&shared);
+        emit_status(&app, &guard);
+    }
+
+    loop {
+        {
+            let shared = app.state::<SharedState>();
+            let guard = lock_state(&shared);
+            if guard.shutdown {
+                return;
+            }
+        }
+
+        let spawned = Command::new("node")
+            .arg(&entry)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(err) => {
+                eprintln!("[sidecar] échec du spawn (node {entry}) : {err}");
+                // `fatal` : sans sidecar, toute la partie métier de l'app est
+                // hors service (c'est la panne « node introuvable »).
+                log_app(
+                    &app,
+                    "fatal",
+                    "échec du spawn du sidecar (node)".to_string(),
+                    serde_json::json!({ "entry": entry, "erreur": err.to_string() }),
+                );
+                if register_failure(&app, Duration::ZERO) {
+                    continue;
+                } else {
+                    return;
+                }
+            }
+        };
+
+        let pid = child.id();
+        spawn_stdout_reader(app.clone(), child.stdout.take());
+        spawn_stderr_reader(app.clone(), child.stderr.take());
+        let stdin = child.stdin.take();
+
+        let started_at = Instant::now();
+        {
+            let shared = app.state::<SharedState>();
+            let mut guard = lock_state(&shared);
+            guard.state = SidecarLifecycle::Running;
+            guard.pid = Some(pid);
+            guard.stdin = stdin;
+            guard.child = Some(child);
+            emit_status(&app, &guard);
+        }
+
+        // Sonde régulièrement le process jusqu'à sa mort ou une demande d'arrêt.
+        loop {
+            thread::sleep(POLL_INTERVAL);
+            let shared = app.state::<SharedState>();
+            let mut guard = lock_state(&shared);
+
+            if guard.shutdown {
+                if let Some(child) = guard.child.as_mut() {
+                    if let Err(err) = child.kill() {
+                        eprintln!("[sidecar] échec du kill à la fermeture : {err}");
+                        // Fermeture en cours : l'UI ne recevra probablement
+                        // plus rien, mais la ligne reste utile si la fenêtre
+                        // est encore vivante.
+                        log_app(
+                            &app,
+                            "warn",
+                            "échec du kill du sidecar à la fermeture".to_string(),
+                            serde_json::json!({ "erreur": err.to_string() }),
+                        );
+                    }
+                    let _ = child.wait();
+                }
+                guard.child = None;
+                guard.stdin = None;
+                return;
+            }
+
+            let died = match guard.child.as_mut() {
+                Some(child) => match child.try_wait() {
+                    Ok(Some(_status)) => true,
+                    Ok(None) => false,
+                    Err(err) => {
+                        eprintln!("[sidecar] échec de try_wait : {err}");
+                        // On considère le process mort : la supervision
+                        // enchaîne sur le backoff, l'app n'est pas bloquée.
+                        log_app(
+                            &app,
+                            "warn",
+                            "échec de try_wait sur le sidecar, process considéré mort".to_string(),
+                            serde_json::json!({ "erreur": err.to_string() }),
+                        );
+                        true
+                    }
+                },
+                None => true,
+            };
+
+            if died {
+                guard.child = None;
+                guard.stdin = None;
+                guard.pid = None;
+                break;
+            }
+        }
+
+        let uptime = started_at.elapsed();
+        if register_failure(&app, uptime) {
+            continue;
+        } else {
+            return;
+        }
+    }
+}
+
+/// À appeler juste après la mort (ou l'échec de spawn) du sidecar. Met à jour le
+/// compteur d'échecs consécutifs et l'état, puis attend le backoff avant un nouveau
+/// spawn. Retourne `false` si la supervision doit s'arrêter définitivement (état `dead`
+/// atteint, ou arrêt demandé pendant l'attente) ; `true` s'il faut retenter un spawn.
+fn register_failure(app: &AppHandle, uptime: Duration) -> bool {
+    let delay_ms = {
+        let shared = app.state::<SharedState>();
+        let mut guard = lock_state(&shared);
+
+        if guard.shutdown {
+            return false;
+        }
+
+        if uptime >= STABLE_UPTIME {
+            guard.attempts = 0;
+        }
+        guard.attempts += 1;
+
+        if guard.attempts >= MAX_ATTEMPTS {
+            guard.state = SidecarLifecycle::Dead;
+            guard.pid = None;
+            emit_status(app, &guard);
+            eprintln!(
+                "[sidecar] mort définitive après {} tentatives, plus de redémarrage",
+                guard.attempts
+            );
+            // `fatal` : le sous-système est hors service définitivement, plus
+            // aucun redémarrage ne sera tenté.
+            log_app(
+                app,
+                "fatal",
+                "sidecar mort définitivement après backoff".to_string(),
+                serde_json::json!({ "attempts": guard.attempts }),
+            );
+            return false;
+        }
+
+        guard.state = SidecarLifecycle::Restarting;
+        guard.pid = None;
+        emit_status(app, &guard);
+
+        let exponent = guard.attempts.saturating_sub(1);
+        let delai = INITIAL_BACKOFF_MS
+            .saturating_mul(2u64.saturating_pow(exponent))
+            .min(MAX_BACKOFF_MS);
+        // `warn` : dégradation acceptée, l'app continue et le sidecar va être
+        // relancé. C'est la trace qui manquait pour comprendre après coup
+        // qu'une session a redémarré N fois.
+        log_app(
+            app,
+            "warn",
+            "sidecar mort, redémarrage programmé".to_string(),
+            serde_json::json!({
+                "attempts": guard.attempts,
+                "delayMs": delai,
+                "uptimeMs": uptime.as_millis() as u64,
+            }),
+        );
+        delai
+    };
+
+    sleep_with_shutdown_check(app, Duration::from_millis(delay_ms))
+}
+
+/// Dort par petits paliers pour rester réactif à une demande d'arrêt survenant pendant
+/// le backoff. Retourne `false` si l'arrêt a été demandé pendant l'attente.
+fn sleep_with_shutdown_check(app: &AppHandle, total: Duration) -> bool {
+    let mut waited = Duration::ZERO;
+    while waited < total {
+        let chunk = SHUTDOWN_CHECK_STEP.min(total - waited);
+        thread::sleep(chunk);
+        waited += chunk;
+
+        let shared = app.state::<SharedState>();
+        let guard = lock_state(&shared);
+        if guard.shutdown {
+            return false;
+        }
+    }
+    true
+}
+
+/// Lit la stdout du sidecar ligne par ligne : chaque ligne JSON valide est relayée telle
+/// quelle à l'UI via l'event `sidecar:event`. Une ligne non parsable est loguée et ignorée.
+fn spawn_stdout_reader(app: AppHandle, stdout: Option<ChildStdout>) {
+    let Some(stdout) = stdout else {
+        return;
+    };
+    thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let line = match line {
+                Ok(line) => line,
+                Err(err) => {
+                    eprintln!("[sidecar] erreur de lecture stdout : {err}");
+                    // Plus aucune réponse du sidecar ne parviendra à l'UI : le
+                    // process est de fait inutilisable (la supervision le verra
+                    // mourir et enchaînera sur le backoff).
+                    log_app(
+                        &app,
+                        "warn",
+                        "erreur de lecture de la stdout du sidecar, relais interrompu".to_string(),
+                        serde_json::json!({ "erreur": err.to_string() }),
+                    );
+                    break;
+                }
+            };
+            match serde_json::from_str::<Value>(&line) {
+                Ok(value) => {
+                    if let Err(err) = app.emit("sidecar:event", value) {
+                        eprintln!("[sidecar] échec de l'émission de sidecar:event : {err}");
+                        log_app(
+                            &app,
+                            "warn",
+                            "échec de l'émission de sidecar:event".to_string(),
+                            serde_json::json!({ "erreur": err.to_string() }),
+                        );
+                    }
+                }
+                Err(err) => {
+                    eprintln!("[sidecar] ligne stdout non-JSON ignorée ({err}) : {line}");
+                    // La ligne elle-même n'est PAS journalisée : elle peut
+                    // porter de la donnée utilisateur (réponse de modèle), que
+                    // le contrat interdit d'écrire dans le journal.
+                    log_app(
+                        &app,
+                        "warn",
+                        "ligne stdout non-JSON ignorée".to_string(),
+                        serde_json::json!({ "erreur": err.to_string(), "octets": line.len() }),
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// Lit la stderr du sidecar ligne par ligne : chaque ligne est loguée côté Rust et
+/// relayée à l'UI via l'event `sidecar:log`.
+fn spawn_stderr_reader(app: AppHandle, stderr: Option<ChildStderr>) {
+    let Some(stderr) = stderr else {
+        return;
+    };
+    thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            let line = match line {
+                Ok(line) => line,
+                Err(err) => {
+                    eprintln!("[sidecar] erreur de lecture stderr : {err}");
+                    // Seul `app:log` de ce lecteur : événement UNIQUE (suivi
+                    // d'un `break`), donc sans risque d'amplification.
+                    log_app(
+                        &app,
+                        "warn",
+                        "erreur de lecture de la stderr du sidecar, relais interrompu".to_string(),
+                        serde_json::json!({ "erreur": err.to_string() }),
+                    );
+                    break;
+                }
+            };
+            eprintln!("[sidecar:stderr] {line}");
+            // PAS d'`app:log` ici ni dans la branche d'échec ci-dessous : ces
+            // lignes partent déjà sur `sidecar:log`, et le sidecar écrit chaque
+            // entrée de journal sur sa propre stderr. En journaliser une de
+            // plus par ligne créerait la boucle stderr → `app:log` →
+            // `log.append` → stderr interdite par le contrat.
+            if let Err(err) = app.emit("sidecar:log", line) {
+                eprintln!("[sidecar] échec de l'émission de sidecar:log : {err}");
+            }
+        }
+    });
+}
+
+/// Demande l'arrêt de la supervision (plus de redémarrage) et tue immédiatement le
+/// child courant s'il existe. Idempotent : peut être appelée plusieurs fois (fermeture
+/// de fenêtre puis sortie de l'event loop) sans effet de bord.
+pub fn request_shutdown(app: &AppHandle) {
+    let shared = app.state::<SharedState>();
+    let mut guard = lock_state(&shared);
+    guard.shutdown = true;
+    if let Some(child) = guard.child.as_mut() {
+        if let Err(err) = child.kill() {
+            eprintln!("[sidecar] échec du kill à la fermeture : {err}");
+            log_app(
+                app,
+                "warn",
+                "échec du kill du sidecar à la fermeture".to_string(),
+                serde_json::json!({ "erreur": err.to_string() }),
+            );
+        }
+        let _ = child.wait();
+    }
+    guard.child = None;
+    guard.stdin = None;
+}
+
+/// Commande Tauri : sérialise `request` en une ligne JSON et l'écrit sur stdin du
+/// sidecar. Refuse si le sidecar n'est pas en état `running`.
+#[tauri::command]
+pub fn sidecar_request(request: Value, sidecar: State<'_, SharedState>) -> Result<(), String> {
+    let mut guard = lock_state(&sidecar);
+
+    if guard.state != SidecarLifecycle::Running {
+        return Err(format!(
+            "sidecar indisponible (état actuel : {})",
+            guard.state.as_str()
+        ));
+    }
+
+    let stdin = guard
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "sidecar indisponible : stdin absent".to_string())?;
+
+    let mut line = serde_json::to_string(&request).map_err(|err| err.to_string())?;
+    line.push('\n');
+
+    stdin
+        .write_all(line.as_bytes())
+        .map_err(|err| err.to_string())?;
+    stdin.flush().map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+/// Commande Tauri : renvoie le dernier état connu du sidecar.
+#[tauri::command]
+pub fn sidecar_status(sidecar: State<'_, SharedState>) -> StatusPayload {
+    let guard = lock_state(&sidecar);
+    guard.status_payload()
+}
