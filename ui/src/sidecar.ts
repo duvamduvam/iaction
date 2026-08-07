@@ -195,6 +195,17 @@ export function request(
 }
 
 /** État courant du sidecar (appel direct, hors abonnement aux events). */
+/**
+ * Relance un sidecar mort (`sidecar_restart`, côté Rust).
+ *
+ * L'état `dead` était une impasse : il fallait quitter l'application pour
+ * retrouver un sidecar, donc perdre fenêtre, onglets et session en cours pour
+ * une panne souvent passagère.
+ */
+export async function restartSidecar(): Promise<void> {
+  await invoke("sidecar_restart");
+}
+
 export async function fetchStatus(): Promise<StatusPayload> {
   return invoke<StatusPayload>("sidecar_status");
 }

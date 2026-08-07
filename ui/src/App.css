@@ -5982,3 +5982,24 @@ kbd {
   font-style: italic;
   color: var(--text-1);
 }
+
+/* ---------- Bannière « moteur arrêté » (voir SidecarMortBanner) ----------
+   Pleine largeur sous l'en-tête : le sidecar sert toutes les pages, son arrêt
+   ne se signale donc dans aucune d'elles en particulier. */
+.sidecar-dead-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  background: color-mix(in srgb, var(--danger, #f43f5e) 14%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger, #f43f5e) 45%, transparent);
+  color: var(--text, #e2e8f0);
+  font-size: 0.9rem;
+}
+
+.sidecar-dead-banner__error {
+  color: var(--danger, #f43f5e);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+}

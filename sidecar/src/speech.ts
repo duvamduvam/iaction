@@ -23,6 +23,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { joinUrl, readBoundedBody, type EngineEmitter } from "./engine.js";
+import { globalDataRoot } from "./appPaths.js";
 import * as journal from "./journal.js";
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,82 @@ const ttsFormatByModel = new Map<string, SpeechFormat>();
 // ---------------------------------------------------------------------------
 // Utilitaires
 // ---------------------------------------------------------------------------
+
+/*
+ * ---------------------------------------------------------------------------
+ * Pile de voix LOCALE — déportée hors de l'application livrée
+ * ---------------------------------------------------------------------------
+ *
+ * `kokoro-js` et `@huggingface/transformers` (avec l'`onnxruntime-node` natif
+ * qu'ils tirent, en double) pèsent 1,2 Go : plus que tout le reste réuni. Ils
+ * ne sont donc PAS embarqués dans les applications livrées
+ * (scripts/preparer-bundle.sh), mais restent installables APRÈS coup, dans un
+ * dossier de l'utilisateur — ce que cette section rend possible.
+ *
+ * Deux emplacements sont acceptés, dans cet ordre :
+ *   1. la résolution normale — cas du dépôt en développement, où
+ *      `npm install` les a posés dans `node_modules/` ;
+ *   2. `<données de l'app>/voix-locale/node_modules` — cas d'une application
+ *      installée : ce dossier est INSCRIPTIBLE (contrairement à une AppImage,
+ *      qui est une image en lecture seule), et l'utilisateur y installe la
+ *      pile lui-même (voir docs/empaquetage.md).
+ *
+ * La disponibilité est RÉSOLUE, jamais chargée, par `voixLocaleDisponible()` :
+ * l'interface s'en sert pour ne pas proposer un bouton qui échouerait — un
+ * bouton absent vaut mieux qu'un bouton qui déçoit.
+ */
+
+/** `<données de l'app>/voix-locale/node_modules` — installation déportée. */
+export function voixLocaleDir(): string {
+  return path.join(globalDataRoot(), "voix-locale", "node_modules");
+}
+
+/** Modules qui composent la pile de voix locale. */
+const MODULES_VOIX_LOCALE = ["kokoro-js", "@huggingface/transformers"] as const;
+
+/**
+ * Résout un module de la pile locale sans le charger : chemin du fichier
+ * d'entrée, ou `null` s'il est introuvable des deux côtés.
+ */
+function resoudreVoixLocale(nom: string): string | null {
+  try {
+    return createRequire(import.meta.url).resolve(nom);
+  } catch {
+    // Pas dans l'arbre du sidecar : on tente l'installation déportée. Le
+    // `require` doit partir d'un fichier FICTIF de ce dossier — c'est la
+    // convention de createRequire pour résoudre « comme si » on était là-bas.
+    try {
+      const base = path.join(voixLocaleDir(), "index.js");
+      return createRequire(base).resolve(nom);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Vrai si la pile complète est résolvable (embarquée ou déportée). */
+export function voixLocaleDisponible(): boolean {
+  return MODULES_VOIX_LOCALE.every((nom) => resoudreVoixLocale(nom) !== null);
+}
+
+/**
+ * Charge un module de la pile locale, où qu'il soit, et transforme son absence
+ * en message actionnable plutôt qu'en `ERR_MODULE_NOT_FOUND` brut.
+ */
+async function importVoixLocale<T>(nom: string): Promise<T> {
+  const resolu = resoudreVoixLocale(nom);
+  if (resolu === null) {
+    journal.warn("speech", "pile de voix locale absente", {
+      fields: { module: nom, dossierDeporte: voixLocaleDir() },
+    });
+    throw new Error(
+      `La voix locale n'est pas installée (module « ${nom} » introuvable). ` +
+        `Installez-la dans ${path.dirname(voixLocaleDir())} — voir docs/empaquetage.md — ` +
+        "ou choisissez un moteur de voix distant dans Configuration.",
+    );
+  }
+  return (await import(pathToFileURL(resolu).href)) as T;
+}
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
@@ -643,7 +720,13 @@ export function handleSpeechConfigure(
     tts: isNonEmptyString(rawKeys.tts) ? rawKeys.tts : undefined,
   };
 
-  emitter.done(id, {});
+  // La disponibilité de la pile locale voyage avec la réponse plutôt que dans
+  // une méthode à part : `speech.configure` est déjà appelé au démarrage, à
+  // chaque changement de réglage et à chaque `ready` du sidecar — l'interface
+  // est donc informée exactement quand il faut, sans plomberie supplémentaire.
+  emitter.done(id, {
+    voixLocale: { disponible: voixLocaleDisponible(), dossier: path.dirname(voixLocaleDir()) },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -657,7 +740,7 @@ async function loadSttPipeline(model: string, onProgress: (info: unknown) => voi
     return sttLoaded.promise;
   }
   const promise = (async () => {
-    const transformers = await import("@huggingface/transformers");
+    const transformers = await importVoixLocale<typeof import("@huggingface/transformers")>("@huggingface/transformers");
     transformers.env.cacheDir = modelsCacheDir();
     const pipe = await transformers.pipeline("automatic-speech-recognition", model, {
       progress_callback: onProgress as never,
@@ -715,7 +798,7 @@ async function loadKokoro(onProgress: (info: unknown) => void): Promise<KokoroLi
   }
   const promise = (async () => {
     await configureKokoroCacheDir(modelsCacheDir());
-    const { KokoroTTS } = await import("kokoro-js");
+    const { KokoroTTS } = await importVoixLocale<typeof import("kokoro-js")>("kokoro-js");
     const tts = (await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
       dtype: "q8",
       progress_callback: onProgress as never,

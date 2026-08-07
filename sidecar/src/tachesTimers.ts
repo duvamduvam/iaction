@@ -202,7 +202,41 @@ interface SystemctlResult {
 
 const SYSTEMCTL_TIMEOUT_MS = 5000;
 
+/**
+ * La planification LOCALE repose sur les timers systemd user : elle n'existe
+ * donc que sous Linux. Ailleurs (Windows, macOS), on refuse tout de suite avec
+ * un message qui dit où va la planification, plutôt que de laisser remonter un
+ * « systemctl : commande introuvable » qui n'apprend rien.
+ *
+ * Ce n'est pas une limitation subie mais la conception retenue
+ * (docs/etude-remote.md §9) : les tâches récurrentes vivent sur le serveur
+ * — champ `lieu: serveur` du manifeste —, ce qui les rend indépendantes du
+ * poste et de son extinction. Aucun équivalent Planificateur de tâches Windows
+ * n'est prévu.
+ */
+export function planificationLocaleDisponible(): boolean {
+  return process.platform === "linux";
+}
+
+/** Message unique de l'indisponibilité, pour ne pas le reformuler à dix endroits. */
+export function messagePlanificationIndisponible(): string {
+  return (
+    `La planification locale n'est disponible que sous Linux (timers systemd) ; ` +
+    `ce poste tourne sous ${process.platform}. Donnez à la tâche le lieu « serveur » ` +
+    `pour qu'elle s'exécute sur le runner, indépendamment de ce poste.`
+  );
+}
+
 function runSystemctl(args: string[], timeoutMs = SYSTEMCTL_TIMEOUT_MS): Promise<SystemctlResult> {
+  if (!planificationLocaleDisponible()) {
+    return Promise.resolve({
+      code: null,
+      stdout: "",
+      stderr: messagePlanificationIndisponible(),
+      timedOut: false,
+      failed: true,
+    });
+  }
   return new Promise((resolve) => {
     let child;
     try {

@@ -71,18 +71,75 @@ function preferByWitness(current: string, legacy: string, witness: string): stri
   return current;
 }
 
-/** `${XDG_CONFIG_HOME ?? ~/.config}/<app>` — config globale (agents, tâches, logs, usage). */
-export function globalConfigRoot(): string {
-  const xdg = process.env.XDG_CONFIG_HOME;
-  const base = isNonEmptyString(xdg) ? xdg : path.join(os.homedir(), ".config");
+/**
+ * Environnement dont dépend la résolution : injecté pour que les DEUX systèmes
+ * soient testables depuis n'importe quelle machine.
+ *
+ * C'est la règle qu'on se donne pour le portage : aucune décision de plateforme
+ * ne se lit en dur au milieu du code (`process.platform`), sinon la branche
+ * Windows ne s'exerce qu'en allumant un PC Windows — et ce qui ne se teste pas
+ * pourrit en silence.
+ */
+export interface PathEnv {
+  platform: NodeJS.Platform;
+  env: Record<string, string | undefined>;
+  home: string;
+}
+
+function currentEnv(): PathEnv {
+  return { platform: process.platform, env: process.env, home: os.homedir() };
+}
+
+/**
+ * Racine de la CONFIG, sans le nom de l'application.
+ *
+ * - Windows : `%APPDATA%` (itinérant — c'est la config, elle suit l'utilisateur),
+ *   repli `~/AppData/Roaming` si la variable manque.
+ * - Ailleurs : `$XDG_CONFIG_HOME` sinon `~/.config`.
+ *
+ * `XDG_CONFIG_HOME` reste honoré sur TOUTES les plateformes : les tests s'en
+ * servent pour isoler le dossier global du poste réel.
+ */
+function configBase(e: PathEnv): string {
+  const xdg = e.env.XDG_CONFIG_HOME;
+  if (isNonEmptyString(xdg)) return xdg;
+  if (e.platform === "win32") {
+    const appData = e.env.APPDATA;
+    return isNonEmptyString(appData) ? appData : path.join(e.home, "AppData", "Roaming");
+  }
+  return path.join(e.home, ".config");
+}
+
+/**
+ * Racine des DONNÉES, sans le nom de l'application.
+ *
+ * - Windows : `%LOCALAPPDATA%` (local — état volumineux, conversations, caches :
+ *   ça n'a rien à faire dans un profil itinérant), repli `~/AppData/Local`.
+ * - Ailleurs : `$XDG_DATA_HOME` sinon `~/.local/share`.
+ *
+ * Doit rester le miroir exact de ce que résout la coquille Tauri
+ * (`app_data_dir`), sans quoi l'UI et le sidecar liraient deux endroits.
+ */
+function dataBase(e: PathEnv): string {
+  const xdg = e.env.XDG_DATA_HOME;
+  if (isNonEmptyString(xdg)) return xdg;
+  if (e.platform === "win32") {
+    const localAppData = e.env.LOCALAPPDATA;
+    return isNonEmptyString(localAppData) ? localAppData : path.join(e.home, "AppData", "Local");
+  }
+  return path.join(e.home, ".local", "share");
+}
+
+/** Config globale (agents, tâches, logs, usage) — voir `configBase`. */
+export function globalConfigRoot(env: PathEnv = currentEnv()): string {
+  const base = configBase(env);
   // Témoin : `config.json`, écrit par le sidecar seul (la coquille n'y touche pas).
   return preferByWitness(path.join(base, APP_ID), path.join(base, LEGACY_APP_ID), "config.json");
 }
 
-/** `${XDG_DATA_HOME ?? ~/.local/share}/<app>` — état (conversations…), miroir de la coquille Rust. */
-export function globalDataRoot(): string {
-  const xdg = process.env.XDG_DATA_HOME;
-  const base = isNonEmptyString(xdg) ? xdg : path.join(os.homedir(), ".local", "share");
+/** État (conversations…), miroir de la coquille Rust — voir `dataBase`. */
+export function globalDataRoot(env: PathEnv = currentEnv()): string {
+  const base = dataBase(env);
   // Témoin : `state/`, écrit par le sidecar — le reste (WebKitCache, storage…)
   // appartient à la coquille et apparaît AVANT toute migration.
   return preferByWitness(path.join(base, APP_ID), path.join(base, LEGACY_APP_ID), "state");

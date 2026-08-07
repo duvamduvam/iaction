@@ -6,11 +6,17 @@
  * jumeaux (mêmes classes, mêmes libellés, mêmes états) sans recopier une seule
  * ligne de JSX.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { micLevelStyle } from "./audioCapture";
 import { stopPlayback } from "./audioPlayback";
-import { formatSpeechProgress } from "./speechAdmin";
+import {
+  abonnerEtatVoix,
+  dicteeUtilisable,
+  formatSpeechProgress,
+  lireEtatVoix,
+  syntheseUtilisable,
+} from "./speechAdmin";
 import { splitForSpeech } from "./speechChunker";
 import {
   CONVERSATION_STATE_LABELS,
@@ -208,8 +214,22 @@ export function VoiceStatus({ voice }: Readonly<{ voice: VoiceComposer }>) {
  * composeur (`.chat-composer__tools`), sous le bouton de pièces jointes.
  * `disabled` couvre les raisons propres à la page (page Projets : aucun projet
  * sélectionné, donc rien à qui parler).
+ *
+ * Les boutons DISPARAISSENT — ils ne sont pas seulement grisés — quand la voix
+ * n'est pas utilisable : mode local choisi alors que la pile locale n'est pas
+ * installée (elle n'est pas embarquée dans les applications livrées, voir
+ * docs/empaquetage.md). Un bouton grisé invite à chercher pourquoi ; un bouton
+ * absent n'appelle rien. L'explication et la marche à suivre vivent au seul
+ * endroit qui peut y répondre : Configuration → Voix.
+ *
+ * Le micro dépend de la DICTÉE, le mode conversation des deux (il écoute puis
+ * lit la réponse à voix haute).
  */
 export function VoiceButtons({ voice, disabled = false }: Readonly<{ voice: VoiceComposer; disabled?: boolean }>) {
+  const etat = useSyncExternalStore(abonnerEtatVoix, lireEtatVoix);
+  const dictee = dicteeUtilisable(etat);
+  const conversation = dictee && syntheseUtilisable(etat);
+  if (!dictee && !conversation) return null;
   return (
     <>
       <button
@@ -225,6 +245,7 @@ export function VoiceButtons({ voice, disabled = false }: Readonly<{ voice: Voic
       >
         {voice.micState === "transcribing" ? "…" : "🎤"}
       </button>
+      {conversation && (
       <button
         type="button"
         className={`btn btn--ghost conversation-btn${voice.conversationOn ? " conversation-btn--active" : ""}`}
@@ -238,6 +259,7 @@ export function VoiceButtons({ voice, disabled = false }: Readonly<{ voice: Voic
       >
         🗣
       </button>
+      )}
       {voice.micState === "recording" && (
         <span className="mic-level" style={micLevelStyle(voice.micLevel)} aria-hidden="true">
           <span className="mic-level__bar" />

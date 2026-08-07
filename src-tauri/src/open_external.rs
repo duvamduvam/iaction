@@ -71,14 +71,46 @@ fn build_command(path: &str, program: &str) -> Command {
     cmd
 }
 
-/// Commande Tauri : ouvre `path` avec `command` (ex. `"kicad"`) ou, à défaut, `xdg-open`
-/// (Linux). Spawn détaché, ne bloque jamais l'UI et ne suit pas la fin du process lancé.
+/// Ouverture « avec l'application par défaut du système », quand l'appelant n'a pas
+/// nommé de programme.
+///
+/// Windows n'a pas d'équivalent direct de `xdg-open` : c'est la commande interne
+/// `start` de `cmd`, d'où le passage par `cmd /C`. Le premier argument vide de
+/// `start` n'est pas une coquetterie — c'est le TITRE de fenêtre, et sans lui
+/// `start` prendrait un chemin entre guillemets pour un titre et n'ouvrirait
+/// rien.
+#[cfg(target_os = "windows")]
+fn build_default_command(path: &str) -> (String, Command) {
+    let mut cmd = Command::new("cmd");
+    cmd.args(["/C", "start", "", path]);
+    prepare_detached(&mut cmd);
+    ("cmd /C start".to_string(), cmd)
+}
+
+#[cfg(target_os = "macos")]
+fn build_default_command(path: &str) -> (String, Command) {
+    ("open".to_string(), build_command(path, "open"))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn build_default_command(path: &str) -> (String, Command) {
+    ("xdg-open".to_string(), build_command(path, "xdg-open"))
+}
+
+/// Commande Tauri : ouvre `path` avec `command` (ex. `"kicad"`) ou, à défaut, avec
+/// l'ouvreur par défaut du système (`xdg-open`, `open`, `cmd /C start`).
+/// Spawn détaché, ne bloque jamais l'UI et ne suit pas la fin du process lancé.
 /// Erreur lisible si le binaire est introuvable ou si le spawn échoue pour une autre raison.
 #[tauri::command]
 pub fn open_external(path: String, command: Option<String>) -> Result<(), String> {
-    let program = command.unwrap_or_else(|| "xdg-open".to_string());
-    build_command(&path, &program)
-        .spawn()
+    let (program, mut cmd) = match command {
+        Some(program) => {
+            let cmd = build_command(&path, &program);
+            (program, cmd)
+        }
+        None => build_default_command(&path),
+    };
+    cmd.spawn()
         .map(|_child| ())
         .map_err(|err| describe_spawn_error(&program, err))
 }

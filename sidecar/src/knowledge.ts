@@ -269,7 +269,14 @@ async function collectSources(cwd: string, pinned: string[]): Promise<SourceFile
       continue;
     }
     if (!stat.isFile()) continue;
-    const rel = path.relative(cwdAbs, abs);
+    // Séparateur NORMALISÉ en « / », y compris sous Windows : ce libellé est la
+    // clef du fichier dans l'index (`meta.files`, `chunkId`), et l'index vit
+    // dans `.iaction/`, c'est-à-dire dans le dossier SYNCHRONISÉ entre postes
+    // (docs/etude-remote.md §2). Sans normalisation, le même fichier serait
+    // « docs/plan.md » sur le poste Linux et « docs\plan.md » sur le poste
+    // Windows : aucune clef ne correspondrait et chaque changement de poste
+    // relancerait une indexation complète — coûteuse, et pour rien.
+    const rel = path.relative(cwdAbs, abs).split(path.sep).join("/");
     sources.push({ abs, label: rel.startsWith("..") ? abs : rel, mtimeMs: stat.mtimeMs });
   }
   return sources;

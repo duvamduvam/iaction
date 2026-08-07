@@ -31,19 +31,59 @@ done
 ANCIEN_ID="net.duvam.ia-studio"
 NOUVEAU_ID="net.duvam.iaction"
 
+# Déplace `src` vers `dst`. Si `dst` existe déjà, on FUSIONNE entrée par entrée
+# plutôt que d'abandonner : le cas est la règle, pas l'exception — la coquille
+# Tauri crée le dossier au nouveau nom dès le premier lancement, et
+# l'application y écrit une configuration par défaut avant qu'on ait migré
+# (c'est ce qui a fait « disparaître » 7 projets le 2026-08-07).
+#
+# Règle de fusion, volontairement conservatrice :
+#   - entrée absente de `dst`           → on la déplace ;
+#   - `.jsonl` présent des deux côtés   → concaténation ancien PUIS nouveau
+#                                          (append-only, l'ordre chronologique
+#                                          est préservé) ;
+#   - autre collision                   → l'ANCIEN gagne, le nouveau est gardé
+#                                          sous `.remplace-par-migration`.
 deplacer() {
   local src="$1" dst="$2"
   if [ ! -e "$src" ]; then return 0; fi
-  if [ -e "$dst" ]; then
-    echo "  ⚠ $dst existe déjà — $src laissé en place (fusion à faire à la main)"
+
+  if [ ! -e "$dst" ]; then
+    if [ "$APPLIQUER" -eq 1 ]; then
+      mv "$src" "$dst"; echo "  ✔ $src → $dst"
+    else
+      echo "  · $src → $dst"
+    fi
     return 0
   fi
-  if [ "$APPLIQUER" -eq 1 ]; then
-    mv "$src" "$dst"
-    echo "  ✔ $src → $dst"
-  else
-    echo "  · $src → $dst"
-  fi
+
+  echo "  ⚠ $dst existe déjà — fusion entrée par entrée"
+  local entree nom cible
+  for entree in "$src"/* "$src"/.[!.]*; do
+    [ -e "$entree" ] || continue
+    nom="$(basename "$entree")"
+    cible="$dst/$nom"
+    if [ ! -e "$cible" ]; then
+      if [ "$APPLIQUER" -eq 1 ]; then mv "$entree" "$cible"; echo "    ✔ $nom déplacé"; else echo "    · $nom → déplacé"; fi
+    elif [ -d "$entree" ]; then
+      deplacer "$entree" "$cible"
+    elif [ "${nom##*.}" = "jsonl" ]; then
+      if [ "$APPLIQUER" -eq 1 ]; then
+        cat "$entree" "$cible" > "$cible.fusion" && mv "$cible.fusion" "$cible" && rm "$entree"
+        echo "    ✔ $nom concaténé (ancien puis nouveau)"
+      else
+        echo "    · $nom → concaténé"
+      fi
+    else
+      if [ "$APPLIQUER" -eq 1 ]; then
+        mv "$cible" "$cible.remplace-par-migration"; mv "$entree" "$cible"
+        echo "    ✔ $nom remplacé (le nouveau est gardé en .remplace-par-migration)"
+      else
+        echo "    · $nom → l'ancien remplace le nouveau"
+      fi
+    fi
+  done
+  if [ "$APPLIQUER" -eq 1 ]; then rmdir "$src" 2>/dev/null || true; fi
 }
 
 echo "== Données du poste =="

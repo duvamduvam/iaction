@@ -529,6 +529,79 @@ export interface SpeechPushResult {
   config: SpeechConfig;
   keyStatus: SpeechKeyStatus;
   keyOrigin: SpeechKeyOrigins;
+  voixLocale: VoixLocaleEtat;
+}
+
+/**
+ * Disponibilité de la pile de voix LOCALE, telle que la rapporte le sidecar en
+ * réponse à `speech.configure`.
+ *
+ * Elle n'est PAS embarquée dans les applications livrées (1,2 Go) : elle
+ * s'installe après coup dans `dossier`. L'interface s'en sert pour ne pas
+ * proposer micro et conversation quand ils échoueraient — voir
+ * docs/empaquetage.md.
+ *
+ * En attendant la première réponse du sidecar, on suppose la voix DISPONIBLE :
+ * masquer des boutons puis les faire réapparaître serait plus déroutant que
+ * l'inverse, et le cas nominal (dépôt en développement, installation complétée)
+ * est celui-là.
+ */
+export interface VoixLocaleEtat {
+  disponible: boolean;
+  /** Dossier où l'installer — vide tant que le sidecar n'a pas répondu. */
+  dossier: string;
+}
+
+export const VOIX_LOCALE_INCONNUE: VoixLocaleEtat = { disponible: true, dossier: "" };
+
+/*
+ * ---------------------------------------------------------------------------
+ * État vif de la voix, publié pour toute l'application
+ * ---------------------------------------------------------------------------
+ *
+ * `useSpeech()` ne vit qu'une fois, dans App.tsx, alors que les boutons de voix
+ * sont rendus dans DEUX pages (Projets et Chat). Plutôt que de faire descendre
+ * l'information de props en props à travers toute l'arborescence, on la publie
+ * ici — même patron que contextBus.ts / usageBus.ts.
+ *
+ * Ce que les boutons en font : ne pas s'afficher quand ils échoueraient. Un
+ * micro qui ne peut rien transcrire est pire qu'un micro absent.
+ */
+
+interface EtatVoix {
+  voixLocale: VoixLocaleEtat;
+  config: SpeechConfig;
+}
+
+let etatVoix: EtatVoix = { voixLocale: VOIX_LOCALE_INCONNUE, config: DEFAULT_SPEECH_CONFIG };
+const abonnesVoix = new Set<() => void>();
+
+function publierEtatVoix(next: EtatVoix): void {
+  etatVoix = next;
+  for (const cb of abonnesVoix) cb();
+}
+
+export function lireEtatVoix(): EtatVoix {
+  return etatVoix;
+}
+
+export function abonnerEtatVoix(cb: () => void): () => void {
+  abonnesVoix.add(cb);
+  return () => abonnesVoix.delete(cb);
+}
+
+/**
+ * La dictée est-elle utilisable en l'état ? Faux uniquement dans le cas
+ * « mode local choisi, mais pile locale absente » : en mode distant, la
+ * disponibilité locale n'a rien à voir.
+ */
+export function dicteeUtilisable(etat: EtatVoix = etatVoix): boolean {
+  return etat.config.stt.mode !== "local" || etat.voixLocale.disponible;
+}
+
+/** Idem pour la synthèse (lecture des réponses). */
+export function syntheseUtilisable(etat: EtatVoix = etatVoix): boolean {
+  return etat.config.tts.mode !== "local" || etat.voixLocale.disponible;
 }
 
 /** Clé d'un fournisseur, `null` si le compte est absent du trousseau (jamais d'exception). */
@@ -662,11 +735,24 @@ export async function pushSpeech(): Promise<SpeechPushResult> {
   const keys: { stt?: string; tts?: string } = {};
   if (stt.key) keys.stt = stt.key;
   if (tts.key) keys.tts = tts.key;
-  await request("speech.configure", { config, keys }).done;
+  const reponse = await request("speech.configure", { config, keys }).done;
+  const brut = (reponse as Record<string, unknown> | undefined)?.voixLocale;
+  const voixLocale: VoixLocaleEtat =
+    typeof brut === "object" && brut !== null
+      ? {
+          disponible: (brut as Record<string, unknown>).disponible !== false,
+          dossier:
+            typeof (brut as Record<string, unknown>).dossier === "string"
+              ? ((brut as Record<string, unknown>).dossier as string)
+              : "",
+        }
+      : VOIX_LOCALE_INCONNUE;
+  publierEtatVoix({ voixLocale, config });
   return {
     config,
     keyStatus: { stt: !!sttKey, tts: !!ttsKey },
     keyOrigin: { stt: stt.origin, tts: tts.origin },
+    voixLocale,
   };
 }
 

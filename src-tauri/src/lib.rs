@@ -157,6 +157,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sidecar::sidecar_request,
             sidecar::sidecar_status,
+            sidecar::sidecar_restart,
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,

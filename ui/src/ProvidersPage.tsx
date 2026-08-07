@@ -5,7 +5,7 @@
  * API par fournisseur — trousseau OS, jamais affichées ni persistées en
  * clair côté UI — et bouton « Tester » `models.list` par fournisseur).
  */
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   addApp,
@@ -64,6 +64,8 @@ import {
   type SpeechKeyStatus,
   type SpeechMode,
   type SpeechOption,
+  abonnerEtatVoix,
+  lireEtatVoix,
 } from "./speechAdmin";
 import type { ProjectsLoadState } from "./useProjects";
 import type { ProvidersLoadState } from "./useProviders";
@@ -2725,6 +2727,32 @@ interface VoiceTestState {
   message: string;
 }
 
+/**
+ * Avertissement affiché dans l'onglet Voix quand un mode LOCAL est choisi alors
+ * que la pile de voix locale n'est pas installée.
+ *
+ * C'est le pendant obligé du masquage des boutons micro et conversation
+ * (VoiceControls) : sans cette explication ici, l'utilisateur verrait des
+ * boutons disparaître sans jamais savoir pourquoi. C'est le seul écran qui peut
+ * répondre, puisque c'est là qu'on choisit local ou distant.
+ */
+function VoixLocaleAbsente() {
+  const etat = useSyncExternalStore(abonnerEtatVoix, lireEtatVoix);
+  if (etat.voixLocale.disponible) return null;
+  const local = etat.config.stt.mode === "local" || etat.config.tts.mode === "local";
+  if (!local) return null;
+  return (
+    <div className="result-line result-line--error">
+      La pile de voix locale n'est pas installée : elle n'est pas embarquée dans l'application (1,2 Go).
+      Les boutons micro et conversation restent donc masqués. Deux issues : passer en mode « Distant (API) »
+      ci-dessus, ou l'installer une fois pour toutes avec{" "}
+      <code>npm install kokoro-js @huggingface/transformers</code> dans{" "}
+      <code>{etat.voixLocale.dossier || "le dossier de données de l'application"}</code> — voir
+      docs/empaquetage.md.
+    </div>
+  );
+}
+
 function VoiceSection({
   config,
   keyStatus,
@@ -2876,6 +2904,7 @@ function VoiceSection({
               <option value="remote">Distant (API)</option>
             </select>
           </div>
+          <VoixLocaleAbsente />
           <div className="field">
             <label htmlFor="voice-stt-language">Langue</label>
             <select

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
+use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Backoff initial avant la première tentative de redémarrage.
@@ -72,6 +73,11 @@ pub struct SidecarState {
     /// Positionné à `true` pour indiquer à la boucle de supervision de s'arrêter sans
     /// redémarrer le sidecar (fermeture de l'application en cours).
     shutdown: bool,
+    /// Vrai tant qu'une boucle de supervision tourne. Sert à `sidecar_restart` :
+    /// sans lui, relancer un sidecar `dead` créerait une SECONDE boucle, et
+    /// deux superviseurs pour un même process, c'est deux sidecars concurrents
+    /// écrivant les mêmes fichiers d'état.
+    supervising: bool,
 }
 
 impl Default for SidecarState {
@@ -83,6 +89,7 @@ impl Default for SidecarState {
             stdin: None,
             child: None,
             shutdown: false,
+            supervising: false,
         }
     }
 }
@@ -114,17 +121,51 @@ fn lock_state(mutex: &SharedState) -> MutexGuard<'_, SidecarState> {
     }
 }
 
-/// Détermine le chemin de l'entrypoint du sidecar Node.
+/// Détermine le chemin de l'entrypoint du sidecar Node, par ordre de priorité :
 ///
-/// `IACTION_SIDECAR` si définie, sinon le sidecar compilé du repo source.
-fn sidecar_entry() -> String {
+/// 1. `IACTION_SIDECAR` — échappatoire explicite (tests, one-shot, dépannage) ;
+/// 2. la RESSOURCE embarquée `sidecar/index.js` — cas d'une application
+///    installée (AppImage, .deb, installeur Windows) ;
+/// 3. le sidecar compilé du dépôt source — cas du développement.
+///
+/// L'ordre compte : en développement la ressource n'existe pas et l'on retombe
+/// sur le dépôt, en installation le dépôt n'existe pas et la ressource répond.
+/// Aucun des deux ne devine : chacun est vérifié sur le disque avant d'être
+/// retenu, et l'échec final reste explicite (le spawn journalise en `fatal`).
+fn sidecar_entry(app: &AppHandle) -> String {
     if let Ok(custom) = std::env::var("IACTION_SIDECAR") {
         return custom;
     }
-    // TODO(packaging release) : en build release packagé, le sidecar devra être une
-    // ressource embarquée avec l'app plutôt que ce chemin relatif au repo source. Pour
-    // l'instant (Lot 0) on garde le même fallback en debug et en release.
+    if let Ok(resource) = app.path().resolve("sidecar/index.js", BaseDirectory::Resource) {
+        if resource.exists() {
+            return resource.to_string_lossy().into_owned();
+        }
+    }
     concat!(env!("CARGO_MANIFEST_DIR"), "/../sidecar/dist/index.js").to_string()
+}
+
+/// Détermine le runtime Node qui exécutera le sidecar, par ordre de priorité :
+///
+/// 1. `IACTION_NODE` — échappatoire explicite ;
+/// 2. le `node` LIVRÉ à côté de l'exécutable (binaire externe Tauri) — c'est
+///    lui qui rend l'application autonome : l'utilisateur n'a pas à installer
+///    Node, ni à disposer de droits d'administration pour le faire ;
+/// 3. le `node` du PATH — cas du développement, et repli si le binaire livré
+///    manquait.
+fn node_program(_app: &AppHandle) -> String {
+    if let Ok(custom) = std::env::var("IACTION_NODE") {
+        return custom;
+    }
+    let nom = if cfg!(windows) { "node.exe" } else { "node" };
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dossier) = exe.parent() {
+            let livre = dossier.join(nom);
+            if livre.exists() {
+                return livre.to_string_lossy().into_owned();
+            }
+        }
+    }
+    "node".to_string()
 }
 
 /// Émet une ligne de journal applicatif vers l'UI via l'event Tauri `app:log`
@@ -174,13 +215,89 @@ fn emit_status(app: &AppHandle, state: &SidecarState) {
 /// Démarre la supervision du sidecar dans un thread dédié. À appeler une fois, depuis
 /// `setup()`.
 pub fn spawn_supervisor(app: AppHandle) {
+    {
+        let shared = app.state::<SharedState>();
+        let mut guard = lock_state(&shared);
+        guard.supervising = true;
+    }
     thread::spawn(move || supervise(app));
+}
+
+/// Commande Tauri : RELANCE un sidecar mort.
+///
+/// L'état `dead` (cinq échecs rapprochés) était une impasse : plus aucun
+/// redémarrage n'était tenté et il fallait quitter l'application entière pour
+/// retrouver un sidecar — donc perdre la fenêtre, les onglets et la session en
+/// cours pour une panne souvent passagère. C'est arrivé trois fois dans la
+/// seule journée du 2026-08-07, chaque fois parce que le sidecar avait été
+/// recompilé pendant que l'application tournait : le superviseur ne trouvait
+/// qu'un `index.js` à demi réécrit.
+///
+/// La relance remet le compteur d'échecs à zéro et repart d'un état `starting`.
+/// Deux cas :
+/// - la boucle de supervision vit encore (état `restarting`, backoff en cours) :
+///   il suffit de tuer l'enfant courant, elle enchaînera ;
+/// - elle s'est arrêtée (état `dead`) : on en relance une.
+#[tauri::command]
+pub fn sidecar_restart(app: AppHandle) -> Result<(), String> {
+    let relancer_boucle = {
+        let shared = app.state::<SharedState>();
+        let mut guard = lock_state(&shared);
+
+        if guard.shutdown {
+            return Err("fermeture de l'application en cours".to_string());
+        }
+
+        guard.attempts = 0;
+        if let Some(child) = guard.child.as_mut() {
+            // Best-effort : si le kill échoue, le `try_wait` de la boucle
+            // constatera de toute façon la mort ou la survie du process.
+            let _ = child.kill();
+        }
+        guard.child = None;
+        guard.stdin = None;
+        guard.pid = None;
+        guard.state = SidecarLifecycle::Starting;
+        emit_status(&app, &guard);
+        !guard.supervising
+    };
+
+    log_app(
+        &app,
+        "info",
+        "relance du sidecar demandée".to_string(),
+        serde_json::json!({ "nouvelleBoucle": relancer_boucle }),
+    );
+
+    if relancer_boucle {
+        spawn_supervisor(app);
+    }
+    Ok(())
+}
+
+/// Garde qui remet `supervising` à faux à la sortie de la boucle, par quelque
+/// chemin qu'elle sorte (mort définitive, arrêt demandé, retour anticipé).
+struct FinDeSupervision {
+    app: AppHandle,
+}
+
+impl Drop for FinDeSupervision {
+    fn drop(&mut self) {
+        let shared = self.app.state::<SharedState>();
+        let mut guard = lock_state(&shared);
+        guard.supervising = false;
+    }
 }
 
 /// Boucle de supervision : spawn, attend la mort du process, gère le backoff et les
 /// redémarrages, jusqu'à état `dead` ou demande d'arrêt.
 fn supervise(app: AppHandle) {
-    let entry = sidecar_entry();
+    // Quoi qu'il arrive, la fin de cette fonction doit lever `supervising` :
+    // c'est ce drapeau qui autorise `sidecar_restart` à repartir d'une boucle
+    // neuve. Le garde ci-dessous le fait même en cas de retour anticipé.
+    let _fin = FinDeSupervision { app: app.clone() };
+    let entry = sidecar_entry(&app);
+    let node = node_program(&app);
 
     // Publie l'état initial "starting" avant la première tentative de spawn.
     {
@@ -198,7 +315,7 @@ fn supervise(app: AppHandle) {
             }
         }
 
-        let spawned = Command::new("node")
+        let spawned = Command::new(&node)
             .arg(&entry)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -208,14 +325,14 @@ fn supervise(app: AppHandle) {
         let mut child = match spawned {
             Ok(child) => child,
             Err(err) => {
-                eprintln!("[sidecar] échec du spawn (node {entry}) : {err}");
+                eprintln!("[sidecar] échec du spawn ({node} {entry}) : {err}");
                 // `fatal` : sans sidecar, toute la partie métier de l'app est
                 // hors service (c'est la panne « node introuvable »).
                 log_app(
                     &app,
                     "fatal",
                     "échec du spawn du sidecar (node)".to_string(),
-                    serde_json::json!({ "entry": entry, "erreur": err.to_string() }),
+                    serde_json::json!({ "node": node, "entry": entry, "erreur": err.to_string() }),
                 );
                 if register_failure(&app, Duration::ZERO) {
                     continue;

@@ -4730,22 +4730,10 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     ? activeSessionId
     : sortedSessions[0]?.id;
 
-  // Aucun projet déclaré : écran d'accueil dédié plutôt que la page vide
-  // (les hooks ci-dessus doivent tout de même tourner à chaque rendu, d'où
-  // ce garde-fou en fin de fonction plutôt qu'un retour anticipé plus haut).
-  if (projectsLoadState !== "loading" && projects.length === 0) {
-    return (
-      <div className="page agent-page agent-page--empty">
-        <div className="agent-empty-state">
-          <h1 className="page__title">Projets</h1>
-          <p className="empty-hint">Déclarez votre premier projet dans Configuration pour commencer.</p>
-          <button type="button" className="btn" onClick={onGoToConfig}>
-            Aller à Configuration
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // Aucun projet déclaré : écran d'accueil dédié plutôt que la page vide. Le
+  // retour correspondant est TOUT EN BAS, après le dernier hook — voir
+  // `ecranSansProjet` avant le rendu principal.
+  const aucunProjet = projectsLoadState !== "loading" && projects.length === 0;
 
   // Écran étroit au premier affichage : les sections secondaires démarrent
   // repliées (voir spec « reste simple » — calculé une fois, pas ré-évalué
@@ -4793,6 +4781,37 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     registerCompactHandler("agent", available ? () => compactSendRef.current() : null);
     return () => registerCompactHandler("agent", null);
   }, [activeSessionId, engineProviderId]);
+
+  /*
+   * Écran « aucun projet » — placé ICI, après le DERNIER hook du composant.
+   *
+   * Il vivait plus haut, au milieu de la liste des hooks : trois d'entre eux
+   * (publication de l'encart contexte, ref et enregistrement du bouton
+   * « Compacter ») restaient derrière ce retour. Le premier rendu, projets
+   * encore en chargement, les exécutait ; le rendu suivant, une fois constaté
+   * qu'il n'y a aucun projet, sortait avant eux — React comptait moins de
+   * hooks qu'au rendu précédent et interrompait toute l'interface
+   * (« Rendered fewer hooks than expected », incident du 2026-08-07).
+   *
+   * C'était donc aussi un plantage de PREMIÈRE INSTALLATION : sans projet
+   * déclaré, l'écran d'accueil tuait l'application au lieu de s'afficher.
+   *
+   * Règle : dans ce composant, aucun `return` avant la fin — tout garde-fou
+   * d'affichage se calcule en booléen (ici `aucunProjet`) et se rend ici.
+   */
+  if (aucunProjet) {
+    return (
+      <div className="page agent-page agent-page--empty">
+        <div className="agent-empty-state">
+          <h1 className="page__title">Projets</h1>
+          <p className="empty-hint">Déclarez votre premier projet dans Configuration pour commencer.</p>
+          <button type="button" className="btn" onClick={onGoToConfig}>
+            Aller à Configuration
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page agent-page">

@@ -15,3 +15,8 @@ src-tauri/gen/schemas/
 # partagé (celui-ci, c'est `.mcp.json`, qui reste versionné).
 .iaction/mcp.local.json
 .iaction/mcp.runtime.json
+
+# Bundle du sidecar assemblé pour la livraison (regénéré par
+# scripts/preparer-bundle.sh) et runtime Node téléchargé.
+build/
+src-tauri/binaries/

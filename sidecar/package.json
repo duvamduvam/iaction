@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node test/protocol.test.js && node test/speech.test.js && node test/logs.test.js && node test/tickets.test.js && node test/runner.test.js"
+    "test": "npm run build && node test/appPaths.test.js && node test/protocol.test.js && node test/speech.test.js && node test/logs.test.js && node test/tickets.test.js && node test/runner.test.js"
   },
   "devDependencies": {
     "@types/node": "^22",

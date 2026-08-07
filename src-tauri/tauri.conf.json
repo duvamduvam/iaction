@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev -w ui",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build -w ui",
+    "beforeBuildCommand": "npm run preparer-bundle",
     "frontendDist": "../ui/dist"
   },
   "app": {
@@ -25,13 +25,25 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["appimage", "nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../build/sidecar-bundle/": "sidecar/"
+    },
+    "externalBin": ["binaries/node"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
   }
 }

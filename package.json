@@ -9,11 +9,14 @@
   ],
   "scripts": {
     "dev": "tauri dev",
-    "build": "npm run build -w sidecar && tauri build",
+    "build": "tauri build",
     "tauri": "tauri",
     "ui:build": "npm run build -w ui",
     "sidecar:build": "npm run build -w sidecar",
-    "sidecar:test": "npm run test -w sidecar"
+    "sidecar:test": "npm run test -w sidecar",
+    "preparer-bundle": "bash scripts/preparer-bundle.sh",
+    "build:linux": "tauri build --bundles appimage",
+    "build:windows": "tauri build --bundles nsis"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

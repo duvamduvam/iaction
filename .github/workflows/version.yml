@@ -1,0 +1,120 @@
+# Construit les installeurs des DEUX plateformes et les attache à une release.
+#
+# Pourquoi : Tauri ne compile pas Windows depuis Linux. Sans cette CI, chaque
+# version Windows réclamerait d'allumer un PC Windows et d'y refaire la chaîne
+# complète. Ici, un runner `windows-latest` s'en charge — le poste de
+# développement reste sous Linux, et le PC Windows ne sert plus qu'à UTILISER
+# l'application.
+#
+# Déclenchement :
+#   - étiquette `v*` poussée (ex. `git tag v0.1.0 && git push origin v0.1.0`)
+#     → construit et publie une release avec les deux fichiers ;
+#   - « Run workflow » depuis l'onglet Actions → construit et dépose les
+#     fichiers en artefacts, sans rien publier.
+#
+# Rien à adapter par plateforme : `scripts/preparer-bundle.sh` tourne sous Git
+# Bash (présent d'origine sur les runners Windows), télécharge le bon runtime
+# Node et laisse npm ne poser que le CLI Claude de la plateforme visée.
+
+name: Version
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  construire:
+    strategy:
+      # Une plateforme qui échoue ne doit pas annuler l'autre : on veut savoir
+      # laquelle des deux casse, pas seulement qu'il y a eu un échec.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bundles: appimage
+            artefact: appimage
+          - os: windows-latest
+            bundles: nsis
+            artefact: nsis
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Le crate Tauri est long à compiler ; le cache ramène les versions
+      # suivantes à quelques minutes.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      # Dépendances système de WebKitGTK — seulement sur Linux (Windows a
+      # WebView2, et macOS WebKit, nativement).
+      - name: Dépendances système (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Dépendances npm
+        run: npm ci
+
+      - name: Tests du sidecar
+        run: npm run sidecar:test
+
+      # `beforeBuildCommand` déclenche scripts/preparer-bundle.sh : interface,
+      # sidecar, bundle de ses dépendances d'exécution et runtime Node.
+      - name: Construire
+        shell: bash
+        run: npx tauri build --bundles ${{ matrix.bundles }}
+
+      - name: Déposer l'installeur en artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iaction-${{ matrix.artefact }}
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
+  publier:
+    # Uniquement sur étiquette : un lancement manuel sert à vérifier que la
+    # chaîne tient, pas à publier.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: construire
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installeurs
+
+      - name: Publier la release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installeurs/**/*
+          generate_release_notes: true
+          # L'installeur Windows n'est pas signé : SmartScreen affichera un
+          # avertissement au premier lancement, contournable par
+          # « Informations complémentaires → Exécuter quand même ». Voir
+          # docs/empaquetage.md §4.
+          body: |
+            Installeurs construits automatiquement.
+
+            - **Linux** : `.AppImage` — rendre exécutable puis lancer.
+            - **Windows** : `-setup.exe` — installation pour l'utilisateur
+              courant, sans droits d'administration. L'installeur n'étant pas
+              signé, Windows affiche un avertissement au premier lancement.
+
+            La voix locale n'est pas incluse (1,2 Go) ; elle s'installe après
+            coup, voir `docs/empaquetage.md`.

@@ -9,6 +9,8 @@ import { SupervisionPage } from "./SupervisionPage";
 import { SystemPage } from "./SystemPage";
 import {
   subscribeReady,
+  fetchStatus,
+  restartSidecar,
   subscribeStatus,
   usageClaude,
   usageClaudeInit,
@@ -934,6 +936,63 @@ function slotClass(active: boolean): string {
 
 /* ---------- App ---------- */
 
+/* ---------- Bannière « sidecar mort » ---------- */
+
+/**
+ * Bandeau global proposant de relancer le sidecar quand il est mort.
+ *
+ * L'état `dead` (cinq échecs rapprochés) n'offrait aucune issue dans
+ * l'application : il fallait la quitter entièrement — donc perdre fenêtre,
+ * onglets et session en cours — pour une panne le plus souvent passagère
+ * (sidecar recompilé sous les pieds de l'application, par exemple). La
+ * bannière est volontairement au niveau de la coquille : le sidecar sert
+ * TOUTES les pages, l'information n'appartient à aucune.
+ */
+function SidecarMortBanner() {
+  const [dead, setDead] = useState(false);
+  const [relance, setRelance] = useState(false);
+  const [erreur, setErreur] = useState("");
+
+  useEffect(() => {
+    fetchStatus()
+      .then((s) => setDead(s.state === "dead"))
+      .catch(() => {});
+    return subscribeStatus((s) => {
+      setDead(s.state === "dead");
+      if (s.state !== "dead") {
+        setRelance(false);
+        setErreur("");
+      }
+    });
+  }, []);
+
+  if (!dead) return null;
+  return (
+    <div className="sidecar-dead-banner">
+      <span>
+        Le moteur de l'application (sidecar) s'est arrêté après plusieurs échecs. Les conversations
+        enregistrées sont intactes.
+      </span>
+      <button
+        type="button"
+        className="btn"
+        disabled={relance}
+        onClick={() => {
+          setRelance(true);
+          setErreur("");
+          restartSidecar().catch((err) => {
+            setRelance(false);
+            setErreur(err instanceof Error ? err.message : String(err));
+          });
+        }}
+      >
+        {relance ? "Relance…" : "Relancer le moteur"}
+      </button>
+      {erreur && <span className="sidecar-dead-banner__error">{erreur}</span>}
+    </div>
+  );
+}
+
 function App() {
   const [page, setPage] = useState<PageId>("projects");
   // Pastille « nouveau rapport de tâche » sur l'onglet Orchestration (c'est là
@@ -1131,6 +1190,7 @@ function App() {
   return (
     <div className="app-shell">
       <Header page={page} onSelectPage={setPage} onOpenTerminal={handleOpenTerminal} orchestrationAlert={tacheAlert} />
+      <SidecarMortBanner />
       <main className="app-content">
         {/*
           Les six pages restent montées en permanence (masquées via CSS)
