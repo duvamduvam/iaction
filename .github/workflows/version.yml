@@ -19,7 +19,12 @@
 name: Version
 
 on:
+  # Chaque poussée sur `main` construit les deux plateformes SANS rien publier :
+  # c'est ce qui permet de découvrir une régression propre à Windows sans avoir
+  # à créer une étiquette de version à chaque essai. Seule une étiquette `v*`
+  # déclenche la publication (voir le job `publier`).
   push:
+    branches: ["main"]
     tags: ["v*"]
   workflow_dispatch:
 

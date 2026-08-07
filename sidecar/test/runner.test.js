@@ -15,6 +15,7 @@
 //   4. construction du crontab sur une arborescence de tâches jetable :
 //      sélection `enabled` + `lieu: serveur`, et remontée des refus.
 
+import { execFileSync } from "node:child_process";
 import { promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -284,10 +285,36 @@ async function main() {
     // Les scripts shell doivent être exécutables : l'entrypoint les appelle
     // directement (`"$BIN/sync-down.sh"`), un bit manquant ne se verrait qu'au
     // premier démarrage du conteneur.
-    for (const nom of ["entrypoint.sh", "sync-down.sh", "sync-up.sh", "plan-cron.mjs", "run-tache.mjs"]) {
-      const chemin = path.resolve(__dirname, "..", "..", "docker", "ia-runner", "bin", nom);
-      const stat = await fsp.stat(chemin);
-      assert((stat.mode & 0o111) !== 0, `${nom} doit être exécutable (chmod +x)`);
+    //
+    // On interroge GIT, pas le système de fichiers. C'est le mode enregistré
+    // dans l'index (`100755`) qui voyage jusqu'à l'image Docker ; le bit du
+    // disque local, lui, n'existe pas sous Windows — NTFS n'a pas de permission
+    // d'exécution, et une extraction y rapporterait `100644` pour tout le
+    // monde. La CI l'a montré : ce test tombait sur le runner Windows alors
+    // que le dépôt était parfaitement correct.
+    const fichiers = ["entrypoint.sh", "sync-down.sh", "sync-up.sh", "plan-cron.mjs", "run-tache.mjs"];
+    const racineDepot = path.resolve(__dirname, "..", "..");
+    let indexGit = "";
+    try {
+      indexGit = execFileSync(
+        "git",
+        ["ls-files", "-s", "--", ...fichiers.map((n) => `docker/ia-runner/bin/${n}`)],
+        { cwd: racineDepot, encoding: "utf8" },
+      );
+    } catch {
+      // Hors dépôt git (archive extraite, tarball de publication) : rien à
+      // vérifier, et surtout pas de faux échec.
+      console.log("(bit exécutable non vérifié : hors dépôt git)");
+    }
+    if (indexGit) {
+      for (const nom of fichiers) {
+        const ligne = indexGit.split("\n").find((l) => l.endsWith(`bin/${nom}`));
+        assert(ligne, `${nom} absent de l'index git`);
+        assert(
+          ligne.startsWith("100755"),
+          `${nom} doit être exécutable dans git (mode 100755), reçu « ${ligne.split(" ")[0]} »`,
+        );
+      }
     }
 
     console.log("OK");
