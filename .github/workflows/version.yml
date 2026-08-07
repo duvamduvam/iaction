@@ -93,10 +93,14 @@ jobs:
           cargo test --quiet > sortie-cargo.txt 2>&1
           code=$?
           if [ "$code" -ne 0 ]; then
-            resume=$(grep -aE "^error(\[|:)|^thread .* panicked|^test .* FAILED|cannot find|no method|mismatched types" sortie-cargo.txt | head -4 | tr '\n' '¦')
-            echo "::error title=Tests Rust (${{ matrix.os }})::${resume:-échec sans ligne reconnaissable}"
-            echo "----- 80 dernières lignes -----"
-            tail -80 sortie-cargo.txt
+            # Sortie BRUTE dans l'annotation, sans filtre : un premier essai
+            # filtrait par motifs (`^error:`, `panicked`…) et n'a rien trouvé —
+            # on ne connaissait donc toujours pas la cause. Quand on ignore la
+            # forme de l'échec, on remonte le texte, pas un extrait choisi.
+            # `%0A` est la façon dont GitHub encode un saut de ligne dans une
+            # annotation ; `%25` protège les pourcents déjà présents.
+            resume=$(tail -30 sortie-cargo.txt | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=Tests Rust (${{ matrix.os }})::${resume:-sortie vide}"
           fi
           exit $code
 

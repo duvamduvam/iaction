@@ -107,7 +107,7 @@ fn build_default_command(path: &str) -> (String, Command) {
 }
 
 /// Commande Tauri : ouvre `path` avec `command` (ex. `"kicad"`) ou, à défaut, avec
-/// l'ouvreur par défaut du système (`xdg-open`, `open`, `cmd /C start`).
+/// l'ouvreur par défaut du système (`xdg-open`, `open`, `rundll32`).
 /// Spawn détaché, ne bloque jamais l'UI et ne suit pas la fin du process lancé.
 /// Erreur lisible si le binaire est introuvable ou si le spawn échoue pour une autre raison.
 #[tauri::command]
@@ -128,11 +128,19 @@ pub fn open_external(path: String, command: Option<String>) -> Result<(), String
 mod tests {
     use super::*;
 
+    /// Programme trivialement présent sur la plateforme de test, quelle qu'elle
+    /// soit. `true` (coreutils) n'existe QUE sous Unix : l'utiliser sans garde
+    /// faisait échouer ce test sur le runner Windows dès que la CI s'est mise à
+    /// exécuter `cargo test` — un test qui ne testait plus le code, seulement le
+    /// système d'exploitation qui l'exécute.
+    #[cfg(windows)]
+    const PROGRAMME_TOUJOURS_PRESENT: &str = "cmd.exe";
+    #[cfg(not(windows))]
+    const PROGRAMME_TOUJOURS_PRESENT: &str = "true";
+
     #[test]
     fn spawn_binaire_existant_reussit() {
-        // `true` est présent sur toute machine Unix courante (coreutils) : sortie
-        // immédiate avec un code 0, sans argument requis.
-        let result = open_external(".".to_string(), Some("true".to_string()));
+        let result = open_external(".".to_string(), Some(PROGRAMME_TOUJOURS_PRESENT.to_string()));
         assert!(result.is_ok(), "échec inattendu : {result:?}");
     }
 
@@ -146,16 +154,27 @@ mod tests {
         assert!(err.contains("introuvable"), "message inattendu : {err}");
     }
 
+    /// Nom de l'ouvreur par défaut ATTENDU dans le message d'erreur, par
+    /// plateforme. Windows n'utilise plus `cmd /C start` (injection de commande,
+    /// voir `build_default_command`) mais `rundll32` : l'attente du test devait
+    /// suivre, sans quoi il échouait pour la seule raison qu'il datait.
+    #[cfg(windows)]
+    const OUVREUR_PAR_DEFAUT: &str = "rundll32";
+    #[cfg(target_os = "macos")]
+    const OUVREUR_PAR_DEFAUT: &str = "open";
+    #[cfg(not(any(windows, target_os = "macos")))]
+    const OUVREUR_PAR_DEFAUT: &str = "xdg-open";
+
     #[test]
     fn repli_xdg_open_si_command_absent() {
-        // On ne peut pas garantir que `xdg-open` existe dans l'environnement de test (CI headless),
+        // On ne peut pas garantir que l'ouvreur existe dans l'environnement de test (CI headless),
         // donc on vérifie seulement que le programme choisi est le bon, via le message d'erreur
         // en cas d'échec (NotFound) ou le succès si le binaire est présent.
         let result = open_external("/tmp/quelque-chose".to_string(), None);
         if let Err(err) = result {
             assert!(
-                err.contains("xdg-open"),
-                "le message devrait référencer xdg-open : {err}"
+                err.contains(OUVREUR_PAR_DEFAUT),
+                "le message devrait référencer {OUVREUR_PAR_DEFAUT} : {err}"
             );
         }
     }
