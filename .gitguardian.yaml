@@ -1,0 +1,22 @@
+# Configuration ggshield (détection de secrets).
+#
+# Les seules chaînes à forte entropie du dépôt sont les SOMMES DE CONTRÔLE
+# SHA-256 des binaires téléchargés à la construction de l'image `ia-runner`
+# (docker/ia-runner/Dockerfile). Ce sont des valeurs publiées par les auteurs
+# en amont, dont la présence en clair est précisément le garde-fou : sans elles
+# on installerait n'importe quel binaire. Le détecteur générique les prend pour
+# des secrets — incident du 2026-08-07 sur `duvamduvam/iaction`.
+#
+# ⚠ Ce fichier ne vaut que pour ggshield (pré-commit, CI, ligne de commande).
+# La surveillance côté plateforme GitGuardian ne le lit PAS : un incident
+# remonté par le tableau de bord doit y être marqué en faux positif à la main.
+version: 2
+
+secret:
+  # Ignore ces occurrences précises, jamais le détecteur entier : un vrai
+  # secret à forte entropie doit continuer de faire crier l'outil.
+  ignored_matches:
+    - name: SHA-256 du binaire rclone vérifié dans docker/ia-runner/Dockerfile
+      match: aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa
+    - name: SHA-256 du binaire supercronic vérifié dans docker/ia-runner/Dockerfile
+      match: 88c1b66b94c486f972fdd1a4d1f901e3e75ff04f749cddd60c5db573e3a33c6c
