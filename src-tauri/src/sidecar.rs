@@ -196,6 +196,38 @@ fn node_program(_app: &AppHandle) -> String {
     "node".to_string()
 }
 
+/// Construit la commande de lancement du sidecar : les trois flux en tuyaux
+/// (c'est par eux que passe tout le protocole), et **aucune fenêtre** sous
+/// Windows.
+///
+/// `node.exe` est un programme CONSOLE : lancé depuis une application
+/// graphique, Windows lui ouvre d'office une fenêtre de terminal, qui reste là
+/// tout le temps que vit le sidecar — c'est-à-dire toute la session. Le
+/// drapeau `CREATE_NO_WINDOW` l'en empêche. Constaté sur un vrai poste au
+/// premier lancement réussi de la 0.1.1 : le sidecar marchait enfin… avec une
+/// fenêtre noire à côté de l'application.
+///
+/// Cela ne coupe RIEN de l'observabilité : stdout et stderr sont déjà
+/// redirigés vers l'application, qui les relaie au journal (`sidecar:log`).
+/// La fenêtre n'apportait rien que du bruit.
+fn commande_sidecar(node: &str, entry: &str) -> Command {
+    let mut cmd = Command::new(node);
+    cmd.arg(entry)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// `CREATE_NO_WINDOW` (winbase.h) : le process enfant n'obtient pas de
+        /// console. Valeur codée en dur plutôt que tirée d'une dépendance
+        /// Windows entière pour une seule constante.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Émet une ligne de journal applicatif vers l'UI via l'event Tauri `app:log`
 /// (voir `docs/protocol.md`, section « Event Tauri `app:log` », et
 /// `docs/etude-logs.md` § 2.3). L'UI la relaie vers `log.append`, seul écrivain
@@ -343,12 +375,7 @@ fn supervise(app: AppHandle) {
             }
         }
 
-        let spawned = Command::new(&node)
-            .arg(&entry)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+        let spawned = commande_sidecar(&node, &entry).spawn();
 
         let mut child = match spawned {
             Ok(child) => child,
