@@ -30,6 +30,7 @@ export const LOG_SCOPES = [
   "speech",
   "router",
   "usage",
+  "mcp",
 ] as const;
 
 export type LogScope = (typeof LOG_SCOPES)[number];

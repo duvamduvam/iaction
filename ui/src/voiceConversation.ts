@@ -140,11 +140,18 @@ const CALIBRATION_MS = 1000;
 const CALIBRATION_QUANTILE = 0.2;
 
 /**
- * Audio conservé EN AMONT du déclenchement. 300 ms couvrent largement les
- * `minSpeechMs` par défaut : le segment envoyé commence donc bien avant que la
- * décision ne soit prise, et la première syllabe est intacte (piège nº 2).
+ * Audio conservé EN AMONT du déclenchement — le segment envoyé commence bien
+ * avant que la décision ne soit prise (piège nº 2).
+ *
+ * 1 s, et non les 300 ms d'origine : les DÉBUTS DE PHRASE français sont
+ * souvent des mots-outils peu accentués (« c'est quoi… », « est-ce que… »)
+ * qui restent sous le seuil d'ouverture ; la détection ne part qu'au premier
+ * mot appuyé, et 300 ms d'amont ne rattrapaient qu'une syllabe — l'utilisateur
+ * recevait « Socle et cadrage IA » pour « C'est quoi socle et cadrage IA »
+ * (cas réel). Une seconde couvre deux ou trois mots-outils. Le coût est
+ * négligeable : ~190 Ko de flottants à 48 kHz, purgés en anneau.
  */
-const PREROLL_MS = 300;
+const PREROLL_MS = 1000;
 
 /**
  * Fenêtre de garde après la reprise (fin de `thinking`/`playing`) : la queue de

@@ -31,8 +31,10 @@ import {
   readBoundedBody,
   type EngineEmitter,
 } from "./engine.js";
+import { formatChatSearchResults, sanitizeLimit, searchChatHistory } from "./chatHistory.js";
 import * as journal from "./journal.js";
 import { getEmbeddingsConfig } from "./router.js";
+import { projectDir } from "./appPaths.js";
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -72,7 +74,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 /** Dossier de l'index d'un projet : `<cwd>/.iaction/connaissances-index/`. */
 function indexDir(cwd: string): string {
-  return path.join(path.resolve(cwd), ".iaction", "connaissances-index");
+  return projectDir(cwd, "connaissances-index");
 }
 
 /** Écriture atomique (même patron que neutralAgent.ts::atomicWriteFile). */
@@ -246,7 +248,7 @@ async function collectSources(cwd: string, pinned: string[]): Promise<SourceFile
   for (const p of pinned) {
     candidates.push(path.resolve(cwdAbs, p));
   }
-  candidates.push(...(await listFilesIn(path.join(cwdAbs, ".iaction", "connaissances"))));
+  candidates.push(...(await listFilesIn(projectDir(cwdAbs, "connaissances"))));
   candidates.push(path.join(cwdAbs, "CLAUDE.md"));
   candidates.push(
     ...(await listFilesIn(path.join(cwdAbs, ".claude", "memory"))).filter((p) => p.endsWith(".md")),
@@ -506,23 +508,45 @@ export function formatSearchResults(results: SearchResult[]): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Construit le serveur MCP `iaction` (outil `search_knowledge`) pour un
- * projet — `null` si l'index n'existe pas (outil activé seulement quand
- * l'index existe), en mode faux SDK (tests : le SDK réel ne doit jamais être
- * importé, voir claude.ts::resolveQueryFn) ou si le SDK est indisponible
- * (best effort, log stderr). Import dynamique : le SDK n'est chargé qu'au
- * besoin, comme dans claude.ts.
+ * Construit le serveur MCP `iaction` d'un projet. Deux outils, indépendants :
+ *
+ * - `search_knowledge` — recherche dans l'index d'embeddings du projet, donc
+ *   présent SEULEMENT si cet index existe (spec R5 §3) ;
+ * - `search_chat` — recherche dans l'historique de l'onglet « Chat », toujours
+ *   présent : il ne dépend d'aucun index, et c'est le seul pont vers des
+ *   conversations qui vivent hors du projet (voir chatHistory.ts).
+ *
+ * `null` en mode faux SDK (tests : le SDK réel ne doit jamais être importé,
+ * voir claude.ts::resolveQueryFn) ou si le SDK est indisponible (best effort,
+ * journal). Import dynamique : le SDK n'est chargé qu'au besoin, comme dans
+ * claude.ts.
  */
 export async function buildKnowledgeMcpServer(cwd: string): Promise<unknown | null> {
   if (process.env.IACTION_FAKE_CLAUDE === "1") {
     return null;
   }
-  if (!(await knowledgeIndexExists(cwd))) {
-    return null;
-  }
+  const withKnowledge = await knowledgeIndexExists(cwd);
   try {
     const sdk = await import("@anthropic-ai/claude-agent-sdk");
     const { z } = await import("zod/v4");
+    const chatTool = sdk.tool(
+      "search_chat",
+      "Recherche dans l'historique des conversations de l'onglet « Chat » de l'app (hors projet) — args: query, limit?",
+      {
+        query: z.string().describe("Texte cherché dans les messages (insensible à la casse et aux accents)"),
+        limit: z.number().optional().describe("Nombre de conversations rendues (défaut 5, max 20)"),
+      },
+      async (args) => {
+        const outcome = await searchChatHistory(args.query, sanitizeLimit(args.limit));
+        if (!outcome.ok) {
+          return { content: [{ type: "text" as const, text: outcome.message }], isError: true };
+        }
+        return { content: [{ type: "text" as const, text: formatChatSearchResults(outcome) }] };
+      },
+    );
+    if (!withKnowledge) {
+      return sdk.createSdkMcpServer({ name: "iaction", tools: [chatTool] });
+    }
     const searchTool = sdk.tool(
       "search_knowledge",
       "Recherche dans les connaissances du projet (index local d'embeddings) — args: query, topK?",
@@ -538,11 +562,11 @@ export async function buildKnowledgeMcpServer(cwd: string): Promise<unknown | nu
         return { content: [{ type: "text" as const, text: formatSearchResults(outcome.results) }] };
       },
     );
-    return sdk.createSdkMcpServer({ name: "iaction", tools: [searchTool] });
+    return sdk.createSdkMcpServer({ name: "iaction", tools: [chatTool, searchTool] });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    // `warn` : l'agent tourne sans l'outil de recherche documentaire.
-    journal.warn("knowledge", "serveur MCP search_knowledge indisponible", {
+    // `warn` : l'agent tourne sans les outils de recherche (connaissances, Chat).
+    journal.warn("knowledge", "serveur MCP iaction indisponible", {
       fields: { erreur: message },
     });
     return null;

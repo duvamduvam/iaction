@@ -35,7 +35,7 @@ Base d'inspiration : orchestrateur Pays de la Loire (http://localhost:8002/agent
 5. Ouverture de fichiers / registre d'apps par extension
 6. Page de perf / observabilité (d'où viennent les métriques)
 7. Éditeur no-code n8n-like (agents/skills)
-8. Réutilisation de l'existant (orchestrateur d'un projet antérieur, Agent SDK, briques déjà écrites)
+8. Réutilisation de l'existant (orchestrateur maison antérieur, Agent SDK, briques déjà écrites)
 9. Risques, inconnues, build vs buy
 
 ---
@@ -99,7 +99,7 @@ solo = énorme. À réconcilier à l'axe 8 (build vs réutiliser un agent exista
 ### Axe 4 — Projet & config par répertoire (tranché 2026-07-18)
 
 - **Un projet = un répertoire**, config dans un dossier propre **`.iaction/`**
-  (nom de dossier choisi pour le projet — versionnable dans git, suit le projet).
+  (nom de dossier choisi par Dadou — versionnable dans git, suit le projet).
 - Contenu cible (v2 pour l'essentiel) : doc IA, skills, RAG, fournisseurs
   préférés, registre d'apps par extension (surcharge locale du registre global).
 - **Interop Claude : lecture + synchronisation** — `.iaction/` est la source de
@@ -150,10 +150,10 @@ solo = énorme. À réconcilier à l'axe 8 (build vs réutiliser un agent exista
 
 ### Axe 8 — Réutilisation de l'existant (tranché 2026-07-18)
 
-- **Orchestrateur d'un projet antérieur = inspiration + banc d'essai, AUCUN code repris.**
-  Il servira de premier projet-test dans l'app.
-- Exploration du code faite (2026-07-18, dépôt privé antérieur) —
-  leçons à réutiliser comme **patterns** :
+- **Un orchestrateur maison antérieur = inspiration + banc d'essai, AUCUN code
+  repris.** Il sert de premier projet-test dans l'app.
+- Exploration de son code faite (2026-07-18) — leçons à réutiliser comme
+  **patterns** :
   - **Format d'agents** : `SKILL.md` frontmatter YAML (name, description, type,
     domain, allowed-tools, trigger) + corps Markdown = prompt. Scanner ~50
     lignes. Modèle direct pour `.iaction/agents/`.
@@ -166,9 +166,9 @@ solo = énorme. À réconcilier à l'axe 8 (build vs réutiliser un agent exista
     du modèle. Transposable au moteur neutre.
 - À NE PAS porter : tout le cœur d'exécution (wrapper subprocess `claude -p`,
   resume OAuth, lock CLI) — l'opposé du moteur neutre voulu ; l'endpoint OAuth
-  de conso non documenté (dette exclue à l'axe 6) ; la logique métier du projet d'origine.
+  de conso non documenté (dette exclue à l'axe 6) ; sa logique métier.
 - **Principe d'isolation (ajouté 2026-07-18)** : **séparation technique TOTALE
-  avec les autres applications** (les autres projets du poste). Aucun import de code,
+  avec les autres applications** du poste. Aucun import de code,
   aucun lien symbolique, aucune base/service partagé, aucun appel direct entre
   apps. Les SEULS ponts autorisés :
   1. **mémoire** (fichiers de mémoire des sessions IA) ;
@@ -322,6 +322,18 @@ solo = énorme. À réconcilier à l'axe 8 (build vs réutiliser un agent exista
   🔄 L1→L5 démarrés (2026-07-31) : socle sidecar + `errorMessage`, capture
   UI/Rust, panneau « Journal » par criticité dans Système, tâche hebdomadaire
   `qualite-iaction` qui propose des tickets (rapport seul, décision humaine).
+
+- Lot 16 — **Exécution distante (OVH) & multi-poste Windows**.
+  → **Étude validée au grill le 2026-08-05 : `docs/etude-remote.md`**
+  (conteneur permanent `ia-runner` sur le dédié OVH — celui de Nextcloud —,
+  synchro Nextcloud headless des projets en liste blanche, zones d'écriture
+  disjointes, 4 déclencheurs : cron / « lancer puis éteindre » par fichier de
+  demande / indexation RAG / webhooks + conditions, jeton d'abonnement +
+  `.env` 600, ntfy auto-hébergé + heartbeat, phasage D1→D6 avec Windows en
+  D6 : parité sauf planification locale, installeur). **Pas de mise en ligne
+  de l'app** : aucune API réseau applicative ; amendement de doctrine
+  « aucun envoi hors de l'infra personnelle ». L'app Android reste hors
+  périmètre (regrill dédié le jour venu).
 
 **Pistes flexibilité (proposées 2026-07-19, à valider au grill)**
 

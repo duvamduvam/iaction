@@ -358,6 +358,14 @@ export interface RequestMeta {
   routeTier?: string;
   /** R3 — vrai quand le tour a été débordé (abonnement saturé → cible payante). */
   routeDebord?: boolean;
+  /**
+   * S2 — projet déclaré auquel imputer le tour (encart « Usage par projet » de
+   * Supervision). Posé par la page Projets ; le Chat n'en pose pas — il est
+   * agrégé comme un projet à part entière depuis `source: "chat"`.
+   */
+  projectId?: string;
+  /** S2 — répertoire du run, pour les tours sans `projectId` (étapes d'orchestration). */
+  projectPath?: string;
 }
 
 /* ---------- Helpers typés R1 : routeur heuristique (`router.*`) ---------- */
@@ -658,6 +666,12 @@ export interface ClaudeStartParams {
   chatOnly?: boolean;
   /** Chat pur seulement (ignoré sinon) : exception au vidage — `tools: ["WebSearch", "WebFetch"]`. */
   webSearch?: boolean;
+  /** Un humain peut répondre en direct : arme l'outil de question interactive
+   *  `mcp__studio__ask_user` (modale à choix cliquables). Réservé aux tours
+   *  lancés depuis une page ouverte — jamais pour l'orchestration headless. */
+  interactive?: boolean;
+  /** T-003 — allowlist d'outils de l'agent (`null`/absent = palette complète). Hors mode `chatOnly`. */
+  tools?: string[] | null;
   /** Pièces jointes du `prompt` (voir docs/protocol.md) — omis si vide/absent. */
   attachments?: ChatAttachment[];
   /** Métadonnées de supervision (voir docs/protocol.md § S1) — omis si absent. */
@@ -689,8 +703,29 @@ export interface ClaudeDoneData {
 }
 
 /** Callbacks appelés au fil de l'eau, un par `kind` de chunk (union discriminée côté protocole). */
+/** État d'un serveur MCP au démarrage du tour (chunk `init`, voir docs/protocol.md). */
+export interface ClaudeInitMcpServer {
+  name: string;
+  /** Statut rapporté par le SDK : `connected`, `failed`, `needs_auth`… */
+  status: string;
+  /** Outils exposés, noms courts (sans le préfixe `mcp__<serveur>__`). */
+  tools: string[];
+}
+
 export interface ClaudeStartCallbacks {
   onInit?: (sessionId: string, model: string) => void;
+  /**
+   * État RÉEL des serveurs MCP au démarrage du tour, plus le coût en outils
+   * (MCP vs intégrés) et la latence de démarrage. Émis avec le même chunk
+   * `init` : un sidecar antérieur ne renvoie rien, le callback n'est alors
+   * jamais appelé.
+   */
+  onMcpInit?: (info: {
+    servers: ClaudeInitMcpServer[];
+    mcpToolCount: number;
+    builtinToolCount: number;
+    startupMs: number | null;
+  }) => void;
   onText?: (delta: string) => void;
   onThinking?: (delta: string) => void;
   onToolUse?: (toolUseId: string, toolName: string, toolInput: unknown) => void;
@@ -700,6 +735,8 @@ export interface ClaudeStartCallbacks {
   onBackgroundTasks?: (count: number, descriptions: string[]) => void;
   /** Tour du modèle terminé mais le sidecar attend les rapports de `count` tâche(s) de fond. */
   onBackgroundWait?: (count: number, descriptions: string[]) => void;
+  /** Compaction de contexte terminée (« /compact » ou compaction auto) — `preTokens` = taille du contexte avant, si connue. */
+  onCompact?: (trigger: string, preTokens: number | null) => void;
 }
 
 function str(data: Record<string, unknown>, key: string, fallback = ""): string {
@@ -710,7 +747,27 @@ function str(data: Record<string, unknown>, key: string, fallback = ""): string 
 type ClaudeChunkHandler = (data: Record<string, unknown>, callbacks: ClaudeStartCallbacks) => void;
 
 const CLAUDE_CHUNK_HANDLERS: Record<string, ClaudeChunkHandler> = {
-  init: (data, callbacks) => callbacks.onInit?.(str(data, "sessionId"), str(data, "model")),
+  init: (data, callbacks) => {
+    callbacks.onInit?.(str(data, "sessionId"), str(data, "model"));
+    if (!Array.isArray(data.mcpServers)) return;
+    const servers: ClaudeInitMcpServer[] = [];
+    for (const raw of data.mcpServers) {
+      if (typeof raw !== "object" || raw === null) continue;
+      const entry = raw as Record<string, unknown>;
+      if (typeof entry.name !== "string" || !entry.name) continue;
+      servers.push({
+        name: entry.name,
+        status: typeof entry.status === "string" ? entry.status : "unknown",
+        tools: Array.isArray(entry.tools) ? entry.tools.filter((t): t is string => typeof t === "string") : [],
+      });
+    }
+    callbacks.onMcpInit?.({
+      servers,
+      mcpToolCount: typeof data.mcpToolCount === "number" ? data.mcpToolCount : 0,
+      builtinToolCount: typeof data.builtinToolCount === "number" ? data.builtinToolCount : 0,
+      startupMs: typeof data.startupMs === "number" ? data.startupMs : null,
+    });
+  },
   text: (data, callbacks) => {
     const delta = str(data, "delta");
     if (delta) callbacks.onText?.(delta);
@@ -735,6 +792,8 @@ const CLAUDE_CHUNK_HANDLERS: Record<string, ClaudeChunkHandler> = {
       typeof data.count === "number" ? data.count : 0,
       Array.isArray(data.descriptions) ? data.descriptions.filter((d): d is string => typeof d === "string") : [],
     ),
+  compact: (data, callbacks) =>
+    callbacks.onCompact?.(str(data, "trigger", "manual"), typeof data.preTokens === "number" ? data.preTokens : null),
 };
 
 /**
@@ -755,6 +814,8 @@ export function claudeStart(params: ClaudeStartParams, callbacks: ClaudeStartCal
       systemPrompt: params.systemPrompt ?? null,
       chatOnly: params.chatOnly === true,
       ...(params.webSearch === true ? { webSearch: true } : {}),
+      ...(params.interactive === true ? { interactive: true } : {}),
+      ...(params.tools ? { tools: params.tools } : {}),
       ...(params.attachments && params.attachments.length > 0 ? { attachments: params.attachments } : {}),
       ...(params.meta ? { meta: params.meta } : {}),
     },
@@ -815,6 +876,31 @@ export async function claudeAbort(targetId: string): Promise<boolean> {
   return data.aborted === true;
 }
 
+/**
+ * S3 — glisse une demande dans le tour EN COURS (`targetId`) : le moteur
+ * l'injecte au prochain retour d'outil, sans couper le tour ni en ouvrir un
+ * nouveau. `false` si le tour n'existe plus ou a été interrompu — l'appelant
+ * doit alors se rabattre sur la file d'attente.
+ */
+export async function claudePush(targetId: string, content: string): Promise<boolean> {
+  const { done } = request("claude.push", { targetId, content });
+  const data = await done;
+  return data.pushed === true;
+}
+
+/**
+ * Dépose (ou rafraîchit) le guide d'intégration `iaction.md` dans
+ * `.iaction/connaissances/` du projet. Appelé à la SÉLECTION du projet : sans
+ * ça, le guide n'apparaissait qu'au premier tour, après le scan des
+ * connaissances par l'UI — donc ni listé ni injecté de toute la session.
+ * Best effort : un échec ne bloque rien (le guide est un confort).
+ */
+export async function projectEnsureDoc(cwd: string): Promise<boolean> {
+  const { done } = request("project.ensureDoc", { cwd });
+  const data = await done;
+  return data.ensured === true;
+}
+
 /** Rend la main pendant l'attente des rapports de tâches de fond (chunk
     `background_wait`) : clôt le tour proprement — le résultat déjà connu est
     livré via le `done` du tour — sans le marquer interrompu. `false` si le
@@ -845,6 +931,8 @@ export interface NeutralStartParams {
   messages: ChatMessage[];
   permissionMode?: NeutralPermissionMode;
   maxTurns?: number;
+  /** T-003 — allowlist d'outils de l'agent (`null`/absent = palette complète). */
+  tools?: string[] | null;
   /** Métadonnées de supervision (voir docs/protocol.md § S1) — omis si absent. */
   meta?: RequestMeta;
 }
@@ -895,6 +983,7 @@ export function neutralStart(params: NeutralStartParams, callbacks: NeutralStart
       messages: params.messages,
       permissionMode: params.permissionMode ?? "default",
       maxTurns: params.maxTurns ?? null,
+      ...(params.tools ? { tools: params.tools } : {}),
       ...(params.meta ? { meta: params.meta } : {}),
     },
     {

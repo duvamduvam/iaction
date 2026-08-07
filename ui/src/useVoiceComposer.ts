@@ -14,6 +14,18 @@
  * un moyen de lire la dernière réponse de l'assistant (`lastReplyText`). Le
  * reste — bulles, tours, sessions, moteurs — ne le regarde pas.
  *
+ * ── Envoi par mot-clé (« envoie ») ──────────────────────────────────────
+ * Deux façons de déclencher l'envoi à la voix (voir sendKeyword.ts) :
+ * - Mode conversation, réglage `sendMode: "keyword"` : chaque segment
+ *   transcrit est AJOUTÉ AU BROUILLON du composeur au lieu de partir ; quand
+ *   un segment se termine par le mot-clé, tout le brouillon accumulé (dicté
+ *   ET tapé au clavier, récupéré via `takeDraft`) part d'un coup. Le mode
+ *   « silence » — chaque phrase close par un silence part immédiatement —
+ *   reste le défaut.
+ * - Dictée ponctuelle (bouton micro) : TOUJOURS active, réglage ou pas — une
+ *   transcription qui se termine par le mot-clé envoie directement le
+ *   brouillon + le texte dicté, au lieu de tout laisser en brouillon.
+ *
  * ── Une seule voix à la fois dans toute l'application ───────────────────
  * `voiceConversation.ts` et `audioCapture.ts` sont des singletons au niveau
  * module (un seul flux micro). Les pages, elles, restent MONTÉES en
@@ -35,6 +47,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { startRecording, stopRecording } from "./audioCapture";
 import { startPlaybackQueue, stopPlayback } from "./audioPlayback";
+import { DEFAULT_SEND_KEYWORD, matchSendKeyword } from "./sendKeyword";
 import {
   formatSpeechProgress,
   speechSynthesize,
@@ -61,6 +74,8 @@ export const DEFAULT_CONVERSATION_SETTINGS: ConversationSettings = {
   silenceMs: 900,
   maxUtteranceMs: 30000,
   autoPlayReply: true,
+  sendMode: "silence",
+  sendKeyword: DEFAULT_SEND_KEYWORD,
 };
 
 /** Libellés de l'indicateur d'état — lisibles en permanence pendant le mode conversation. */
@@ -373,6 +388,12 @@ export interface UseVoiceComposerOptions {
   notSentNotice: string;
   /** Ajoute le texte dicté au brouillon du composeur (jamais un remplacement). */
   appendToDraft: (text: string) => void;
+  /**
+   * Rend le brouillon courant du composeur et le VIDE. Sert à l'envoi par
+   * mot-clé : ce qui part est exactement ce que l'utilisateur voit dans le
+   * composeur (dicté ET tapé).
+   */
+  takeDraft: () => string;
   /** Rend le curseur au composeur après une dictée. */
   focusComposer?: () => void;
 }
@@ -612,7 +633,10 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
       await conversationSleep(CONVERSATION_COMMIT_DELAY_MS);
       if (optionsRef.current.turnCount() === countBefore) {
         // Rien n'est parti (fournisseur, modèle ou projet manquant) : on le
-        // dit, et surtout on relâche l'écoute.
+        // dit, on REND le texte au brouillon — en mode mot-clé il a été pris
+        // par `takeDraft`, le perdre serait un échec muet — et surtout on
+        // relâche l'écoute.
+        optionsRef.current.appendToDraft(text);
         showConversationNotice(optionsRef.current.notSentNotice);
         abandon();
         return;
@@ -685,6 +709,27 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
             conversationLastSpeechRef.current = Date.now();
             const trimmed = text.trim();
             if (!trimmed || !conversationOnRef.current) return;
+            // Réglage relu À CHAQUE segment (jamais la valeur capturée au
+            // démarrage) : un changement de mode en cours de session est pris
+            // en compte immédiatement.
+            if (optionsRef.current.conversation.sendMode === "keyword") {
+              const { body, send } = matchSendKeyword(trimmed, optionsRef.current.conversation.sendKeyword);
+              if (!send) {
+                // Le segment rejoint le brouillon, l'écoute continue telle
+                // quelle — on ne touche pas à l'activité externe.
+                optionsRef.current.appendToDraft(body);
+                return;
+              }
+              // Mot-clé : tout le brouillon accumulé part (dicté ET tapé),
+              // suivi de l'éventuel reste du segment.
+              const full = [optionsRef.current.takeDraft().trim(), body].join(" ").trim();
+              if (!full) {
+                showConversationNotice("Rien à envoyer : le brouillon est vide.");
+                return;
+              }
+              void runConversationTurn(full);
+              return;
+            }
             void runConversationTurn(trimmed);
           },
           onNotice: (message) => showConversationNotice(message),
@@ -778,7 +823,35 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
       const audioBase64 = await stopRecording();
       const text = (await speechTranscribe(audioBase64, (p) => setMicProgress(formatSpeechProgress(p)))).trim();
       if (text) {
-        optionsRef.current.appendToDraft(text);
+        // Mot-clé « envoie » en fin de dictée (voir sendKeyword.ts) : toujours
+        // actif au micro, réglage ou pas. Déclenché, il envoie brouillon + texte
+        // dicté SANS attendre le tour — le bouton micro revient au repos tout de
+        // suite, l'envoi vit sa vie comme un clic sur Envoyer.
+        const { body, send } = matchSendKeyword(text, optionsRef.current.conversation.sendKeyword);
+        if (send) {
+          const full = [optionsRef.current.takeDraft().trim(), body].join(" ").trim();
+          if (full) {
+            // Si rien ne part (fournisseur ou projet manquant), le texte est
+            // REPOSÉ dans le brouillon : une dictée ne doit jamais se perdre.
+            const countBefore = optionsRef.current.turnCount();
+            void optionsRef.current
+              .send(full)
+              .catch(() => {
+                // La page inscrit déjà l'erreur dans le message concerné.
+              })
+              .then(async () => {
+                await conversationSleep(CONVERSATION_COMMIT_DELAY_MS);
+                if (optionsRef.current.turnCount() === countBefore) {
+                  optionsRef.current.appendToDraft(full);
+                  setMicError(optionsRef.current.notSentNotice);
+                }
+              });
+          } else {
+            setMicError("Rien à envoyer : dites votre message avant le mot-clé.");
+          }
+        } else {
+          optionsRef.current.appendToDraft(text);
+        }
       } else {
         setMicError("Aucun texte reconnu — réessayez en parlant plus près du micro.");
       }

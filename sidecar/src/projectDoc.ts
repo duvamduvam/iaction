@@ -23,7 +23,9 @@
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
+import type { EngineEmitter } from "./engine.js";
 import * as journal from "./journal.js";
+import { projectDir } from "./appPaths.js";
 
 /** Première ligne du fichier : le marqueur qui autorise le rafraîchissement. */
 const PROJECT_DOC_MARKER = "<!-- généré par IAction — NE PAS ÉDITER : mis à jour automatiquement -->";
@@ -44,15 +46,28 @@ capacité — sans jamais avoir besoin de lire le code source d'iaction.
 - \`CLAUDE.md\` — instructions projet du moteur Claude (chargées à chaque tour).
 - \`.claude/\` — réglages locaux (\`settings.local.json\`), skills du projet
   (\`.claude/skills/\`), mémoire agent (\`.claude/memory/*.md\`). Les skills et
-  réglages GLOBAUX (\`~/.claude/\`) ne sont PAS hérités (isolation par projet).
+  commandes GLOBAUX du poste (\`~/.claude/skills\`, \`~/.claude/commands\`) sont
+  hérités par tous les projets (un skill transverse n'a pas à être recopié) —
+  contrepartie : les réglages utilisateur globaux (\`~/.claude/settings.json\`)
+  s'appliquent aussi aux tours de l'app.
 - \`.mcp.json\` — serveurs MCP du projet (stdio ou http), chargés par le moteur
-  projet. Jamais en mode « chat pur » (page Chat, aucun outil).
+  projet. Jamais en mode « chat pur » (page Chat, aucun outil). Aucun secret
+  en clair : toute chaîne \`\${SECRET:nom}\` (dans \`env\`, \`headers\`, \`args\`,
+  \`url\`…) est résolue au lancement du tour depuis le coffre local
+  \`~/.config/net.duvam.iaction/mcp-secrets.json\` (mode 600, hors projet,
+  hors git). Un secret introuvable écarte le serveur concerné — le tour
+  continue sans lui, avec un avertissement au journal (scope \`mcp\`).
 - \`.iaction/\` — dossier d'IAction dans le projet :
   - \`project.json\` : identité du projet dans l'app ;
   - \`connaissances/\` : documents sources du RAG local (« Automatiques ») —
     fichiers texte/markdown, les liens symboliques sont suivis, > 1 Mo ignoré ;
   - \`connaissances-index/\` : index d'embeddings GÉNÉRÉ (chunks.jsonl +
-    meta.json) — ne pas éditer, ne pas committer (gitignoré).
+    meta.json) — ne pas éditer, ne pas committer (gitignoré) ;
+  - \`mcp.local.json\` : préférences LOCALES des serveurs MCP (serveurs
+    éteints, allowlist d'outils par serveur) — écrit par le panneau MCP de
+    l'app, à ne pas versionner ;
+  - \`mcp.runtime.json\` : dernier état CONSTATÉ des serveurs MCP (statut +
+    outils réellement exposés au dernier tour) — GÉNÉRÉ, ne pas éditer.
 
 ## Ce qu'IAction expose aux agents du projet
 
@@ -62,6 +77,23 @@ capacité — sans jamais avoir besoin de lire le code source d'iaction.
   documents épinglés dans le panneau Connaissances, \`.iaction/connaissances/\`,
   \`CLAUDE.md\`, \`.claude/memory/*.md\`. Embeddings locaux via Ollama
   (\`nomic-embed-text\` par défaut). Indexation : panneau Connaissances.
+- **Questions à l'utilisateur** : dans un tour lancé depuis la page Projets
+  (humain devant l'écran), l'outil MCP \`mcp__studio__ask_user\` (serveur
+  in-process \`studio\`) pose 1 à 4 questions à choix, affichées comme un
+  formulaire cliquable, et **attend** la réponse : elle revient comme résultat
+  de l'outil et le tour continue. À utiliser dès qu'un arbitrage de
+  l'utilisateur conditionne la suite, au lieu de terminer son tour sur une
+  question en texte que l'utilisateur devrait recopier. Absent des tours
+  headless (orchestration, tâches planifiées) : là, personne ne répondrait —
+  poser la question en texte, ou décider en annonçant l'hypothèse retenue.
+- **Outils MCP du projet** : la fiche \`connaissances/iaction-mcp.md\` est
+  régénérée à chaque tour avec les serveurs et outils RÉELLEMENT exposés
+  (statut constaté, pas déclaration). Elle porte la règle **source avant
+  mémoire** : quand un outil MCP sert la donnée demandée (mails, base de
+  pilotage, dossier distant), l'interroger AVANT de répondre — y compris
+  quand la mémoire ou le RAG semblent déjà contenir la réponse (un index est
+  une copie, il périme). Si l'outil est indisponible, le dire au lieu de
+  répondre de mémoire.
 - **Moteurs** : Claude (abonnement ou clé API) et moteur neutre
   (Ollama local / OpenRouter), avec routage automatique possible.
 - **Orchestration** : enchaînements d'étapes multi-agents (page Orchestration),
@@ -76,6 +108,11 @@ capacité — sans jamais avoir besoin de lire le code source d'iaction.
 
 - **Un outil autonome** (serveur, script, API) → le déclarer dans
   \`.mcp.json\` ; préférer un outil générique par-projet plutôt que codé en dur.
+  Le panneau MCP de l'app propose un catalogue (mails IMAP, Airtable, serveur
+  HTTP distant) qui écrit l'entrée et range le jeton au coffre. Y sont aussi
+  affichés, par serveur : statut réel, outils exposés, interrupteur, allowlist
+  d'outils. Préférer un accès MCP interrogeable à la
+  recopie d'une source dans \`connaissances/\` : la copie périme, l'outil non.
 - **De la connaissance** (docs de référence, notes) → déposer ou symlinker des
   \`.md\` dans \`.iaction/connaissances/\` puis relancer l'indexation.
 - **Un savoir-faire agent** (workflow outillé, checklist) → un skill dans
@@ -166,7 +203,7 @@ capacité — sans jamais avoir besoin de lire le code source d'iaction.
  */
 export async function ensureProjectDoc(cwd: string): Promise<void> {
   try {
-    const iactionDir = path.join(path.resolve(cwd), ".iaction");
+    const iactionDir = projectDir(cwd);
     const stat = await fsp.stat(iactionDir).catch(() => null);
     if (!stat?.isDirectory()) {
       return; // pas un projet IAction : on ne crée rien.
@@ -191,4 +228,31 @@ export async function ensureProjectDoc(cwd: string): Promise<void> {
       fields: { erreur: message },
     });
   }
+}
+
+/**
+ * Méthode `project.ensureDoc` — dépôt EXPLICITE du guide, appelé par l'UI à la
+ * sélection d'un projet. Volontairement séparé de `knowledge.status` : celui-ci
+ * est une LECTURE, et y glisser une écriture faisait apparaître une source
+ * pendant sa propre mesure (index instantanément `stale`, comptes faussés).
+ *
+ * Sans ce dépôt anticipé, le guide n'était écrit qu'au premier tour — donc
+ * après le scan de `.iaction/connaissances/` par l'UI : ni affiché dans le
+ * panneau Connaissances, ni injecté, pour toute la session (2026-08-03).
+ *
+ * Toujours `done` (jamais d'erreur protocolaire) : c'est un confort, pas une
+ * dépendance.
+ */
+export async function handleProjectEnsureDoc(
+  id: string,
+  params: Record<string, unknown>,
+  emitter: EngineEmitter,
+): Promise<void> {
+  const cwd = params.cwd;
+  if (typeof cwd !== "string" || cwd.length === 0) {
+    emitter.error(id, "params.cwd manquant ou invalide");
+    return;
+  }
+  await ensureProjectDoc(cwd);
+  emitter.done(id, { ensured: true });
 }

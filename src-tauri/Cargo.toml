@@ -2,7 +2,7 @@
 name = "iaction"
 version = "0.1.0"
 description = "IAction — desktop multi-fournisseur pour le développement assisté par IA"
-authors = ["duvamduvam"]
+authors = ["Dadou"]
 edition = "2021"
 
 [lib]

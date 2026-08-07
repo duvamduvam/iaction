@@ -224,7 +224,10 @@ par `sessionId` : le SDK recharge tout le contexte via `resume`).
   "model":"claude-sonnet-5|null",
   "permissionMode":"default|acceptEdits|plan",
   "systemPrompt":null,
-  "chatOnly":false}}
+  "chatOnly":false,
+  "interactive":false,
+  "tools":null,
+  "mcp":true}}
 ```
 
 - `chatOnly: true` = **mode chat pur** (utilisé par l'onglet Chat pour le
@@ -238,6 +241,36 @@ par `sessionId` : le SDK recharge tout le contexte via `resume`).
   arrivent par le flux normal ; convention UI (onglet Chat) : accord
   automatique pour ces deux outils quand l'option est active, refus
   automatique de tout le reste (inchangé).
+- `tools` (hors chat pur) : allowlist d'outils du tour — sert le champ `tools`
+  du manifeste d'agent (§ « Forme d'un agent »), transmis par l'orchestrateur
+  et par la page Projets. `null`/absent = palette complète du SDK. Sinon, la
+  liste devient la base d'outils INTÉGRÉS exposée au modèle (`options.tools`
+  du SDK) : ce qui n'y figure pas n'existe pas pour lui. Ce n'est
+  volontairement PAS `allowedTools` (qui se contente d'auto-approuver, donc
+  n'aurait rien restreint en `bypassPermissions` — le mode obligatoire des
+  tâches planifiées).
+  Les noms `mcp__*` sont ignorés dans cette liste : les outils MCP entrent par
+  `mcpServers` et se gouvernent par `mcp` (ci-dessous) plus l'allowlist locale
+  par serveur (§ MCP) — `mcp__studio__ask_user` et `mcp__iaction__*` restent
+  donc disponibles quelle que soit l'allowlist déclarée.
+- `mcp: false` : ce tour n'hérite PAS des serveurs MCP du projet (§ MCP plus
+  bas). Sert le champ `mcp` du manifeste d'agent, transmis par l'orchestrateur.
+  Absent ou `true` = comportement historique (hérite).
+- `interactive: true` (ignoré en chat pur) : un humain est devant l'écran et
+  peut répondre en direct → l'outil de question `mcp__studio__ask_user` est
+  exposé (§ Questions interactives plus bas). Armé par la page Projets
+  seulement ; jamais par l'orchestration ni les tâches planifiées.
+
+**Sources de réglages** (hors chat pur) : `settingSources: ['user', 'project',
+'local']`. Un tour de projet hérite donc des skills et commandes **globaux du
+poste** (`~/.claude/skills`, `~/.claude/commands` — grill-me, maison…) en plus
+de ceux du projet (`<cwd>/.claude`) et du `CLAUDE.md` du projet. Décision du
+2026-08-03, qui remplace l'isolation stricte d'origine (`['project','local']`,
+justifiée alors par l'étanchéité entre projets) : un skill transverse n'a pas à
+être recopié dans chaque projet. **Contrepartie assumée** : les réglages
+utilisateur globaux (`~/.claude/settings.json` et `settings.local.json` —
+`permissions.allow`, `effortLevel`, et les hooks s'il y en avait) s'appliquent
+désormais aussi aux tours de l'app.
 
 **Outil `AskUserQuestion` désactivé** : retiré via `disallowedTools` (hors
 chat pur, où aucun outil n'est exposé). Son formulaire interactif ne peut être
@@ -245,24 +278,81 @@ ni rendu ni répondu par l'API programmatique du SDK v0.3.x — `canUseTool` ne
 sait qu'autoriser/refuser (jamais fournir de réponse) et le dialogue
 `onUserDialog` n'est jamais émis par le CLI bundlé. Laissé actif, l'outil
 s'affichait en bloc brut puis renvoyait un résultat vide, et le modèle
-réexpliquait sa question en texte. Retiré, le modèle pose directement ses
-questions en texte dans la conversation — l'utilisateur répond dans le
-composeur (ce qui, lui, fonctionne).
+réexpliquait sa question en texte. Il est **remplacé** par notre propre outil
+(§ Questions interactives ci-dessous), dont on maîtrise les deux bouts.
+
+**Questions interactives** (`interactive: true`, hors chat pur) : le sidecar
+expose un serveur MCP in-process `studio` (voir `sidecar/src/askUser.ts`),
+outil `mcp__studio__ask_user`, qui pose 1 à 4 questions à choix et **attend**
+la réponse humaine — celle-ci devient le résultat de l'outil, donc le tour
+continue sans que l'utilisateur ait à recopier quoi que ce soit.
+
+- Transport : le handler de l'outil émet un chunk `permission_request`
+  (`toolName: "mcp__studio__ask_user"`, `toolInput: {questions:[…]}`, même
+  charge utile que l'`AskUserQuestion` intégré) et attend le
+  `claude.permission` correspondant : `allow` + `message` = réponse rendue au
+  modèle, `deny` (ou message vide) = « question ignorée », l'agent poursuit en
+  l'annonçant. Aucun nouveau chunk ni nouvelle méthode : côté UI une question
+  EST une modale bloquante de plus (rendu à choix cliquables dans
+  `AgentPage`).
+- L'outil lui-même n'est **jamais** soumis à `canUseTool` (auto-autorisé) :
+  la modale de question est déjà l'interaction humaine.
+- **La réponse peut ne correspondre à AUCUN choix proposé** : chaque question
+  porte une échappatoire « Autre… » (champ libre) dans la modale, en plus du
+  complément libre global. En choix unique elle remplace la suggestion, en
+  choix multiple elle s'ajoute aux cases cochées (même séparateur ` ; `). Un
+  agent ne doit donc jamais présumer que la réponse reçue est l'un de ses
+  `options[].label`.
+- `interactive` n'est armé que par une page ouverte devant l'utilisateur
+  (Projets). Les tours headless (orchestration, tâches planifiées) ne
+  l'envoient pas : sans humain, la question bloquerait le tour. Le modèle y
+  pose alors ses questions en texte, comme avant.
+- Un tour interactif relève `MCP_TOOL_TIMEOUT` (10 min, sauf si le poste l'a
+  déjà fixé) : le temps de réflexion de l'humain ne doit pas être coupé par le
+  délai d'exécution des outils MCP du CLI.
+- Toute question encore en attente à l'interruption ou à la fin du tour est
+  close comme « ignorée » — jamais de handler suspendu.
 
 **MCP** : avant de lancer le tour, `claude.start` lit `<cwd>/.mcp.json`
 (convention Claude Code : `{"mcpServers": {"<nom>": {…}}}`, config stdio
 `{command, args?, env?}` ou distante `{type:"http"|"sse", url, headers?}`).
 Fichier absent → comportement inchangé, aucun `mcpServers` transmis au SDK.
-Fichier présent : `mcpServers` est passé tel quel aux Options du SDK (pas de
+Fichier présent : `mcpServers` est passé aux Options du SDK (pas de
 re-validation des schémas — c'est le SDK qui s'en charge), après une
-validation minimale (chaque entrée doit être un objet non nul). JSON invalide
-ou `mcpServers` absent/malformé → le tour n'échoue **jamais** pour autant :
-avertissement sur stderr et poursuite sans MCP. En mode `chatOnly`, `.mcp.json`
-n'est même pas pris en compte : le chat pur ne doit voir aucun outil, MCP
-compris. Les outils exposés par un serveur MCP arrivent dans les chunks
-`tool_use`/`tool_result`/`permission_request` existants comme n'importe quel
-autre outil, sous le nom `mcp__<serveur>__<outil>` (convention du SDK) — même
-flux de permission que les outils intégrés.
+validation minimale (chaque entrée doit être un objet non nul) et **trois
+filtres** (voir « Méthodes MCP » plus bas) :
+
+1. **interrupteur local** — un serveur listé dans `disabled` de
+   `<cwd>/.iaction/mcp.local.json` n'est pas transmis du tout (donc zéro coût
+   de contexte) ;
+2. **secrets** — toute chaîne `${SECRET:nom}` de l'entrée (dans `env`,
+   `headers`, `args`, `url`…) est remplacée par sa valeur, lue dans
+   `<config>/mcp-secrets.json` (fichier 0600, hors projet, hors git). Une
+   référence introuvable **écarte le serveur** (avertissement au journal,
+   scope `mcp`) plutôt que de lancer un serveur à moitié configuré ;
+3. **allowlist d'outils** — `allowedTools` de `mcp.local.json`
+   (`{serveur: [outils courts]}`) ajoute les outils NON retenus à
+   `disallowedTools` des Options, en s'appuyant sur les outils constatés au
+   tour précédent (`mcp.runtime.json`).
+
+JSON invalide ou `mcpServers` absent/malformé → le tour n'échoue **jamais**
+pour autant : avertissement sur stderr et poursuite sans MCP. En mode
+`chatOnly`, `.mcp.json` n'est même pas pris en compte : le chat pur ne doit
+voir aucun outil, MCP compris. Les outils exposés par un serveur MCP arrivent
+dans les chunks `tool_use`/`tool_result`/`permission_request` existants comme
+n'importe quel autre outil, sous le nom `mcp__<serveur>__<outil>` (convention
+du SDK) — même flux de permission que les outils intégrés.
+
+**État constaté** : le message `system/init` du SDK porte `mcp_servers`
+(`[{name, status}]`) et `tools` (noms complets). Le sidecar en tire un
+instantané qu'il (a) renvoie dans le chunk `init`, (b) écrit dans
+`<cwd>/.iaction/mcp.runtime.json`, (c) rend en fiche
+`<cwd>/.iaction/connaissances/iaction-mcp.md` — liste des outils réels plus
+la règle « source avant mémoire », pour que le modèle interroge la source au
+lieu de réciter un index périmé. (b) et (c) n'ont lieu que dans un vrai projet
+IAction (`.iaction/` existant) et jamais en `chatOnly`. Chaque appel d'outil
+MCP terminé produit une ligne de journal (scope `mcp` : serveur, outil, durée,
+issue, taille du résultat — jamais d'arguments ni de contenu).
 
 **RAG local (R5)** : quand l'index de connaissances du projet existe
 (`<cwd>/.iaction/connaissances-index/`, voir la section « Méthodes R5 »), le
@@ -277,14 +367,15 @@ Jamais en mode `chatOnly`.
 
 | kind | data | sens |
 |---|---|---|
-| `init` | `{sessionId, model}` | session démarrée (capturer sessionId pour le tour suivant) |
+| `init` | `{sessionId, model, mcpServers?, mcpToolCount?, builtinToolCount?, startupMs?}` | session démarrée (capturer sessionId pour le tour suivant). `mcpServers` = état RÉEL des serveurs MCP (`[{name, status, tools[]}]`, outils en noms courts) ; les décomptes séparent outils MCP et intégrés (coût de contexte) ; `startupMs` = délai jusqu'à l'init, connexion des serveurs comprise. `mcpServers: []` en `chatOnly` (aucun outil) ou quand aucun serveur n'a été monté |
 | `text` | `{delta}` | texte assistant au fil de l'eau |
 | `thinking` | `{delta}` | raisonnement (si exposé par le SDK) |
 | `tool_use` | `{toolUseId, toolName, toolInput}` | l'agent invoque un outil (info) |
-| `tool_result` | `{toolUseId, isError, summary}` | résultat d'outil (résumé borné 500 c.) |
-| `permission_request` | `{permissionId, toolName, toolInput}` | **bloquant** : l'agent veut utiliser un outil soumis à validation (Edit/Write/Bash…) — l'UI doit répondre via `claude.permission`. Pour `Edit` : `toolInput.file_path/old_string/new_string` ; pour `Write` : `file_path/content` → l'UI construit le diff |
+| `tool_result` | `{toolUseId, isError, summary, durationMs}` | résultat d'outil (résumé borné 500 c.). `durationMs` = durée mesurée de l'appel pour un outil MCP, `null` pour les outils intégrés |
+| `permission_request` | `{permissionId, toolName, toolInput}` | **bloquant** : l'agent veut utiliser un outil soumis à validation (Edit/Write/Bash…) — l'UI doit répondre via `claude.permission`. Pour `Edit` : `toolInput.file_path/old_string/new_string` ; pour `Write` : `file_path/content` → l'UI construit le diff. Cas particulier `toolName: "mcp__studio__ask_user"` : ce n'est pas une permission mais une **question** posée à l'utilisateur (`toolInput.questions[]`) — voir § Questions interactives |
 | `background_tasks` | `{count, descriptions[]}` | liste COMPLÈTE des tâches de fond vivantes lancées par le modèle (sous-agents en arrière-plan…) — sémantique REPLACE, `count: 0` = tout est terminé |
 | `background_wait` | `{count, descriptions[]}` | le tour du modèle est fini mais `count` tâche(s) de fond tournent encore : le sidecar garde le process ouvert, leurs rapports réveilleront l'agent (le `done` viendra du tour suivant) |
+| `compact` | `{trigger, preTokens}` | compaction de contexte terminée (`trigger` = `manual` pour « /compact », `auto` pour la compaction automatique du CLI ; `preTokens` = contexte avant compaction, `null` si inconnu) — un tour « /compact » ne produit AUCUN texte : sans ce chunk, l'UI n'a aucun signal de fin de travail |
 
 Fin de tour : `done` avec
 `{sessionId, subtype:"success|error_…", result, usage:{inputTokens,outputTokens,cacheReadInputTokens?}, totalCostUsd}`
@@ -313,6 +404,11 @@ Répond à un `permission_request` en attente. `done` `{applied: bool}`
 (false si la demande n'existe plus). Un abort du tour rejette (deny)
 automatiquement toutes les demandes en attente.
 
+Même méthode pour répondre à une **question** (`mcp__studio__ask_user`) :
+`decision: "allow"` + `message` = la réponse, rendue telle quelle au modèle
+comme résultat de l'outil ; `decision: "deny"` (ou `message` vide) = question
+ignorée. Un abort clôt les questions en attente de la même façon.
+
 ### `claude.abort`
 
 ```json
@@ -322,6 +418,31 @@ automatiquement toutes les demandes en attente.
 Appelle `query.interrupt()` sur le tour en cours. Le tour interrompu émet son
 `done` avec le dernier état connu (`subtype` d'interruption du SDK).
 Réponse : `done` `{aborted: bool}`.
+
+### `claude.push`
+
+```json
+{"id":"req-12c","method":"claude.push","params":{"targetId":"req-10","content":"ajoute aussi le CHANGELOG"}}
+```
+
+Glisse une demande utilisateur dans le tour **en cours** (`targetId`), sans le
+couper ni en ouvrir un nouveau : le message est poussé dans l'entrée streamée
+que `claude.start` garde ouverte (voir `createTurnPrompt`), et le CLI l'injecte
+au **prochain retour d'outil** — même comportement que Claude Code dans VSCode.
+Vérifié sur le vrai moteur : message poussé à T+6 s, pris en compte à T+18 s à
+la fin du premier `Bash`, dans le même tour (un seul `result`). C'est ce qui
+permet d'interroger l'agent pendant qu'il attend ses tâches de fond.
+
+Réponse : `done` `{pushed: bool}` — `false` (jamais une erreur) si le tour
+n'existe plus ou a été interrompu ; l'UI se rabat alors sur sa file d'attente
+plutôt que de perdre le message. `content` est **texte seul** : pas de pièces
+jointes sur un message poussé.
+
+Deux limites de nature, pas d'implémentation : un tour **sans aucun appel
+d'outil** n'offre aucun point d'injection (le message ne sera vu qu'au tour
+suivant) — c'est le cas du Chat en mode `chatOnly` ; et le moteur neutre
+(`neutral.start`) n'a pas d'entrée streamée à alimenter, donc pas de
+`claude.push`.
 
 ### `claude.release`
 
@@ -355,9 +476,10 @@ menu « / » du composeur (UI). Ouvre une session SDK en **entrée streamée**
 (prompt = générateur asynchrone qui ne produit AUCUN tour), lit
 `query.supportedCommands()` (capturé à l'initialisation, donc **sans consommer
 de tour ni de tokens**), puis referme la session. Même `settingSources:
-['project','local']` que `claude.start` hors chat pur : le menu reflète les
-skills DU projet + intégrés Claude Code, pas les skills globaux
-(`~/.claude/skills`). `done` :
+['user','project','local']` que `claude.start` hors chat pur : le menu reflète
+exactement ce qu'un tour verra — skills et commandes du projet, intégrés Claude
+Code, **et** globaux du poste (`~/.claude/skills`, `~/.claude/commands`).
+`done` :
 
 ```json
 {"commands": [{"name":"code-review","description":"…","argumentHint":"<PR#>","aliases":["review"]}]}
@@ -413,6 +535,7 @@ d'agent que Claude — même contrat d'événements que `claude.start`
   "cwd":"/chemin/projet",
   "messages":[{"role":"system","content":"…"},{"role":"user","content":"…"}],
   "permissionMode":"default|acceptEdits|bypassPermissions",
+  "tools":null,
   "maxTurns":24}}
 ```
 
@@ -432,6 +555,17 @@ d'agent que Claude — même contrat d'événements que `claude.start`
   (`costUsd`/`cachedTokens` — voir la section S1). `meta.routeDebord: true`
   force `usage: {include: true}` même sans `usageAccounting` (base du
   plafond de débord).
+- `tools` : même allowlist que `claude.start` (champ `tools` du manifeste
+  d'agent). `null`/absent = palette complète. Sinon, seuls les outils retenus
+  sont DÉCLARÉS au modèle, et un appel à un outil écarté est refusé à
+  l'exécution (`outil non autorisé pour cet agent`). Les noms acceptés sont
+  ceux de la palette neutre (`read_file`, `bash`…) **et** leurs équivalents
+  Claude Code (`Read` → `read_file`, `Grep`/`Glob` → `search`/`list_dir`,
+  `Write` → `write_file`, `Edit` → `edit_file`, `Bash` → `bash`) : un agent
+  `engine: auto` ne sait pas sur quel moteur il tombera. Un nom inconnu des
+  deux mondes est ignoré — une allowlist qui ne désigne rien laisse l'agent
+  sans aucun outil, jamais avec la palette complète. `search_knowledge` (RAG,
+  lecture seule) échappe à l'allowlist, comme les outils MCP côté Claude.
 - `neutral.permission` / `neutral.abort` : mêmes contrats que
   `claude.permission` / `claude.abort` (params `targetId`/`permissionId`…).
 
@@ -559,7 +693,8 @@ courante de la variable d'environnement du process sidecar fait foi.
   par le routeur à l'exécution, voir « Méthodes R1/R2/R3 — routage »).
 - `permissionMode` : `"default"` | `"acceptEdits"` | `"plan"` | `"bypassPermissions"`.
 - `tools: null` = palette complète (pas de restriction) ; sinon allowlist de
-  noms d'outils.
+  noms d'outils, APPLIQUÉE par les deux moteurs (voir `claude.start` et
+  `neutral.start` : outils intégrés seulement — le MCP se gouverne par `mcp`).
 - Défauts si le champ est absent du YAML : `engine: "claude"`,
   `provider: null`, `model: null`, `permissionMode: "default"`,
   `instructions: ""`, `tools: null`, `mcp: true`, `knowledge: []`,
@@ -773,7 +908,7 @@ tableau) ; `run_started` annonce `engine: "auto"`, `model: null`.
 
 - `engine: "claude"` → `handleClaudeStart` interne avec
   `{cwd, prompt: <task templatée>, model: agent.model, permissionMode: agent.permissionMode,
-  systemPrompt: agent.instructions, chatOnly: false}`.
+  systemPrompt: agent.instructions, chatOnly: false, mcp: agent.mcp}`.
 - `engine: "neutral"` → `handleNeutralStart` interne avec
   `{providerId: agent.provider, model: agent.model, cwd,
   messages: [{role:"system", content: agent.instructions}? (si non vide), {role:"user", content: <task templatée>}],
@@ -850,12 +985,14 @@ exécutée par un timer systemd user (piloté depuis l'app en T2).
   "inputs": { "date": "{{today}}" },
   "report": "rapports/{{today}}.md",
   "enabled": true,
-  "cwd": "/home/moi/mon-projet"
+  "cwd": "/home/moi/mon-projet",
+  "lieu": "local"
 }
 ```
 
 - Défauts si champ absent : `description: ""`, `schedule: null`,
-  `inputs: {}`, `report: null`, `enabled: false`, `cwd: null`.
+  `inputs: {}`, `report: null`, `enabled: false`, `cwd: null`,
+  `lieu: "local"`.
 - Validation (messages en français, champ fautif cité) :
   - `name` requis, `[a-z0-9-]{1,64}`, et DOIT être égal au nom du dossier.
   - `orchestration` requise, `[a-z0-9-]{1,64}` (l'existence du fichier
@@ -873,6 +1010,17 @@ exécutée par un timer systemd user (piloté depuis l'app en T2).
     à une tâche de cibler une orchestration DU PROJET (versionnée dans son
     repo). Absent/null = comportement historique, cwd = dossier de la tâche
     (orchestrations globales seulement).
+  - `lieu` : `"local"` ou `"serveur"` — **rien d'autre**. Absent/null →
+    `"local"` ; toute autre valeur (`"server"`, `"Serveur"`, `"serveur "`…)
+    est REFUSÉE par une `error` citant la valeur reçue, jamais ramenée
+    silencieusement au défaut. `local` = exécutée par le timer systemd du
+    poste (§ T2) ; `serveur` = exécutée par le conteneur `ia-runner`, depuis
+    une racine de tâches distincte et synchronisée. C'est le garde-fou
+    anti-double-déclenchement (voir `docs/etude-remote.md` § 3 bis) : chaque
+    exécuteur ne prend que les tâches de son lieu, une tâche n'est donc jamais
+    armée des deux côtés. Le champ fait l'aller-retour sans perte, y compris
+    par le mode `tache` de `taches.write` qui ré-sérialise le manifeste —
+    l'effacer ferait retomber une tâche serveur en `local` sans aucun signal.
 - Gabarit `{{today}}` (date locale `YYYY-MM-DD`) : résolu **au lancement**
   par l'appelant (UI « Lancer maintenant », runner headless/timer) — le
   sidecar stocke et renvoie le gabarit tel quel.
@@ -1038,7 +1186,7 @@ abandon), écrit par les moteurs :
  "completionTokens":45,"modelUsed":null,"costUsd":null,"cachedTokens":null,
  "status":"done","errorMessage":null,
  "orchRunId":null,"orchStepId":null,"source":"chat","conversationId":"s-12",
- "routeTier":null,"routeDebord":null}
+ "routeTier":null,"routeDebord":null,"projectId":null,"projectPath":null}
 ```
 
 - `promptTokens`/`completionTokens` : `null` si le fournisseur ne les donne
@@ -1079,6 +1227,16 @@ abandon), écrit par les moteurs :
   provider n'a pas coché `usageAccounting` — le comptage du plafond ne doit
   jamais dépendre d'une case à cocher.
 
+- `projectId`/`projectPath` (S2) : projet auquel imputer le tour, base de
+  l'agrégat `parProjet` de `usage.stats`. `projectId` = id d'un projet déclaré,
+  posé par l'UI (page Projets) via le même `meta` ; `projectPath` = répertoire
+  du run, posé par l'UI (Projets) **et côté sidecar par `orchestrator.ts`**
+  pour chaque étape d'orchestration — c'est ce qui rattache à son projet un
+  tour autonome (orchestration lancée à la main ou tâche de fond), là où
+  aucune UI n'est là pour poser un id. Le Chat ne pose rien : il est agrégé
+  comme un projet à part entière depuis `source: "chat"`. `null`/`null` sur
+  les lignes écrites avant S2 → elles tombent dans « (non attribué) ».
+
 **`claude-windows.jsonl`** — un instantané par capture d'usage abonnement
 réussie (voir usage.claude) : `{"ts":"…","windows":{…}}` (mêmes `windows`
 génériques que le snapshot usage.claude).
@@ -1102,7 +1260,12 @@ génériques que le snapshot usage.claude).
  "routage":{"parTier":{"trivial":{"tours":10},"simple":{"tours":25}},
   "toursAuto":35,"partCoutNulPct":78,
   "mixAbo":[{"model":"claude-haiku-4-5","tours":20}],
-  "debordMoisUsd":1.25}}
+  "debordMoisUsd":1.25},
+ "parProjet":[{"projectId":"orgai","name":"OrgAI","tours":40,
+  "totalTokens":300000,"partTokensPct":33,"autonomeTours":12,
+  "autonomeTokens":120000,"autonomePct":40},
+  {"projectId":"chat","name":"Chat","tours":30,"totalTokens":270000,
+   "partTokensPct":30,"autonomeTours":0,"autonomeTokens":0,"autonomePct":0}]}
 ```
 
 - `conversations` = `conversationId` distincts (événements sans id ignorés
@@ -1121,6 +1284,32 @@ génériques que le snapshot usage.claude).
   courant** (indépendant de `from`/`to` — c'est la valeur comparée au
   plafond ; R6-A : inclut le fichier de rotation `events.jsonl.1`, où des
   événements du mois courant peuvent avoir basculé).
+- `parProjet` (S2, encart « Usage par projet » de Supervision) — même période
+  `from`/`to` que le reste. Une entrée par projet, **le Chat compris**
+  (`projectId: "chat"`, pseudo-projet dérivé de `source: "chat"`) :
+  - `partTokensPct` = part du projet dans `totals.totalTokens` (arrondie ; la
+    somme peut donc valoir 99 ou 101), `null` si aucun token n'a été compté
+    sur la période — l'UI se rabat alors sur la part des tours ;
+  - `autonomeTours`/`autonomeTokens`/`autonomePct` = ce que le projet a
+    consommé **en orchestration** (événements portant un `orchRunId`),
+    `autonomePct` étant la part autonome DANS le projet ;
+  - attribution d'un événement, par ordre de précision : `projectId` →
+    `projectPath` rattaché au projet déclaré de même répertoire (registre lu
+    en LECTURE SEULE dans `config.json`, `projects: [{id,name,path}]`) →
+    répertoire inconnu conservé sous l'id `chemin:<dir>` (nom = son dernier
+    segment) → `source: "chat"` → `conversationId` rattaché à son projet via
+    l'état applicatif `state/project-conversations.json` (LECTURE SEULE, sous
+    `${XDG_DATA_HOME ?? ~/.local/share}/net.duvam.iaction/`) → sinon
+    `projectId: null`, nom `(non attribué)`.
+  - ce dernier rattachement par conversation est ce qui rend l'encart utile
+    **dès le premier affichage** : les tours historisés avant S2 ne portent ni
+    `projectId` ni `projectPath`, mais leur `conversationId` suffit tant que la
+    conversation existe encore côté UI. Rien n'est réécrit dans
+    `events.jsonl` — la résolution est refaite à chaque appel, et une
+    conversation supprimée fait simplement retomber ses vieux tours au résidu.
+  - tri par tokens décroissants puis par tours, `(non attribué)` toujours en
+    dernier — c'est un résidu, pas un projet. Un projet déclaré dont l'id
+    vaudrait littéralement `chat` serait fusionné avec le pseudo-projet Chat.
 
 ### `usage.claude.history`
 
@@ -1232,7 +1421,7 @@ Le sidecar est le **seul écrivain** du fichier. Trois portes d'entrée :
   décroissant). `debug` n'est PAS écrit par défaut — voir `IACTION_LOG_LEVEL`.
 - `scope` : énumération **fermée** — `sidecar`, `rust`, `ui`, `claude`,
   `neutral`, `orchestrator`, `taches`, `knowledge`, `speech`, `router`,
-  `usage`. Un scope inconnu est ramené à `sidecar` (jamais un rejet).
+  `usage`, `mcp`. Un scope inconnu est ramené à `sidecar` (jamais un rejet).
 - `msg` : une ligne, sans saut de ligne (les sauts sont remplacés par des
   espaces à l'écriture — une entrée = une ligne JSONL).
 - `reqId` / `runId` / `stepId` : corrélation, `null` par défaut. Un `reqId` de
@@ -1697,6 +1886,51 @@ calcul, mêmes chemins qu'à l'indexation). Sans index :
   (`mcp__iaction__search_knowledge`), ajouté par le sidecar **seulement
   quand l'index du projet existe** — voir `claude.start` § RAG local.
 
+### Outil `search_chat` — historique du Chat (moteur Claude)
+
+Second outil du même serveur MCP in-process `iaction`
+(`mcp__iaction__search_chat`, args `query` requis, `limit?` — défaut 5, max
+20). Contrairement à `search_knowledge`, il est **toujours présent** : il ne
+dépend d'aucun index, et le serveur `iaction` est donc désormais monté même
+sans index (il ne porte alors que cet outil).
+
+Raison d'être : les conversations de l'onglet « Chat » vivent dans l'état
+applicatif (`${XDG_DATA_HOME ?? ~/.local/share}/net.duvam.iaction/state/chat-conversations.json`),
+**hors du répertoire du projet**. Un agent de projet, dont le `cwd` est le
+projet, ne peut pas les lire — cet outil est le seul pont. Implémentation :
+`sidecar/src/chatHistory.ts`.
+
+Contrat : recherche par sous-chaîne, insensible à la casse et aux accents ;
+résultat trié par nombre de tours correspondants ; **extraits bornés**
+(±160 caractères autour de la correspondance, 3 extraits par conversation au
+plus) — c'est une recherche, jamais un export intégral. Lecture seule et
+tolérante : fichier absent, JSON invalide ou forme inattendue → `isError`
+avec un message lisible, le tour continue.
+
+Conséquence à connaître : **tout agent de projet peut interroger l'historique
+du Chat**, quel que soit le projet. C'est voulu (demande du 2026-08-03), mais
+c'est un pont entre espaces auparavant étanches.
+
+### `project.ensureDoc` — guide d'intégration du projet
+
+```json
+{"id":"req-90","method":"project.ensureDoc","params":{"cwd":"/chemin/projet"}}
+```
+
+Dépose (ou rafraîchit) `<projet>/.iaction/connaissances/iaction.md` — le
+guide d'intégration versionné avec le sidecar (`projectDoc.ts`). Réponse :
+`done` `{ensured: true}`. Rien n'est créé si `<projet>/.iaction/` n'existe pas,
+ni si le fichier a été édité à la main (le marqueur « généré » en première
+ligne autorise seul l'écrasement).
+
+Appelé par l'UI **à la sélection du projet**, avant son scan de
+`.iaction/connaissances/`. Auparavant le dépôt n'avait lieu qu'au premier tour
+(`claude.start`), donc APRÈS ce scan : le guide n'était ni listé dans le
+panneau Connaissances ni injecté, pour toute la session (2026-08-03).
+Délibérément une méthode à part plutôt qu'un effet de bord de
+`knowledge.status` : celle-ci est une lecture, et y écrire faisait apparaître
+une source pendant sa propre mesure (index aussitôt `stale`, comptes faussés).
+
 ### Mode par projet — `connaissances.mode`
 
 Réglage PAR PROJET côté UI (champ `connaissancesMode` de l'entrée du projet
@@ -1709,6 +1943,93 @@ instructions d'agent éventuelles), et l'outil est proposé dans les deux
 moteurs. Panneau Connaissances (page Projets) : sélecteur du mode, bouton
 « Indexer maintenant » (progression via les chunks de `knowledge.index`),
 état de l'index (`knowledge.status`) et avertissement si `stale`.
+
+## Méthodes MCP — état réel, interrupteurs, secrets, catalogue
+
+Implémentation découpée par responsabilité — `sidecar/src/mcpSecrets.ts`
+(coffre, brique du bas sans dépendance), `sidecar/src/mcp.ts` (config, état
+constaté, préférences, préparation d'un tour), `sidecar/src/mcpCatalog.ts`
+(connecteurs prêts à brancher, la partie exposée à la dérive de gabarits
+tiers : elle se supprime en effaçant ce fichier et ses trois `case`, sans
+toucher au reste). Client UI : `ui/src/mcpClient.ts`, panneau
+`ui/src/McpPanel.tsx` (section « MCP » de la page Projets).
+
+Trois fichiers, trois rôles — à ne pas confondre :
+
+| Fichier | Rôle | Versionné |
+|---|---|---|
+| `<projet>/.mcp.json` | serveurs déclarés (contrat partagé du projet) | oui |
+| `<projet>/.iaction/mcp.local.json` | préférences locales : `{disabled[], allowedTools{}}` | non |
+| `<projet>/.iaction/mcp.runtime.json` | état CONSTATÉ au dernier tour (généré) | non |
+
+Les secrets ne vivent dans aucun des trois : ils sont dans
+`<config>/mcp-secrets.json` (mode 0600), référencés depuis `.mcp.json` par
+`${SECRET:<nom>}`. **Aucune méthode ne renvoie jamais la valeur d'un secret** —
+seuls les noms circulent, et uniquement dans le sens UI → sidecar pour les
+poser.
+
+### `mcp.status`
+
+```json
+{"id":"req-91","method":"mcp.status","params":{"cwd":"/chemin/projet"}}
+```
+
+`done` : `{configPath, configExists, configError, capturedAt, mcpToolCount,
+builtinToolCount, secretNames[], servers[]}`. Chaque serveur :
+`{name, kind:"stdio"|"http"|"sse", detail, declared, enabled, allowedTools,
+status, tools[], needsAuth, secretRefs[], missingSecrets[]}` — `declared:false`
+désigne un serveur in-process d'IAction (`iaction`, `studio`), visible et
+restreignable comme les autres ; `status`/`tools` viennent du dernier tour
+(`unknown`/`[]` si le projet n'a jamais tourné) ; `allowedTools: null` = tous
+les outils exposés.
+
+### `mcp.setServer`
+
+```json
+{"id":"req-92","method":"mcp.setServer",
+ "params":{"cwd":"/chemin/projet","name":"airtable","enabled":false,"allowedTools":["list_records"]}}
+```
+
+Écrit `mcp.local.json`. `enabled` et `allowedTools` sont indépendants et
+facultatifs (champ absent = inchangé). `allowedTools: null` retire
+l'allowlist ; `[]` la pose à « aucun outil » — deux intentions distinctes.
+`done` : `{state}`.
+
+### `mcp.catalog` / `mcp.add` / `mcp.remove`
+
+`mcp.catalog` (sans params) → `{entries[]}` : connecteurs proposés
+(`imap` — serveur IMAP livré dans `tools/mcp-imap` ; `airtable` ; `http`
+distant, échappatoire pour tout le reste), chacun avec ses champs
+(`{key, label, secret, placeholder, required}`).
+
+```json
+{"id":"req-93","method":"mcp.add",
+ "params":{"cwd":"/chemin/projet","entryId":"airtable","name":"airtable","values":{"token":"pat…"}}}
+```
+
+Écrit l'entrée dans `<cwd>/.mcp.json`. Les champs `secret: true` ne sont
+**pas** écrits dans le projet : leur valeur part au coffre sous le nom
+`<serveur>.<champ>` et le fichier ne porte qu'un `${SECRET:…}`. Refus (erreur,
+sans rien écrire) si `.mcp.json` existe mais est illisible — réécrire par-dessus
+effacerait des serveurs que l'utilisateur croit déclarés. `done` :
+`{name, added:true}`.
+
+`mcp.remove {cwd, name}` retire l'entrée ; les secrets restent au coffre.
+
+### `mcp.secrets` / `mcp.secretSet` / `mcp.secretDelete`
+
+`mcp.secrets` → `{names[], path}` (noms seulement).
+`mcp.secretSet {name, value}` pose/écrase (fichier créé en 0600).
+`mcp.secretDelete {name}` → `{name, removed}`.
+
+### Serveurs distants en attente d'authentification
+
+Pas de méthode : un flux OAuth ne peut pas se dérouler dans un tour non
+interactif, et le sidecar n'a rien à faire de plus que donner la consigne.
+Quand `mcp.status` renvoie `needsAuth: true`, le panneau affiche le bouton
+« Connecter », ouvre un terminal sur le projet (`open_terminal`, côté Rust)
+et rappelle le geste : lancer `claude`, taper `/mcp`, choisir le serveur. Le
+jeton obtenu est ensuite réutilisé par les tours d'IAction.
 
 ## `ollama.*` (gestion des modèles chargés)
 

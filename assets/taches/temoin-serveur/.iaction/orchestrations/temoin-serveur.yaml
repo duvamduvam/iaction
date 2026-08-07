@@ -1,0 +1,29 @@
+# Orchestration de la tâche « temoin-serveur » (docs/protocol.md § O1).
+# Une seule étape : le témoin constate et rédige dans le même tour, il n'y a
+# rien à enchaîner. Le but est que le run soit le plus court et le moins cher
+# possible — c'est l'infrastructure qu'on teste, pas le modèle.
+name: temoin-serveur
+description: Témoin d'exécution du conteneur ia-runner — relevé d'environnement et vérification de la synchro du projet.
+inputs:
+  - name: date
+    label: Date du jour (AAAA-MM-JJ)
+steps:
+  - id: constat
+    agent: temoin-serveur
+    task: |
+      Produis le constat du jour. Date attendue : {{date}}.
+
+      Applique ta méthode : relevés en lecture seule sur l'environnement et le
+      répertoire de travail, puis rapport Markdown complet en réponse finale,
+      verdict `OK` ou `ANOMALIE` en première ligne. N'écris aucun fichier.
+
+      Signale explicitement tout écart entre la date attendue ci-dessus et la
+      date que tu relèves sur la machine : un décalage trahirait un problème
+      d'horloge ou de fuseau côté conteneur.
+    needs: []
+limits:
+  maxParallel: 1
+  # 5 minutes suffisent très largement pour une poignée de relevés shell ;
+  # un dépassement signalerait un conteneur en souffrance, ce qui est
+  # précisément le genre d'anomalie que le témoin doit faire remonter.
+  maxDurationMin: 5

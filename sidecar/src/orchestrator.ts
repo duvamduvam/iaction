@@ -19,13 +19,13 @@
  */
 
 import { promises as fsp } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { EngineEmitter } from "./engine.js";
 import { handleClaudeAbort, handleClaudePermission, handleClaudeStart } from "./claude.js";
 import { handleNeutralAbort, handleNeutralPermission, handleNeutralStart } from "./neutralAgent.js";
 import { resolveRoute, type RouteTier } from "./router.js";
+import { globalConfigRoot, projectDir } from "./appPaths.js";
 
 // ---------------------------------------------------------------------------
 // Utilitaires
@@ -69,16 +69,10 @@ function isWithinDir(candidate: string, dir: string): boolean {
 
 type FileKind = "agents" | "orchestrations";
 
-function projectDir(cwd: string, kind: FileKind): string {
-  return path.join(path.resolve(cwd), ".iaction", kind);
-}
+// `projectDir` et `globalConfigRoot` viennent d'appPaths.ts (voir l'import) :
+// ces répertoires sont relus à chaque appel, jamais mis en cache — les tests
+// injectent XDG_CONFIG_HOME au spawn du sidecar.
 
-/** Lu à chaque appel (pas mis en cache) : les tests injectent XDG_CONFIG_HOME au spawn du sidecar. */
-function globalConfigRoot(): string {
-  const xdg = process.env.XDG_CONFIG_HOME;
-  const base = isNonEmptyString(xdg) ? xdg : path.join(os.homedir(), ".config");
-  return path.join(base, "net.duvam.iaction");
-}
 
 function globalDir(kind: FileKind): string {
   return path.join(globalConfigRoot(), kind);
@@ -1268,7 +1262,18 @@ function buildStepStartParams(
       permissionMode: agent.permissionMode,
       systemPrompt: agent.instructions,
       chatOnly: false,
+      // Champ `mcp` du manifeste d'agent : `false` = n'hérite PAS du
+      // .mcp.json du projet. Documenté de longue date, il n'était jusqu'ici
+      // transmis à personne — un agent qui refusait le MCP les recevait
+      // quand même (et en payait le contexte).
+      mcp: agent.mcp,
     };
+    // T-003 — allowlist `tools:` du manifeste : transmise (elle ne l'était à
+    // personne, cf. claude.ts). Absente/null = palette complète, donc rien à
+    // poser — le moteur garde son défaut.
+    if (agent.tools !== null) {
+      params.tools = agent.tools;
+    }
   } else {
     const messages: Record<string, unknown>[] = [];
     if (agent.instructions.trim().length > 0) {
@@ -1285,10 +1290,22 @@ function buildStepStartParams(
     if (agent.maxTurns !== null) {
       params.maxTurns = agent.maxTurns;
     }
+    // T-003 — même allowlist côté moteur neutre (noms d'outils neutres, ou
+    // équivalents Claude pour un agent `engine: auto` — voir neutralAgent.ts).
+    if (agent.tools !== null) {
+      params.tools = agent.tools;
+    }
   }
-  if (routeTier) {
-    params.meta = { routeTier, ...(routeDebord ? { routeDebord: true } : {}) };
-  }
+  // S2 — `projectPath` : le répertoire du run EST l'identité du projet pour
+  // une étape d'orchestration (aucune UI derrière une tâche de fond pour
+  // poser un `projectId`) ; usageStats.ts le rattache au projet déclaré de
+  // même chemin. Toujours posé, même sans routage : c'est ce qui rend la part
+  // « autonome » visible par projet dans Supervision.
+  params.meta = {
+    projectPath: cwd,
+    ...(routeTier ? { routeTier } : {}),
+    ...(routeTier && routeDebord ? { routeDebord: true } : {}),
+  };
   return params;
 }
 

@@ -48,12 +48,33 @@ export interface UsageRoutage {
   debordMoisUsd: number;
 }
 
+/**
+ * S2 — part d'un projet dans l'usage de la période (le Chat est un projet à
+ * part entière, `projectId: "chat"` ; `projectId: null` = résidu « (non
+ * attribué) » : tours historisés avant S2 ou sans projet identifiable).
+ */
+export interface UsageProjet {
+  projectId: string | null;
+  name: string;
+  tours: number;
+  totalTokens: number;
+  /** Part des tokens de la période (arrondie), `null` si aucun token compté. */
+  partTokensPct: number | null;
+  /** Tours (et tokens) issus d'une orchestration : la part « autonome » du projet. */
+  autonomeTours: number;
+  autonomeTokens: number;
+  /** Part autonome DANS le projet (arrondie), `null` si le projet n'a aucun token. */
+  autonomePct: number | null;
+}
+
 export interface UsageStats {
   totals: UsageTotals;
   buckets: UsageBucket[];
   models: UsageModelStat[];
   /** R3 — `null` avec un sidecar antérieur (champ absent). */
   routage: UsageRoutage | null;
+  /** S2 — `null` avec un sidecar antérieur (champ absent). */
+  parProjet: UsageProjet[] | null;
 }
 
 function toNum(value: unknown): number {
@@ -137,6 +158,27 @@ function parseRoutage(value: unknown): UsageRoutage | null {
   };
 }
 
+/** S2 — parsing défensif de `parProjet` (absent → null : sidecar antérieur). */
+function parseParProjet(value: unknown): UsageProjet[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: UsageProjet[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const v = raw as Record<string, unknown>;
+    out.push({
+      projectId: typeof v.projectId === "string" ? v.projectId : null,
+      name: toStr(v.name, "(non attribué)"),
+      tours: toNum(v.tours),
+      totalTokens: toNum(v.totalTokens),
+      partTokensPct: toNumOrNull(v.partTokensPct),
+      autonomeTours: toNum(v.autonomeTours),
+      autonomeTokens: toNum(v.autonomeTokens),
+      autonomePct: toNumOrNull(v.autonomePct),
+    });
+  }
+  return out;
+}
+
 /**
  * Statistiques agrégées sur une plage (`from`/`to` dates locales `YYYY-MM-DD`
  * incluses, `bucket` = granularité du regroupement). Voir `usage.stats`.
@@ -148,7 +190,13 @@ export async function usageStats(from: string, to: string, bucket: UsageBucketKi
   const models = Array.isArray(data.models)
     ? data.models.map(parseModelStat).filter((m): m is UsageModelStat => m !== null)
     : [];
-  return { totals: parseTotals(data.totals), buckets, models, routage: parseRoutage(data.routage) };
+  return {
+    totals: parseTotals(data.totals),
+    buckets,
+    models,
+    routage: parseRoutage(data.routage),
+    parProjet: parseParProjet(data.parProjet),
+  };
 }
 
 /** Une fenêtre de limitation d'abonnement (utilization %, ISO de réinitialisation). */

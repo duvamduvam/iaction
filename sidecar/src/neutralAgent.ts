@@ -482,6 +482,55 @@ const KNOWN_TOOLS = new Set([
   "bash",
 ]);
 
+/*
+ * T-003 — allowlist `tools:` du manifeste d'agent, appliquée ici aussi (elle
+ * n'était transmise à personne : `TOOLS` était une constante, tout agent
+ * recevait la palette entière quoi qu'il déclare).
+ *
+ * Les noms des outils neutres ne sont pas ceux de Claude Code, et un agent
+ * `engine: auto` (R2) ne sait pas sur quel moteur il tombera : on accepte donc
+ * AUSSI les noms Claude, traduits par cette table. Un nom inconnu des deux
+ * mondes est simplement ignoré — une allowlist qui ne désigne rien laisse
+ * l'agent sans outil, jamais avec la palette complète (fermé par défaut).
+ */
+const TOOL_EQUIVALENTS: Record<string, string[]> = {
+  Read: ["read_file"],
+  Glob: ["list_dir", "search"],
+  Grep: ["search"],
+  LS: ["list_dir"],
+  Write: ["write_file"],
+  Edit: ["edit_file"],
+  MultiEdit: ["edit_file"],
+  NotebookEdit: ["edit_file"],
+  Bash: ["bash"],
+};
+
+/**
+ * Outils toujours exposés, hors allowlist : le RAG local est l'équivalent
+ * neutre des outils MCP côté Claude, gouvernés eux par le champ `mcp` du
+ * manifeste et non par `tools`. Lecture seule, aucun risque à le laisser.
+ */
+const TOOLS_HORS_ALLOWLIST = new Set(["search_knowledge"]);
+
+/**
+ * Résout l'allowlist déclarée en noms d'outils neutres.
+ * `null` (champ absent) = palette complète, aucune restriction.
+ */
+function resolveAllowedTools(declared: unknown): Set<string> | null {
+  if (!Array.isArray(declared) || !declared.every((t) => typeof t === "string")) return null;
+  const out = new Set<string>(TOOLS_HORS_ALLOWLIST);
+  for (const nom of declared as string[]) {
+    if (KNOWN_TOOLS.has(nom)) {
+      out.add(nom);
+      continue;
+    }
+    for (const equivalent of TOOL_EQUIVALENTS[nom] ?? []) {
+      out.add(equivalent);
+    }
+  }
+  return out;
+}
+
 /** Exécution d'un outil, jamais levée : toute exception inattendue devient un tool_result isError. */
 async function safeExecuteTool(toolName: string, toolInput: unknown, cwd: string): Promise<ToolExecResult> {
   try {
@@ -763,16 +812,24 @@ async function runOneTurn(opts: {
   id: string;
   /** R6-A — vrai sur un tour débordé (meta.routeDebord) : force usage.include. */
   forceUsageInclude: boolean;
+  /** T-003 — allowlist résolue (`null` = palette complète) : filtre les outils DÉCLARÉS au modèle. */
+  allowedTools: Set<string> | null;
 }): Promise<TurnResult> {
-  const { provider, model, history, controller, emitter, id, forceUsageInclude } = opts;
+  const { provider, model, history, controller, emitter, id, forceUsageInclude, allowedTools } = opts;
+
+  // Filtrage à la DÉCLARATION : le modèle ne voit pas les outils qu'il n'a pas
+  // le droit d'appeler (le refus à l'exécution, plus bas, n'est que le
+  // garde-fou — un modèle qui invente un appel ne doit pas passer non plus).
+  const declaredTools = allowedTools ? TOOLS.filter((t) => allowedTools.has(t.function.name)) : TOOLS;
 
   const body: Record<string, unknown> = {
     model,
     messages: history,
     stream: true,
     stream_options: { include_usage: true },
-    tools: TOOLS,
-    tool_choice: "auto",
+    // `tools: []` est refusé par une partie des fournisseurs : une allowlist
+    // qui ne laisse rien passer se traduit par une requête SANS outil du tout.
+    ...(declaredTools.length > 0 ? { tools: declaredTools, tool_choice: "auto" } : {}),
   };
   // R0/R6-A — réglages de routage OpenRouter du provider, appliqués comme dans
   // chat.send (engine.ts) : opt-in, un provider sans ces champs produit un
@@ -1027,6 +1084,9 @@ export async function handleNeutralStart(
       ? Math.min(Math.floor(maxTurnsRaw), MAX_MAX_TURNS)
       : DEFAULT_MAX_TURNS;
 
+  // T-003 — allowlist `tools:` de l'agent (absente = palette complète).
+  const allowedTools = resolveAllowedTools(params.tools);
+
   const controller = new AbortController();
   const run: RunState = { controller, pendingPermissions: new Map(), permCounter: 0, aborted: false };
   runs.set(id, run);
@@ -1063,7 +1123,16 @@ export async function handleNeutralStart(
     }
     turn++;
 
-    const turnResult = await runOneTurn({ provider, model, history, controller, emitter, id, forceUsageInclude });
+    const turnResult = await runOneTurn({
+      provider,
+      model,
+      history,
+      controller,
+      emitter,
+      id,
+      forceUsageInclude,
+      allowedTools,
+    });
 
     if (turnResult.usage) {
       cumulativeInput += turnResult.usage.promptTokens ?? 0;
@@ -1153,6 +1222,12 @@ export async function handleNeutralStart(
       } else if (!KNOWN_TOOLS.has(toolName)) {
         isError = true;
         resultContent = `outil inconnu: ${toolName}`;
+      } else if (allowedTools && !allowedTools.has(toolName)) {
+        // T-003 — garde-fou : l'outil n'a pas été déclaré au modèle, mais rien
+        // n'empêche un modèle de l'appeler quand même (hallucination, ou
+        // historique d'un tour antérieur). Refus sec, jamais d'exécution.
+        isError = true;
+        resultContent = `outil non autorisé pour cet agent: ${toolName}`;
       } else if (needsPermission(toolName, permissionMode)) {
         const decision = await requestPermission(id, run, emitter, toolName, toolInput);
         if (!decision.allow) {

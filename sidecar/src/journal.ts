@@ -54,7 +54,8 @@ export type LogScope =
   | "knowledge"
   | "speech"
   | "router"
-  | "usage";
+  | "usage"
+  | "mcp";
 
 export const LOG_SCOPES: readonly LogScope[] = [
   "sidecar",
@@ -68,6 +69,7 @@ export const LOG_SCOPES: readonly LogScope[] = [
   "speech",
   "router",
   "usage",
+  "mcp",
 ];
 
 /** Level inconnu → `error` : mieux vaut sur-signaler qu'avaler une entrée. */

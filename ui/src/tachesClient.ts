@@ -27,6 +27,14 @@
  */
 import { request } from "./sidecar";
 
+/**
+ * Lieu d'exécution d'une tâche (docs/protocol.md § T1, docs/etude-remote.md
+ * § 3 bis) : `local` = timer systemd du poste, `serveur` = conteneur
+ * `ia-runner`. Garde-fou anti-double-déclenchement — une tâche n'est armée que
+ * d'un seul côté. Défaut `local`, valeur inconnue refusée par le sidecar.
+ */
+export type TacheLieu = "local" | "serveur";
+
 /** Une tâche telle que renvoyée par `taches.list`/`taches.read`. */
 export interface TacheInfo {
   name: string;
@@ -38,6 +46,8 @@ export interface TacheInfo {
   enabled: boolean;
   /** Répertoire projet (chemin absolu) où résoudre l'orchestration — null = orchestrations globales. */
   cwd: string | null;
+  /** Lieu d'exécution — voir `TacheLieu`. */
+  lieu: TacheLieu;
   path: string;
   /** Présent si le manifeste n'a pas pu être chargé/validé — le reste des champs est alors best-effort. */
   invalid?: string;
@@ -53,6 +63,10 @@ export interface TacheWriteInput {
   report: string | null;
   enabled: boolean;
   cwd: string | null;
+  /** Toujours renseigné, y compris quand l'UI ne l'édite pas : `taches.write
+      {tache}` ré-sérialise le manifeste depuis cet objet, l'omettre ramènerait
+      silencieusement la tâche en `local` (voir `TacheLieu`). */
+  lieu: TacheLieu;
 }
 
 export interface TacheWriteResult {
@@ -95,6 +109,10 @@ function toTacheInfo(value: unknown): TacheInfo | null {
     report: typeof v.report === "string" ? v.report : null,
     enabled: v.enabled === true,
     cwd: typeof v.cwd === "string" ? v.cwd : null,
+    // Repli `local` uniquement si le sidecar ne dit rien (version antérieure au
+    // champ) : le sidecar refuse déjà toute autre valeur, il ne peut donc pas
+    // en arriver une exotique ici.
+    lieu: v.lieu === "serveur" ? "serveur" : "local",
     path: typeof v.path === "string" ? v.path : "",
   };
   if (typeof v.invalid === "string" && v.invalid) info.invalid = v.invalid;

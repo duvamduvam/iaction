@@ -18,10 +18,10 @@
  */
 
 import { promises as fsp } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { EngineEmitter } from "./engine.js";
+import { globalConfigRoot } from "./appPaths.js";
 
 // ---------------------------------------------------------------------------
 // Utilitaires (dupliqués depuis orchestrator.ts — non exportés là-bas)
@@ -52,11 +52,7 @@ async function atomicWriteFile(absPath: string, content: string): Promise<void> 
 // Répertoire racine (lu à chaque appel — jamais mis en cache)
 // ---------------------------------------------------------------------------
 
-function globalConfigRoot(): string {
-  const xdg = process.env.XDG_CONFIG_HOME;
-  const base = isNonEmptyString(xdg) ? xdg : path.join(os.homedir(), ".config");
-  return path.join(base, "net.duvam.iaction");
-}
+
 
 function tachesRoot(): string {
   return path.join(globalConfigRoot(), "taches");
@@ -79,6 +75,11 @@ function fail<T>(message: string): ValidationResult<T> {
 // Tâche — types + normalisation/validation
 // ---------------------------------------------------------------------------
 
+/** Lieu d'exécution d'une tâche — voir `TacheNormalized.lieu`. */
+export type TacheLieu = "local" | "serveur";
+
+const LIEUX = new Set<string>(["local", "serveur"]);
+
 export interface TacheNormalized {
   name: string;
   description: string;
@@ -91,6 +92,17 @@ export interface TacheNormalized {
       dans `<cwd>/.iaction/orchestrations/`) — null = dossier de la tâche
       (comportement historique : orchestrations globales seulement). */
   cwd: string | null;
+  /** Où la tâche s'exécute (docs/etude-remote.md § 3 bis). GARDE-FOU
+      ANTI-DOUBLE-DÉCLENCHEMENT : le conteneur `ia-runner` n'exécute QUE les
+      tâches `serveur`, le timer systemd local ne couvre que les `local` — une
+      même tâche ne doit jamais être armée des deux côtés (elle tournerait deux
+      fois, écrirait deux rapports et consommerait deux fois l'abonnement).
+      D'où un champ FIRST-CLASS jusque dans la ré-sérialisation `taches.write
+      {tache}` : s'il se perdait à l'aller-retour, une simple édition depuis le
+      formulaire ramènerait la tâche en `local` et le serveur cesserait de
+      l'exécuter, SANS que rien ne le signale (échec muet interdit, cf.
+      docs/etude-logs.md). Défaut `local`. */
+  lieu: TacheLieu;
 }
 
 export interface TacheListEntry extends TacheNormalized {
@@ -184,7 +196,18 @@ function normalizeTache(raw: unknown): ValidationResult<TacheNormalized> {
     cwd = raw.cwd;
   }
 
-  return { ok: true, value: { name, description, orchestration, schedule, inputs, report, enabled, cwd } };
+  // Jamais de repli silencieux sur `local` : une faute de frappe (`server`,
+  // `serveur ` avec espace, `Serveur`) désarmerait la tâche côté serveur sans
+  // le dire. Absent/null seuls valent défaut.
+  let lieu: TacheLieu = "local";
+  if (raw.lieu !== undefined && raw.lieu !== null) {
+    if (typeof raw.lieu !== "string" || !LIEUX.has(raw.lieu)) {
+      return fail(`champ 'lieu' invalide (attendu 'local' ou 'serveur'), reçu: ${JSON.stringify(raw.lieu)}`);
+    }
+    lieu = raw.lieu as TacheLieu;
+  }
+
+  return { ok: true, value: { name, description, orchestration, schedule, inputs, report, enabled, cwd, lieu } };
 }
 
 function invalidTacheEntry(dirName: string, dirPath: string, message: string): TacheListEntry {
@@ -197,6 +220,10 @@ function invalidTacheEntry(dirName: string, dirPath: string, message: string): T
     report: null,
     enabled: false,
     cwd: null,
+    // Repli d'une entrée illisible : `local`, le lieu le moins engageant — une
+    // tâche dont le manifeste est cassé ne doit surtout pas être présentée
+    // comme armée côté serveur (voir `TacheNormalized.lieu`).
+    lieu: "local",
     path: dirPath,
     invalid: message,
   };

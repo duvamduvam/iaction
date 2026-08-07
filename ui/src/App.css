@@ -95,57 +95,7 @@
   color: var(--text-1);
 }
 
-/* ---------- Badge de statut ---------- */
-
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-radius: 999px;
-  border: 1px solid var(--border-1);
-  background: var(--bg-1);
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  color: var(--text-0);
-}
-
-.status-badge__dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--text-2);
-  flex: none;
-}
-
-.status-badge--ok {
-  border-color: #00f5d455;
-  box-shadow: var(--glow-ok);
-}
-.status-badge--ok .status-badge__dot {
-  background: var(--status-ok);
-  box-shadow: 0 0 8px 1px var(--status-ok);
-}
-
-.status-badge--warn {
-  border-color: #fbbf2455;
-  box-shadow: var(--glow-warn);
-}
-.status-badge--warn .status-badge__dot {
-  background: var(--status-warn);
-  box-shadow: 0 0 8px 1px var(--status-warn);
-  animation: pulse 1.4s ease-in-out infinite;
-}
-
-.status-badge--error {
-  border-color: #ff313155;
-  box-shadow: var(--glow-error);
-}
-.status-badge--error .status-badge__dot {
-  background: var(--status-error);
-  box-shadow: 0 0 8px 1px var(--status-error);
-}
-
+/* `pulse` : réutilisé par la pilule de statut de run (voir plus bas). */
 @keyframes pulse {
   0%,
   100% {
@@ -154,11 +104,6 @@
   50% {
     opacity: 0.35;
   }
-}
-
-.status-badge__meta {
-  color: var(--text-1);
-  font-size: 0.75rem;
 }
 
 /* ---------- Encart conso ---------- */
@@ -1187,6 +1132,39 @@
   width: min(460px, 100%);
 }
 
+/* T-002 — lien vers le dernier rapport de la tâche `qualite-iaction`. Posé
+   parmi les actions du Journal, en retrait : c'est un raccourci vers la
+   synthèse hebdomadaire, pas une commande de la page. */
+.journal-rapport {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-2);
+}
+
+.journal-rapport:hover {
+  color: var(--neon-cyan);
+}
+
+/* Lecture du rapport : mêmes fondations que `.orch-modal`, en un peu plus
+   étroit (du texte long, pas un formulaire). */
+.rapport-modal {
+  width: min(760px, 100%);
+}
+
+.rapport-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.rapport-modal__head h3 {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  color: var(--text-0);
+  overflow-wrap: break-word;
+}
+
 /* ---------- Backlog de tickets (page Système, tranche TK1) ----------
    Panneau de LECTURE de `docs/tickets.md` (docs/protocol.md § TK1). Réutilise
    volontairement les briques du Journal juste au-dessus — `.journal-counters`,
@@ -1871,6 +1849,12 @@
      étalement négatif, pour ne pas déborder sur les bulles voisines. */
   box-shadow: var(--glow-magenta);
   color: var(--text-0);
+}
+
+/* S3 — demande glissée dans un tour en cours (claude.push) : même bulle
+   utilisateur, liseré cyan à gauche pour la distinguer d'un tour normal. */
+.chat-bubble--injected {
+  border-left: 2px solid var(--neon-cyan);
 }
 
 .chat-bubble--assistant {
@@ -2830,6 +2814,26 @@
   line-height: 1.4;
 }
 
+/* Réponse libre d'une question (« Autre… ») : rattachée visuellement au choix
+   qui l'ouvre, d'où le liseré violet du choix retenu repris à gauche. */
+.ask-question__custom {
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-violet);
+  border-left: 3px solid var(--neon-violet);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-0);
+  font-size: 0.86rem;
+}
+
+.ask-question__custom:focus-visible {
+  outline: none;
+  border-color: var(--neon-cyan);
+  border-left-color: var(--neon-violet);
+}
+
 .ask-question__preview {
   margin: var(--space-1) 0 0;
   padding: var(--space-2);
@@ -3346,7 +3350,119 @@
   padding: 0 var(--space-2);
 }
 
-/* Section « MCP » : liste lecture seule + compteurs d'usage de la session courante. */
+/* Section « MCP » (McpPanel.tsx) : état RÉEL des serveurs au dernier tour,
+   interrupteurs, allowlist d'outils, compteurs d'appels de la conversation. */
+.mcp-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mcp-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 0.72rem;
+  color: var(--text-1);
+}
+
+.mcp-summary__when {
+  color: var(--text-2);
+}
+
+/* Pastille d'état : c'est elle qui distingue « branché » d'« opérationnel ». */
+.mcp-pill {
+  flex: none;
+  font-size: 0.68rem;
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border-1);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.mcp-pill--ok {
+  color: var(--status-ok);
+  border-color: var(--status-ok);
+}
+
+.mcp-pill--warn {
+  color: var(--status-warn);
+  border-color: var(--status-warn);
+}
+
+.mcp-pill--bad {
+  color: var(--status-error);
+  border-color: var(--status-error);
+}
+
+.mcp-item--off {
+  opacity: 0.6;
+}
+
+.mcp-item__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  cursor: pointer;
+}
+
+.mcp-item__warn {
+  font-size: 0.72rem;
+  color: var(--status-error);
+}
+
+.mcp-item__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.mcp-tools {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0 0 0 var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 1px solid var(--border-0);
+}
+
+.mcp-tools__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.mcp-hint {
+  font-size: 0.72rem;
+  color: var(--text-1);
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.mcp-add {
+  align-self: flex-start;
+}
+
+/* Boutons de rang secondaire du panneau (largeur latérale contrainte). */
+.btn--xs {
+  padding: 2px var(--space-2);
+  font-size: 0.7rem;
+}
+
 .mcp-list {
   list-style: none;
   margin: 0;
@@ -4132,10 +4248,17 @@
   z-index: 100;
 }
 
+/* Colonne flex à hauteur bornée : c'est le CORPS qui défile, pas la modale.
+   Avec `overflow-y` sur la modale, les enfants (colonne flex) étaient
+   compressés par `flex-shrink` sous la hauteur de leur contenu : la liste des
+   questions débordait alors PAR-DESSUS le champ « Complément libre » et les
+   boutons (constaté le 2026-08-07 sur un formulaire à 3 questions). D'où
+   `overflow: hidden` ici, `flex: none` sur les parties fixes, et le
+   défilement confié au seul `__body` — les boutons restent toujours visibles. */
 .permission-modal {
   width: min(640px, 100%);
   max-height: 85vh;
-  overflow-y: auto;
+  overflow: hidden;
   background: var(--bg-1);
   border: 1px solid var(--border-magenta);
   border-radius: var(--radius-lg);
@@ -4174,7 +4297,17 @@
 }
 
 .permission-modal__body {
+  flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+}
+
+/* Parties fixes : jamais compressées, donc jamais recouvertes. */
+.permission-modal__head,
+.permission-modal > .field,
+.permission-modal__remember,
+.permission-modal__actions {
+  flex: none;
 }
 
 .permission-modal__remember {
@@ -4831,7 +4964,7 @@
   font-family: var(--font-mono);
 }
 
-/* Pilule de statut de run — mêmes teintes que .status-badge (ok/warn/error). */
+/* Pilule de statut de run — teintes ok/warn/error de --status-*. */
 .orch-run-status {
   font-family: var(--font-mono);
   font-size: 0.7rem;
@@ -5314,6 +5447,14 @@
   box-shadow: var(--glow-cyan);
 }
 
+/* S2 — segment « autonome » (orchestration) DANS la barre d'un projet :
+   même code couleur que l'histogramme (magenta = orchestration). */
+.supervision-projet-bar-autonome {
+  height: 100%;
+  background: var(--neon-magenta);
+  box-shadow: var(--glow-magenta);
+}
+
 .supervision-model-metrics {
   font-family: var(--font-mono);
   font-size: 0.76rem;
@@ -5359,66 +5500,44 @@
   box-shadow: 0 0 6px 1px var(--neon-magenta-dim);
 }
 
+.supervision-legend-dot--ok {
+  background: var(--status-ok);
+  box-shadow: var(--glow-ok);
+}
+
+.supervision-legend-dot--warn {
+  background: var(--status-warn);
+  box-shadow: var(--glow-warn);
+}
+
+.supervision-legend-dot--error {
+  background: var(--status-error);
+  box-shadow: var(--glow-error);
+}
+
+/* Ligne repère « cible 100 % » de l'histogramme hebdomadaire d'abonnement. */
 .supervision-line-ref {
   stroke: var(--border-1);
   stroke-width: 1;
   stroke-dasharray: 4 4;
 }
 
-.supervision-line-path {
-  stroke: var(--neon-cyan);
-  stroke-width: 2;
-  filter: drop-shadow(0 0 4px var(--neon-cyan-dim));
-}
-
-.supervision-line-dot {
-  fill: var(--bg-1);
-  stroke: var(--neon-cyan);
-  stroke-width: 1.5;
-}
-
-.supervision-claude-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: var(--space-3);
-}
-
-.supervision-week-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg-2);
-  border: 1px solid var(--border-0);
-  border-radius: var(--radius-md);
-}
-
-.supervision-week-card__label {
+.supervision-week-axis {
   font-family: var(--font-mono);
-  font-size: 0.74rem;
-  color: var(--text-1);
+  font-size: 11px;
+  fill: var(--text-2);
 }
 
-.supervision-week-card__value {
+/* Valeur au-dessus de la barre : reprend la couleur de la barre (fill inline). */
+.supervision-week-value {
   font-family: var(--font-mono);
-  font-size: 1.1rem;
-  color: var(--text-0);
+  font-size: 15px;
 }
 
-.supervision-badge {
-  align-self: flex-start;
+.supervision-week-label {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
-  border: 1px solid var(--border-1);
-  border-radius: 999px;
-  padding: 2px var(--space-2);
-  color: var(--text-1);
-}
-
-.supervision-badge--saturated {
-  color: var(--status-error);
-  border-color: var(--status-error);
-  box-shadow: var(--glow-error);
+  font-size: 12px;
+  fill: var(--text-1);
 }
 
 /* ---------- Raccourcis clavier (page Configuration) ---------- */

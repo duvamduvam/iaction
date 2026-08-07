@@ -217,6 +217,26 @@ export function useAttachmentDraft() {
   }, [applyAttachments]);
 
   /**
+   * Repose des pièces jointes dans le composeur — utilisé quand un tour ÉCHOUE
+   * après un envoi : le tiroir est vidé dès l'envoi (sinon les vignettes
+   * traînent pendant tout le tour alors qu'elles sont déjà parties), mais un
+   * échec ne doit pas obliger à tout rejoindre. Ne remplace jamais ce que
+   * l'utilisateur a pu ajouter entre-temps : les nouvelles pièces restent
+   * devant, dans la limite habituelle.
+   */
+  const restore = useCallback(
+    (items: DraftAttachment[]) => {
+      if (items.length === 0) return;
+      applyAttachments((prev) => {
+        const known = new Set(prev.map((a) => a.id));
+        const back = items.filter((a) => !known.has(a.id));
+        return [...prev, ...back].slice(0, MAX_ATTACHMENTS);
+      });
+    },
+    [applyAttachments],
+  );
+
+  /**
    * Insère une vignette d'image « en chargement » IMMÉDIATEMENT (retour
    * synchrone d'un id), avant même d'avoir les octets — pour un retour visuel
    * instantané au collage d'une capture (le presse-papier natif, lu ensuite,
@@ -272,7 +292,7 @@ export function useAttachmentDraft() {
     [applyAttachments],
   );
 
-  return { attachments, addFiles, beginImage, resolveImage, removeAttachment, clear, error, setError };
+  return { attachments, addFiles, beginImage, resolveImage, removeAttachment, clear, restore, error, setError };
 }
 
 /* ---------- Conversion vers le contrat sidecar / vers la transcription ---------- */

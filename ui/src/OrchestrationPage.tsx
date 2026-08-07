@@ -37,6 +37,7 @@ import {
   tachesTimerStatus,
   tachesWrite,
   type TacheInfo,
+  type TacheLieu,
   type TacheReportInfo,
   type TacheTimerStatus,
   type TacheWriteInput,
@@ -200,6 +201,10 @@ function tacheYamlPreview(input: TacheWriteInput): string {
   lines.push(`report: ${input.report ? yamlScalar(input.report) : "null"}`);
   lines.push(`enabled: ${input.enabled}`);
   lines.push(`cwd: ${input.cwd ? yamlScalar(input.cwd) : "null"}`);
+  // Reflété même sans contrôle d'interface (l'édition du lieu est la tranche
+  // D3) : l'aperçu doit montrer EXACTEMENT ce qui sera écrit, sans quoi une
+  // tâche `serveur` semblerait repasser en `local` — ou pire, le ferait.
+  lines.push(`lieu: ${input.lieu}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -1518,6 +1523,14 @@ function TacheCard({
           >
             {toggling ? "…" : tache.enabled ? "Armée" : "Désarmée"}
           </button>
+          {/* Lecture seule : l'édition du lieu d'exécution est la tranche D3.
+              Affiché seulement pour `serveur` — `local` est le défaut, le
+              signaler ferait du bruit sur toutes les cartes. */}
+          {tache.lieu === "serveur" && (
+            <span className="orch-badge" title="Exécutée par le conteneur ia-runner (pas par le timer systemd local)">
+              serveur
+            </span>
+          )}
           {tache.invalid && <span className="orch-badge orch-badge--invalid">Invalide</span>}
         </div>
       </div>
@@ -1666,6 +1679,11 @@ function TacheEditor({
   const [report, setReport] = useState(initial?.report ?? "");
   const [enabled, setEnabled] = useState(initial?.enabled ?? false);
   const [cwd, setCwd] = useState(initial?.cwd ?? "");
+  // Lieu d'exécution : NON éditable ici (tranche D3), mais porté par l'état du
+  // formulaire pour survivre à l'aller-retour — `taches.write {tache}`
+  // ré-sérialise le manifeste depuis ce seul objet, donc tout champ non
+  // restitué serait effacé sans un mot (voir TacheLieu dans tachesClient.ts).
+  const [lieu] = useState<TacheLieu>(initial?.lieu ?? "local");
 
   const [activeTab, setActiveTab] = useState<"form" | "yaml" | "reports">(initialTab ?? "form");
   const [yamlText, setYamlText] = useState(initialRaw ?? "");
@@ -1689,6 +1707,7 @@ function TacheEditor({
       report: report.trim() ? report.trim() : null,
       enabled,
       cwd: cwd.trim() ? cwd.trim() : null,
+      lieu,
     };
   }
 
@@ -2035,6 +2054,9 @@ function TachesSection({
         report: tache.report,
         enabled: !tache.enabled,
         cwd: tache.cwd,
+        // Recopié tel quel : armer/désarmer ne déplace pas la tâche (une tâche
+        // serveur reste serveur), et l'omettre la ramènerait en `local`.
+        lieu: tache.lieu,
       };
       await tachesWrite({ tache: input });
       await tachesTimerApply(tache.name);

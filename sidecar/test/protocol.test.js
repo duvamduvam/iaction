@@ -350,6 +350,148 @@ async function testClaudeBackgroundRelease() {
 }
 
 /**
+ * S3 — `claude.push` : une demande glissée dans le tour EN COURS parvient bien
+ * au moteur par l'entrée streamée que claude.start garde ouverte (voir
+ * docs/protocol.md § claude.push). Le faux moteur (fakeClaudePush.mjs) attend
+ * un message SUPPLÉMENTAIRE sur cette entrée et le renvoie en clair : le voir
+ * ressortir dans le flux prouve la traversée de bout en bout.
+ */
+async function testClaudePush() {
+  const fakeClaudePushModule = path.join(__dirname, "fakeClaudePush.mjs");
+  const child8 = spawn(process.execPath, [entry], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      IACTION_FAKE_CLAUDE: "1",
+      IACTION_FAKE_CLAUDE_MODULE: fakeClaudePushModule,
+    },
+  });
+
+  const received8 = [];
+  const waiters8 = [];
+
+  function notifyWaiters8(evt) {
+    for (let i = waiters8.length - 1; i >= 0; i--) {
+      const w = waiters8[i];
+      if (w.predicate(evt)) {
+        clearTimeout(w.timer);
+        waiters8.splice(i, 1);
+        w.resolve(evt);
+      }
+    }
+  }
+
+  function waitFor8(predicate, timeoutMs = 3000, label = "événement") {
+    const existing = received8.find(predicate);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve, reject) => {
+      const w = { predicate, resolve };
+      w.timer = setTimeout(() => {
+        const idx = waiters8.indexOf(w);
+        if (idx >= 0) waiters8.splice(idx, 1);
+        reject(new Error(`timeout en attendant ${label}`));
+      }, timeoutMs);
+      waiters8.push(w);
+    });
+  }
+
+  const stdoutRl8 = createInterface({ input: child8.stdout, crlfDelay: Infinity });
+  stdoutRl8.on("line", (line) => {
+    if (line.trim().length === 0) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      fail(`stdout du sidecar fakeClaudePush a émis une ligne non-JSON: ${line}`);
+      return;
+    }
+    received8.push(parsed);
+    notifyWaiters8(parsed);
+  });
+
+  const stderrChunks8 = [];
+  child8.stderr.on("data", (d) => stderrChunks8.push(d.toString()));
+
+  function send8(obj) {
+    child8.stdin.write(JSON.stringify(obj) + "\n");
+  }
+
+  try {
+    await waitFor8((e) => e.event === "ready", 3000, "ready (sidecar fakeClaudePush)");
+
+    // --- Tour inconnu -> pushed:false (jamais une erreur : l'UI se rabat sur
+    // sa file d'attente plutôt que de perdre le message).
+    send8({ id: "push-unknown", method: "claude.push", params: { targetId: "id-inconnu", content: "coucou" } });
+    const donePushUnknown = await waitFor8(
+      (e) => e.id === "push-unknown" && e.event === "done",
+      3000,
+      "claude.push push-unknown",
+    );
+    assert(
+      donePushUnknown.data.pushed === false,
+      `claude.push sur targetId inconnu doit répondre pushed:false, reçu ${JSON.stringify(donePushUnknown.data)}`,
+    );
+
+    // --- content manquant -> erreur protocolaire (contrairement au tour
+    // inconnu, c'est un appel malformé, pas une course normale).
+    send8({ id: "push-nocontent", method: "claude.push", params: { targetId: "cl-push" } });
+    await waitFor8((e) => e.id === "push-nocontent" && e.event === "error", 3000, "claude.push sans content");
+
+    // --- Demande glissée dans le tour en cours.
+    send8({ id: "cl-push", method: "claude.start", params: { cwd: "/tmp", prompt: "tour initial" } });
+    await waitFor8(
+      (e) => e.id === "cl-push" && e.event === "chunk" && e.data.kind === "init",
+      3000,
+      "claude.start cl-push chunk init",
+    );
+
+    send8({ id: "push-1", method: "claude.push", params: { targetId: "cl-push", content: "et le CHANGELOG" } });
+    const donePush1 = await waitFor8((e) => e.id === "push-1" && e.event === "done", 3000, "claude.push push-1");
+    assert(
+      donePush1.data.pushed === true,
+      `claude.push sur un tour en cours doit répondre pushed:true, reçu ${JSON.stringify(donePush1.data)}`,
+    );
+
+    // Le faux moteur renvoie le message poussé en clair : le voir ici prouve
+    // qu'il a traversé l'entrée streamée du tour DÉJÀ démarré.
+    const textChunk = await waitFor8(
+      (e) => e.id === "cl-push" && e.event === "chunk" && e.data.kind === "text",
+      3000,
+      "texte issu du message poussé",
+    );
+    assert(
+      textChunk.data.delta === "injecté: et le CHANGELOG",
+      `le message poussé doit parvenir au moteur, reçu ${JSON.stringify(textChunk.data)}`,
+    );
+
+    // Le tour reste UN SEUL tour : un unique done, portant le résultat.
+    const donePushTurn = await waitFor8((e) => e.id === "cl-push" && e.event === "done", 3000, "done du tour cl-push");
+    assert(
+      donePushTurn.data.subtype === "success" && donePushTurn.data.result === "injecté: et le CHANGELOG",
+      `le tour doit se clore normalement après injection, reçu ${JSON.stringify(donePushTurn.data)}`,
+    );
+
+    // --- Tour terminé : plus rien à pousser (le run a été retiré).
+    send8({ id: "push-late", method: "claude.push", params: { targetId: "cl-push", content: "trop tard" } });
+    const donePushLate = await waitFor8((e) => e.id === "push-late" && e.event === "done", 3000, "claude.push push-late");
+    assert(
+      donePushLate.data.pushed === false,
+      `claude.push après la fin du tour doit répondre pushed:false, reçu ${JSON.stringify(donePushLate.data)}`,
+    );
+  } catch (err) {
+    if (stderrChunks8.length > 0) {
+      console.error("--- stderr du sidecar fakeClaudePush ---");
+      console.error(stderrChunks8.join(""));
+    }
+    throw err;
+  } finally {
+    if (child8.exitCode === null) {
+      child8.kill();
+    }
+  }
+}
+
+/**
  * Support MCP v1 de claude.start (docs/protocol.md, claude.start § MCP) :
  * lecture de <cwd>/.mcp.json. Isolé dans son propre sous-processus sidecar
  * (fakeClaudeMcp.mjs, qui rapporte ce que valait `options.mcpServers` au
@@ -421,6 +563,7 @@ async function testClaudeMcpConfig() {
   let tmpDirValid = null;
   let tmpDirInvalid = null;
   let tmpDirChatOnly = null;
+  let tmpDirV2 = null;
 
   try {
     await waitFor3((e) => e.event === "ready", 3000, "ready (troisième sidecar)");
@@ -505,6 +648,230 @@ async function testClaudeMcpConfig() {
       Array.isArray(resultC.tools) && resultC.tools.length === 0,
       `mcp-c (chatOnly) doit garder tools:[] (mode chat pur), reçu ${JSON.stringify(resultC.tools)}`,
     );
+
+    // (d) MCP v2 — chunk `init` enrichi + instantané écrit + fiche déposée.
+    // `.iaction/` présent = vrai projet IAction (sans lui, aucune écriture).
+    tmpDirV2 = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-mcp-v2-"));
+    await fsp.mkdir(path.join(tmpDirV2, ".iaction", "connaissances"), { recursive: true });
+    await fsp.writeFile(
+      path.join(tmpDirV2, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          garde: { command: "node", args: ["garde.js"] },
+          eteint: { command: "node", args: ["eteint.js"] },
+          sansSecret: { command: "node", args: ["x.js"], env: { TOKEN: "${SECRET:absent-du-coffre}" } },
+          avecSecret: { command: "node", args: ["y.js"], env: { TOKEN: "${SECRET:mcp-test-token}" } },
+        },
+      }),
+      "utf8",
+    );
+    // Interrupteur local : `eteint` ne doit jamais parvenir au SDK.
+    await fsp.writeFile(
+      path.join(tmpDirV2, ".iaction", "mcp.local.json"),
+      JSON.stringify({ disabled: ["eteint"], allowedTools: {} }),
+      "utf8",
+    );
+    // Coffre de secrets (XDG_CONFIG_HOME du test, voir en-tête de fichier).
+    await fsp.mkdir(path.join(defaultXdgConfigHome, "net.duvam.iaction"), { recursive: true });
+    await fsp.writeFile(
+      path.join(defaultXdgConfigHome, "net.duvam.iaction", "mcp-secrets.json"),
+      JSON.stringify({ "mcp-test-token": "valeur-secrete" }),
+      "utf8",
+    );
+
+    const chunksD = [];
+    send3({ id: "mcp-d", method: "claude.start", params: { cwd: tmpDirV2, prompt: "mcp check d" } });
+    const doneMcpD = await waitFor3(
+      (e) => e.id === "mcp-d" && (e.event === "done" || e.event === "error"),
+      3000,
+      "claude.start mcp-d done",
+    );
+    assert(doneMcpD.event === "done", `mcp-d attendu 'done', reçu '${doneMcpD.event}'`);
+    for (const evt of received3) {
+      if (evt.id === "mcp-d" && evt.event === "chunk") chunksD.push(evt.data);
+    }
+    const initD = chunksD.find((c) => c.kind === "init");
+    assert(initD, "mcp-d doit émettre un chunk init");
+    const namesD = (initD.mcpServers ?? []).map((s) => s.name).sort();
+    assert(
+      namesD.includes("garde") && namesD.includes("avecSecret"),
+      `mcp-d : les serveurs actifs doivent figurer dans l'état constaté, reçu ${JSON.stringify(namesD)}`,
+    );
+    assert(
+      !namesD.includes("eteint") && !namesD.includes("sansSecret"),
+      `mcp-d : un serveur éteint ou sans secret ne doit pas apparaître dans l'état constaté, reçu ${JSON.stringify(namesD)}`,
+    );
+    assert(
+      typeof initD.mcpToolCount === "number" && initD.mcpToolCount === namesD.length * 2,
+      `mcp-d : mcpToolCount attendu ${namesD.length * 2}, reçu ${initD.mcpToolCount}`,
+    );
+    assert(
+      initD.builtinToolCount === 1,
+      `mcp-d : builtinToolCount attendu 1 (Read), reçu ${initD.builtinToolCount}`,
+    );
+
+    const resultD = JSON.parse(doneMcpD.data.result);
+    const sentNames = Object.keys(resultD.mcpServers ?? {});
+    assert(
+      !sentNames.includes("eteint"),
+      `mcp-d : un serveur désactivé dans mcp.local.json ne doit pas être transmis au SDK, reçu ${JSON.stringify(sentNames)}`,
+    );
+    assert(
+      !sentNames.includes("sansSecret"),
+      `mcp-d : un serveur dont le secret est absent du coffre ne doit pas être transmis, reçu ${JSON.stringify(sentNames)}`,
+    );
+    assert(
+      resultD.mcpServers?.avecSecret?.env?.TOKEN === "valeur-secrete",
+      `mcp-d : la référence \${SECRET:...} doit être résolue, reçu ${JSON.stringify(resultD.mcpServers?.avecSecret)}`,
+    );
+
+    // Instantané persisté + fiche des outils déposée dans connaissances/.
+    const runtimeRaw = await fsp.readFile(path.join(tmpDirV2, ".iaction", "mcp.runtime.json"), "utf8");
+    const runtime = JSON.parse(runtimeRaw);
+    assert(
+      Array.isArray(runtime.servers) && runtime.servers.some((s) => s.name === "garde" && s.tools.length === 2),
+      `mcp-d : mcp.runtime.json doit décrire les outils constatés, reçu ${runtimeRaw}`,
+    );
+    const ficheRaw = await fsp.readFile(
+      path.join(tmpDirV2, ".iaction", "connaissances", "iaction-mcp.md"),
+      "utf8",
+    );
+    assert(
+      ficheRaw.includes("mcp__garde__alpha") && ficheRaw.includes("source avant mémoire"),
+      "mcp-d : la fiche iaction-mcp.md doit lister les outils réels et porter la règle « source avant mémoire »",
+    );
+
+    // (e) Allowlist : les outils non retenus partent en disallowedTools au tour
+    // SUIVANT (l'allowlist s'appuie sur les outils constatés au tour précédent).
+    await fsp.writeFile(
+      path.join(tmpDirV2, ".iaction", "mcp.local.json"),
+      JSON.stringify({ disabled: ["eteint"], allowedTools: { garde: ["alpha"] } }),
+      "utf8",
+    );
+    send3({ id: "mcp-e", method: "claude.start", params: { cwd: tmpDirV2, prompt: "mcp check e" } });
+    const doneMcpE = await waitFor3(
+      (e) => e.id === "mcp-e" && (e.event === "done" || e.event === "error"),
+      3000,
+      "claude.start mcp-e done",
+    );
+    assert(doneMcpE.event === "done", `mcp-e attendu 'done', reçu '${doneMcpE.event}'`);
+    const resultE = JSON.parse(doneMcpE.data.result);
+    assert(
+      Array.isArray(resultE.disallowedTools) && resultE.disallowedTools.includes("mcp__garde__beta"),
+      `mcp-e : l'outil hors allowlist doit être retiré du contexte, reçu ${JSON.stringify(resultE.disallowedTools)}`,
+    );
+    assert(
+      !resultE.disallowedTools.includes("mcp__garde__alpha"),
+      `mcp-e : l'outil autorisé doit rester exposé, reçu ${JSON.stringify(resultE.disallowedTools)}`,
+    );
+
+    // (e bis) `mcp: false` (champ du manifeste d'agent) : aucun serveur, même
+    // avec un .mcp.json valide — un agent qui refuse le MCP n'en paie pas le
+    // contexte.
+    send3({
+      id: "mcp-e2",
+      method: "claude.start",
+      params: { cwd: tmpDirV2, prompt: "mcp check e2", mcp: false },
+    });
+    const doneMcpE2 = await waitFor3(
+      (e) => e.id === "mcp-e2" && (e.event === "done" || e.event === "error"),
+      3000,
+      "claude.start mcp-e2 done",
+    );
+    assert(doneMcpE2.event === "done", `mcp-e2 attendu 'done', reçu '${doneMcpE2.event}'`);
+    const resultE2 = JSON.parse(doneMcpE2.data.result);
+    assert(
+      resultE2.hasMcpServers === false,
+      `mcp-e2 : avec mcp:false, aucun serveur ne doit être transmis, reçu ${JSON.stringify(resultE2.mcpServers)}`,
+    );
+
+    // (e ter) T-003 — allowlist `tools:` du manifeste d'agent : elle doit
+    // devenir `options.tools` (base d'outils INTÉGRÉS), et non `allowedTools`
+    // qui ne fait qu'auto-approuver. Les noms MCP en sont écartés : ils
+    // entrent par `mcpServers` et restent disponibles.
+    send3({
+      id: "mcp-e3",
+      method: "claude.start",
+      params: {
+        cwd: tmpDirV2,
+        prompt: "mcp check e3",
+        tools: ["Read", "Grep", "Glob", "mcp__iaction__search_knowledge"],
+      },
+    });
+    const doneMcpE3 = await waitFor3(
+      (e) => e.id === "mcp-e3" && (e.event === "done" || e.event === "error"),
+      3000,
+      "claude.start mcp-e3 done",
+    );
+    assert(doneMcpE3.event === "done", `mcp-e3 attendu 'done', reçu '${doneMcpE3.event}'`);
+    const resultE3 = JSON.parse(doneMcpE3.data.result);
+    assert(
+      Array.isArray(resultE3.tools) && resultE3.tools.join(",") === "Read,Grep,Glob",
+      `mcp-e3 : l'allowlist doit devenir options.tools sans les noms MCP, reçu ${JSON.stringify(resultE3.tools)}`,
+    );
+
+    // (e quater) Sans allowlist, `tools` reste ABSENT : le SDK garde sa
+    // palette complète (comportement historique, aucune régression).
+    send3({ id: "mcp-e4", method: "claude.start", params: { cwd: tmpDirV2, prompt: "mcp check e4" } });
+    const doneMcpE4 = await waitFor3(
+      (e) => e.id === "mcp-e4" && (e.event === "done" || e.event === "error"),
+      3000,
+      "claude.start mcp-e4 done",
+    );
+    assert(doneMcpE4.event === "done", `mcp-e4 attendu 'done', reçu '${doneMcpE4.event}'`);
+    const resultE4 = JSON.parse(doneMcpE4.data.result);
+    assert(
+      resultE4.tools === null,
+      `mcp-e4 : sans allowlist, options.tools ne doit pas être posé, reçu ${JSON.stringify(resultE4.tools)}`,
+    );
+
+    // (f) mcp.status : l'UI voit l'état constaté, les interrupteurs, les
+    // secrets manquants — et JAMAIS la valeur d'un secret.
+    send3({ id: "mcp-f", method: "mcp.status", params: { cwd: tmpDirV2 } });
+    const doneMcpF = await waitFor3(
+      (e) => e.id === "mcp-f" && (e.event === "done" || e.event === "error"),
+      3000,
+      "mcp.status done",
+    );
+    assert(doneMcpF.event === "done", `mcp.status attendu 'done', reçu '${doneMcpF.event}'`);
+    const statusPayload = JSON.stringify(doneMcpF.data);
+    assert(
+      !statusPayload.includes("valeur-secrete"),
+      "mcp.status ne doit JAMAIS renvoyer la valeur d'un secret",
+    );
+    const serversF = doneMcpF.data.servers ?? [];
+    const eteintF = serversF.find((s) => s.name === "eteint");
+    const sansSecretF = serversF.find((s) => s.name === "sansSecret");
+    const gardeF = serversF.find((s) => s.name === "garde");
+    assert(eteintF && eteintF.enabled === false, "mcp.status : le serveur éteint doit être rendu enabled:false");
+    assert(
+      sansSecretF && sansSecretF.missingSecrets.includes("absent-du-coffre"),
+      `mcp.status : le secret manquant doit être signalé, reçu ${JSON.stringify(sansSecretF)}`,
+    );
+    assert(
+      gardeF && gardeF.tools.length === 2 && gardeF.allowedTools?.length === 1,
+      `mcp.status : outils constatés et allowlist attendus pour 'garde', reçu ${JSON.stringify(gardeF)}`,
+    );
+
+    // (g) mcp.setServer : l'écriture des préférences passe par le sidecar.
+    send3({
+      id: "mcp-g",
+      method: "mcp.setServer",
+      params: { cwd: tmpDirV2, name: "garde", enabled: false, allowedTools: null },
+    });
+    const doneMcpG = await waitFor3(
+      (e) => e.id === "mcp-g" && (e.event === "done" || e.event === "error"),
+      3000,
+      "mcp.setServer done",
+    );
+    assert(doneMcpG.event === "done", `mcp.setServer attendu 'done', reçu '${doneMcpG.event}'`);
+    const stateAfter = JSON.parse(
+      await fsp.readFile(path.join(tmpDirV2, ".iaction", "mcp.local.json"), "utf8"),
+    );
+    assert(
+      stateAfter.disabled.includes("garde") && stateAfter.allowedTools.garde === undefined,
+      `mcp.setServer : état local attendu {disabled:[…garde], sans allowlist}, reçu ${JSON.stringify(stateAfter)}`,
+    );
   } catch (err) {
     if (stderrChunks3.length > 0) {
       console.error("--- stderr du troisième sidecar (fakeClaudeMcp) ---");
@@ -518,7 +885,128 @@ async function testClaudeMcpConfig() {
     if (tmpDirValid) await fsp.rm(tmpDirValid, { recursive: true, force: true }).catch(() => {});
     if (tmpDirInvalid) await fsp.rm(tmpDirInvalid, { recursive: true, force: true }).catch(() => {});
     if (tmpDirChatOnly) await fsp.rm(tmpDirChatOnly, { recursive: true, force: true }).catch(() => {});
+    if (tmpDirV2) await fsp.rm(tmpDirV2, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/**
+ * MCP v2 — fonctions PURES de sidecar/src/mcp.ts, testées sans sidecar ni
+ * disque (import direct du module compilé) : lecture des noms d'outils,
+ * instantané d'exécution, références de secrets, préférences locales, rendu
+ * de la fiche déposée dans connaissances/.
+ */
+async function testMcpPure() {
+  const mcpModuleUrl = pathToFileURL(path.join(__dirname, "..", "dist", "mcp.js")).href;
+  const secretsModuleUrl = pathToFileURL(path.join(__dirname, "..", "dist", "mcpSecrets.js")).href;
+  const {
+    splitMcpToolName,
+    groupToolsByServer,
+    buildRuntimeSnapshot,
+    normalizeMcpState,
+    parseMcpConfig,
+    renderMcpDoc,
+    statusNeedsAuth,
+  } = await import(mcpModuleUrl);
+  // Coffre isolé dans son propre module (mcpSecrets.ts) : c'est la brique du
+  // bas, sans dépendance vers le reste du MCP.
+  const { collectSecretRefs, resolveSecretRefs } = await import(secretsModuleUrl);
+
+  // 1. Noms d'outils : `mcp__<serveur>__<outil>`, outil pouvant contenir `__`.
+  assert(
+    JSON.stringify(splitMcpToolName("mcp__iaction__search_knowledge")) ===
+      JSON.stringify({ server: "iaction", tool: "search_knowledge" }),
+    "splitMcpToolName : décomposition serveur/outil attendue",
+  );
+  assert(splitMcpToolName("Read") === null, "splitMcpToolName : un outil intégré n'est pas un outil MCP");
+  assert(splitMcpToolName("mcp__seul") === null, "splitMcpToolName : nom incomplet → null");
+
+  // 2. Répartition par serveur + décompte des outils intégrés.
+  const grouped = groupToolsByServer(["Read", "Bash", "mcp__a__x", "mcp__a__y", "mcp__b__z"]);
+  assert(grouped.builtinToolCount === 2, `groupToolsByServer : 2 outils intégrés attendus, reçu ${grouped.builtinToolCount}`);
+  assert(
+    JSON.stringify(grouped.byServer.a) === JSON.stringify(["x", "y"]) &&
+      JSON.stringify(grouped.byServer.b) === JSON.stringify(["z"]),
+    `groupToolsByServer : répartition inattendue ${JSON.stringify(grouped.byServer)}`,
+  );
+
+  // 3. Instantané : un serveur annoncé SANS outil reste listé (c'est le
+  // symptôme « branché mais inutile »), un serveur outillé non annoncé aussi.
+  const snapshot = buildRuntimeSnapshot(
+    [
+      { name: "muet", status: "connected" },
+      { name: "casse", status: "failed" },
+    ],
+    ["Read", "mcp__muet__none", "mcp__surprise__t"].filter((t) => t !== "mcp__muet__none"),
+    "2026-08-06T10:00:00.000Z",
+  );
+  const muet = snapshot.servers.find((s) => s.name === "muet");
+  const surprise = snapshot.servers.find((s) => s.name === "surprise");
+  assert(muet && muet.tools.length === 0, "buildRuntimeSnapshot : un serveur sans outil doit rester listé");
+  assert(
+    surprise && surprise.tools.length === 1,
+    "buildRuntimeSnapshot : un serveur exposant des outils sans figurer dans mcp_servers doit être listé",
+  );
+  assert(snapshot.builtinToolCount === 1, "buildRuntimeSnapshot : 1 outil intégré attendu");
+
+  // 4. Secrets : collecte récursive, résolution, manquants signalés.
+  const entry = {
+    command: "node",
+    args: ["s.js", "--token=${SECRET:tok}"],
+    env: { A: "${SECRET:tok}", B: "${SECRET:autre}" },
+  };
+  assert(
+    JSON.stringify(collectSecretRefs(entry)) === JSON.stringify(["autre", "tok"]),
+    `collectSecretRefs : références attendues, reçu ${JSON.stringify(collectSecretRefs(entry))}`,
+  );
+  const resolved = resolveSecretRefs(entry, { tok: "T" });
+  assert(
+    resolved.value.env.A === "T" && resolved.value.args[1] === "--token=T",
+    `resolveSecretRefs : substitution attendue, reçu ${JSON.stringify(resolved.value)}`,
+  );
+  assert(
+    JSON.stringify(resolved.missing) === JSON.stringify(["autre"]),
+    `resolveSecretRefs : la référence introuvable doit être signalée, reçu ${JSON.stringify(resolved.missing)}`,
+  );
+  assert(
+    resolved.value.env.B === "${SECRET:autre}",
+    "resolveSecretRefs : une référence introuvable reste littérale (l'appelant écarte le serveur)",
+  );
+
+  // 5. Préférences locales : tolérance à tout, dédoublonnage.
+  const state = normalizeMcpState({ disabled: ["a", "a", 3], allowedTools: { s: ["x", "x"], bad: "non" } });
+  assert(
+    JSON.stringify(state.disabled) === JSON.stringify(["a"]) &&
+      JSON.stringify(state.allowedTools.s) === JSON.stringify(["x"]) &&
+      state.allowedTools.bad === undefined,
+    `normalizeMcpState : normalisation inattendue ${JSON.stringify(state)}`,
+  );
+  assert(
+    JSON.stringify(normalizeMcpState("n'importe quoi")) === JSON.stringify({ disabled: [], allowedTools: {} }),
+    "normalizeMcpState : une valeur aberrante donne un état vide, jamais une exception",
+  );
+
+  // 6. Lecture du .mcp.json : erreur explicite plutôt que silence.
+  assert(parseMcpConfig('{"mcpServers":{"a":{"command":"x"}}}').servers.a.command === "x", "parseMcpConfig : cas nominal");
+  assert(parseMcpConfig("{cassé").error !== null, "parseMcpConfig : JSON invalide → error");
+  assert(parseMcpConfig('{"autre":1}').error !== null, "parseMcpConfig : sans mcpServers → error");
+  assert(parseMcpConfig('{"mcpServers":{"a":"non"}}').error !== null, "parseMcpConfig : entrée non-objet → error");
+
+  // 7. Fiche projet : outils réels + règle « source avant mémoire ».
+  const doc = renderMcpDoc({
+    capturedAt: "2026-08-06T10:00:00.000Z",
+    servers: [
+      { name: "airtable", status: "connected", tools: ["list_records"] },
+      { name: "muet", status: "connected", tools: [] },
+    ],
+    builtinToolCount: 3,
+  });
+  assert(doc.includes("`mcp__airtable__list_records`"), "renderMcpDoc : les outils réels doivent être listés");
+  assert(doc.includes("source avant mémoire"), "renderMcpDoc : la règle doit être écrite noir sur blanc");
+  assert(doc.includes("muet"), "renderMcpDoc : un serveur sans outil doit être signalé comme tel");
+
+  // 8. Détection d'un statut réclamant une authentification.
+  assert(statusNeedsAuth("needs_auth") && statusNeedsAuth("UNAUTHORIZED"), "statusNeedsAuth : statuts d'auth");
+  assert(!statusNeedsAuth("connected"), "statusNeedsAuth : un serveur connecté ne réclame rien");
 }
 
 /**
@@ -1912,6 +2400,12 @@ async function testR3Debord() {
   await fsp.mkdir(usageDir, { recursive: true });
   const windowsFile = path.join(usageDir, "claude-windows.jsonl");
   const eventsFile = path.join(usageDir, "events.jsonl");
+  // S2 — usage.stats lit aussi l'état applicatif (project-conversations.json,
+  // sous XDG_DATA_HOME) : il DOIT être isolé, sinon le test lirait l'état réel
+  // du poste de développement.
+  const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-r3-data-"));
+  const stateDir = path.join(dataDir, "net.duvam.iaction", "state");
+  await fsp.mkdir(stateDir, { recursive: true });
 
   const child7 = spawn(process.execPath, [entry], {
     stdio: ["pipe", "pipe", "pipe"],
@@ -1920,6 +2414,7 @@ async function testR3Debord() {
       IACTION_FAKE_CLAUDE: "1",
       IACTION_FAKE_CLAUDE_MODULE: fakeClaudeModule,
       XDG_CONFIG_HOME: xdgDir,
+      XDG_DATA_HOME: dataDir,
     },
   });
 
@@ -2246,6 +2741,78 @@ async function testR3Debord() {
       doneUsR6rot.data.routage.debordMoisUsd === 2.5,
       `us-r6rot : debordMoisUsd attendu 2.5 (events.jsonl.1 inclus), reçu ${JSON.stringify(doneUsR6rot.data.routage.debordMoisUsd)}`,
     );
+
+    // S2 — agrégat `parProjet` de usage.stats (encart « Usage par projet ») :
+    // attribution par projectId, par projectPath (projet déclaré dans
+    // config.json), pseudo-projet Chat, répertoire inconnu et résidu.
+    await fsp.writeFile(
+      path.join(xdgDir, "net.duvam.iaction", "config.json"),
+      JSON.stringify({
+        projects: [
+          { id: "orgai", name: "OrgAI", path: "/tmp/orgai" },
+          { id: "rdpl", name: "RDPL", path: "/tmp/rdpl/" },
+        ],
+      }),
+      "utf8",
+    );
+    await fsp.writeFile(
+      eventsFile,
+      [
+        // OrgAI : 200 tokens à la main + 100 tokens en orchestration (part autonome).
+        JSON.stringify({ ts: nowIso, engine: "claude", status: "done", source: "projet", projectId: "orgai", promptTokens: 100, completionTokens: 100 }),
+        JSON.stringify({ ts: nowIso, engine: "claude", status: "done", orchRunId: "run-1", orchStepId: "s1", projectPath: "/tmp/orgai", promptTokens: 50, completionTokens: 50 }),
+        // RDPL : rattaché par le répertoire du run (chemin déclaré avec un / final).
+        JSON.stringify({ ts: nowIso, engine: "claude", status: "done", orchRunId: "run-2", orchStepId: "s1", projectPath: "/tmp/rdpl", promptTokens: 200, completionTokens: 100 }),
+        // Chat : pseudo-projet dérivé de source.
+        JSON.stringify({ ts: nowIso, engine: "neutral", status: "done", source: "chat", conversationId: "c-1", promptTokens: 300, completionTokens: 100 }),
+        // Répertoire non déclaré : conservé sous `chemin:<dir>`, pas noyé dans le résidu.
+        JSON.stringify({ ts: nowIso, engine: "claude", status: "done", orchRunId: "run-3", orchStepId: "s1", projectPath: "/tmp/pas-declare", promptTokens: 0, completionTokens: 0 }),
+        // Tour d'avant S2 : rattrapé par son conversationId (state applicatif).
+        JSON.stringify({ ts: nowIso, engine: "claude", status: "done", source: "projet", conversationId: "conv-rdpl", promptTokens: 0, completionTokens: 0 }),
+        // Tour d'avant S2 dont la conversation n'existe plus : reste au résidu.
+        JSON.stringify({ ts: nowIso, engine: "neutral", status: "done", source: "projet", conversationId: "conv-supprimee", promptTokens: 0, completionTokens: 0 }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(stateDir, "project-conversations.json"),
+      JSON.stringify({ rdpl: { sessions: [{ id: "conv-rdpl" }, { id: "conv-rdpl-2" }] } }),
+      "utf8",
+    );
+    send7({ id: "us-s2", method: "usage.stats", params: {} });
+    const doneUsS2 = await waitFor7((e) => e.id === "us-s2" && e.event === "done", 3000, "usage.stats us-s2");
+    const parProjet = doneUsS2.data.parProjet;
+    assert(Array.isArray(parProjet), `us-s2 : parProjet attendu, reçu ${JSON.stringify(doneUsS2.data)}`);
+    const parts = parProjet.map((p) => `${p.projectId}:${p.name}:${p.partTokensPct}`);
+    assert(
+      JSON.stringify(parts) ===
+        JSON.stringify([
+          "chat:Chat:40",
+          "orgai:OrgAI:30",
+          "rdpl:RDPL:30",
+          "chemin:/tmp/pas-declare:pas-declare:0",
+          "null:(non attribué):0",
+        ]),
+      `us-s2 : répartition par projet incorrecte, reçue ${JSON.stringify(parts)}`,
+    );
+    const orgai = parProjet.find((p) => p.projectId === "orgai");
+    assert(
+      orgai.tours === 2 && orgai.totalTokens === 300 && orgai.autonomeTours === 1 && orgai.autonomeTokens === 100 && orgai.autonomePct === 33,
+      `us-s2 : part autonome d'OrgAI incorrecte, reçue ${JSON.stringify(orgai)}`,
+    );
+    const chat = parProjet.find((p) => p.projectId === "chat");
+    assert(
+      chat.autonomeTours === 0 && chat.autonomePct === 0,
+      `us-s2 : le Chat ne doit avoir aucune part autonome, reçu ${JSON.stringify(chat)}`,
+    );
+    // Rattrapage : le tour d'avant S2 rejoint RDPL par son conversationId ;
+    // celui dont la conversation a disparu reste au résidu.
+    const rdpl = parProjet.find((p) => p.projectId === "rdpl");
+    const residu = parProjet.find((p) => p.projectId === null);
+    assert(
+      rdpl.tours === 2 && residu.tours === 1,
+      `us-s2 : rattrapage par conversationId incorrect (RDPL ${JSON.stringify(rdpl)}, résidu ${JSON.stringify(residu)})`,
+    );
   } catch (err) {
     if (stderrChunks7.length > 0) {
       console.error("--- stderr du septième sidecar (R3 débord) ---");
@@ -2257,6 +2824,7 @@ async function testR3Debord() {
       child7.kill();
     }
     await fsp.rm(xdgDir, { recursive: true, force: true }).catch(() => {});
+    await fsp.rm(dataDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -2442,6 +3010,220 @@ async function testContextPure() {
  * chunking (tailles/recouvrement/frontières de lignes) et cosinus + topK,
  * importées depuis le module compilé — même patron que testRouterClassify.
  */
+/**
+ * Recherche dans l'historique du Chat (`chatHistory.ts`, outil MCP
+ * `mcp__iaction__search_chat`) : fonctions pures, testées sur un faux état
+ * applicatif dans un XDG_DATA_HOME temporaire — jamais l'historique réel du
+ * poste (le module lit l'environnement à CHAQUE appel, ce qui rend ce test
+ * possible et le protège d'une fuite de données personnelles).
+ */
+async function testChatHistoryPure() {
+  const moduleUrl = pathToFileURL(path.join(__dirname, "..", "dist", "chatHistory.js")).href;
+  const { searchChatHistory, formatChatSearchResults, sanitizeLimit } = await import(moduleUrl);
+
+  const previousXdgData = process.env.XDG_DATA_HOME;
+  const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-chat-"));
+  process.env.XDG_DATA_HOME = dataDir;
+  try {
+    // 1. Bornes de `limit` (défaut 5, plancher 1, plafond 20).
+    assert(sanitizeLimit(undefined) === 5, "sanitizeLimit : défaut 5");
+    assert(sanitizeLimit(0) === 1 && sanitizeLimit(999) === 20, "sanitizeLimit : bornes 1..20");
+
+    // 2. Fichier absent : message lisible, jamais une exception.
+    const absent = await searchChatHistory("daw", 5);
+    assert(
+      absent.ok === false && absent.message.includes("absent"),
+      `historique absent : message attendu, reçu ${JSON.stringify(absent)}`,
+    );
+
+    const stateDir = path.join(dataDir, "net.duvam.iaction", "state");
+    await fsp.mkdir(stateDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(stateDir, "chat-conversations.json"),
+      JSON.stringify({
+        sessions: [
+          {
+            id: "c1",
+            title: "Musique sous Linux",
+            updatedAt: "2026-08-03T20:00:00.000Z",
+            entries: [
+              { role: "user", content: "quel DAW sur linux ?" },
+              { role: "assistant", content: "Bitwig, Ardour ou Reaper selon le workflow." },
+              { role: "assistant", content: "Le dáw se pilote aussi au clavier." },
+            ],
+          },
+          { id: "c2", title: "Autre sujet", entries: [{ role: "user", content: "rien à voir" }] },
+          // Entrées mal formées : ignorées sans faire échouer la lecture.
+          { id: "c3", title: "Cassée", entries: [{ role: "user" }, 42, null] },
+        ],
+      }),
+      "utf8",
+    );
+
+    // 3. Recherche insensible à la casse ET aux accents (« daw » trouve « DAW » et « dáw »).
+    const found = await searchChatHistory("daw", 5);
+    assert(found.ok === true, `recherche : ok attendu, reçu ${JSON.stringify(found)}`);
+    assert(found.scanned === 3, `recherche : 3 conversations parcourues, reçu ${found.scanned}`);
+    assert(found.hits.length === 1, `recherche : 1 conversation attendue, reçu ${found.hits.length}`);
+    assert(
+      found.hits[0].title === "Musique sous Linux" && found.hits[0].matches === 2,
+      `recherche : conversation/compte incorrects, reçu ${JSON.stringify(found.hits[0])}`,
+    );
+    assert(
+      found.hits[0].excerpts.every((e) => /^\[(user|assistant)\] /.test(e)),
+      `recherche : chaque extrait doit porter son rôle, reçu ${JSON.stringify(found.hits[0].excerpts)}`,
+    );
+
+    // 4. Aucune correspondance : rendu explicite, pas une erreur.
+    const none = await searchChatHistory("zzz-introuvable", 5);
+    assert(none.ok === true && none.hits.length === 0, "recherche sans résultat : ok avec 0 résultat");
+    assert(
+      formatChatSearchResults(none).includes("Aucune conversation"),
+      `rendu sans résultat incorrect : ${formatChatSearchResults(none)}`,
+    );
+
+    // 5. JSON invalide : message lisible (le tour de l'agent doit continuer).
+    await fsp.writeFile(path.join(stateDir, "chat-conversations.json"), "{pas du json", "utf8");
+    const broken = await searchChatHistory("daw", 5);
+    assert(
+      broken.ok === false && broken.message.includes("illisible"),
+      `JSON invalide : message attendu, reçu ${JSON.stringify(broken)}`,
+    );
+  } finally {
+    if (previousXdgData === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previousXdgData;
+    await fsp.rm(dataDir, { recursive: true, force: true }).catch(() => {});
+  }
+  console.log("OK: recherche dans l'historique du Chat (search_chat)");
+}
+
+/**
+ * T1 — champ `lieu` du manifeste `tache.yaml` (docs/protocol.md § « Méthodes
+ * T1 », docs/etude-remote.md § 3 bis). En-process (import direct de
+ * dist/taches.js) : ces handlers ne font que du disque, un sous-processus
+ * sidecar n'apporterait rien. `XDG_CONFIG_HOME` est relu à chaque appel côté
+ * module, donc l'override in-process suffit.
+ *
+ * Le cas capital est l'ALLER-RETOUR par le chemin structuré
+ * (`taches.write {tache}`), qui ré-sérialise le manifeste depuis l'objet
+ * normalisé : c'est là qu'un champ non first-class disparaît en silence, et
+ * avec lui le garde-fou anti-double-déclenchement.
+ */
+async function testTachesLieu() {
+  const tachesModuleUrl = pathToFileURL(path.join(__dirname, "..", "dist", "taches.js")).href;
+  const { handleTachesWrite, handleTachesRead, handleTachesList } = await import(tachesModuleUrl);
+
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  const xdgDir = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-taches-lieu-"));
+  process.env.XDG_CONFIG_HOME = xdgDir;
+
+  // Émetteur jetable : capture l'unique done/error du handler appelé.
+  function callHandler(handler, params) {
+    let captured = null;
+    const emitter = {
+      chunk() {},
+      done(_id, data) {
+        captured = { kind: "done", data };
+      },
+      error(_id, message) {
+        captured = { kind: "error", message };
+      },
+    };
+    return handler("t-lieu", params, emitter).then(() => captured);
+  }
+
+  const tacheDir = (name) => path.join(xdgDir, "net.duvam.iaction", "taches", name);
+
+  try {
+    // 1. `lieu` absent -> défaut "local" (mode raw, manifeste minimal).
+    const w1 = await callHandler(handleTachesWrite, {
+      name: "sans-lieu",
+      raw: "name: sans-lieu\norchestration: veille\n",
+    });
+    assert(w1.kind === "done", `write sans-lieu attendu 'done', reçu ${JSON.stringify(w1)}`);
+    assert(w1.data.tache.lieu === "local", `lieu absent doit valoir 'local', reçu ${JSON.stringify(w1.data.tache.lieu)}`);
+
+    // 2. `lieu: serveur` accepté tel quel.
+    const w2 = await callHandler(handleTachesWrite, {
+      name: "temoin-serveur",
+      raw: "name: temoin-serveur\norchestration: temoin\nlieu: serveur\n",
+    });
+    assert(w2.kind === "done", `write temoin-serveur attendu 'done', reçu ${JSON.stringify(w2)}`);
+    assert(w2.data.tache.lieu === "serveur", `lieu 'serveur' doit être conservé, reçu ${JSON.stringify(w2.data.tache.lieu)}`);
+
+    // 3. Valeurs invalides : REFUSÉES bruyamment, jamais ramenées à 'local'.
+    //    Fautes de frappe plausibles comprises (espace final, anglais, casse).
+    for (const mauvais of ["serveur ", "server", "Serveur", "distant", "42"]) {
+      const wBad = await callHandler(handleTachesWrite, {
+        name: "lieu-invalide",
+        raw: `name: lieu-invalide\norchestration: veille\nlieu: ${JSON.stringify(mauvais)}\n`,
+      });
+      assert(
+        wBad.kind === "error" && wBad.message.includes("'lieu'") && wBad.message.includes(mauvais),
+        `lieu ${JSON.stringify(mauvais)} doit être refusé avec la valeur citée, reçu ${JSON.stringify(wBad)}`,
+      );
+    }
+    // …et rien n'a été écrit sur disque au passage.
+    const ecrit = await fsp
+      .access(path.join(tacheDir("lieu-invalide"), "tache.yaml"))
+      .then(() => true)
+      .catch(() => false);
+    assert(!ecrit, "un manifeste au 'lieu' invalide ne doit pas être écrit");
+
+    // 4. ALLER-RETOUR par le chemin structuré (`params.tache`) — le bug que ce
+    //    test verrouille : le formulaire de l'UI emprunte CE chemin, qui
+    //    ré-sérialise depuis l'objet normalisé.
+    const lu = await callHandler(handleTachesRead, { name: "temoin-serveur" });
+    assert(lu.kind === "done", `read temoin-serveur attendu 'done', reçu ${JSON.stringify(lu)}`);
+    assert(lu.data.tache.lieu === "serveur", `read : lieu 'serveur' attendu, reçu ${JSON.stringify(lu.data.tache.lieu)}`);
+
+    // Ré-écriture façon formulaire : on ne touche QUE la description.
+    const modifie = { ...lu.data.tache, description: "Éditée depuis le formulaire." };
+    delete modifie.path;
+    const w3 = await callHandler(handleTachesWrite, { tache: modifie });
+    assert(w3.kind === "done", `write structuré attendu 'done', reçu ${JSON.stringify(w3)}`);
+    assert(
+      w3.data.tache.lieu === "serveur",
+      `write structuré : lieu 'serveur' doit survivre à la ré-sérialisation, reçu ${JSON.stringify(w3.data.tache.lieu)}`,
+    );
+
+    const relu = await callHandler(handleTachesRead, { name: "temoin-serveur" });
+    assert(
+      relu.kind === "done" && relu.data.tache.lieu === "serveur",
+      `relecture après écriture structurée : 'serveur' attendu, reçu ${JSON.stringify(relu.data?.tache)}`,
+    );
+    assert(
+      /^lieu: serveur$/m.test(relu.data.raw),
+      `le YAML écrit doit porter 'lieu: serveur', reçu:\n${relu.data.raw}`,
+    );
+
+    // 5. taches.list expose aussi le lieu (l'UI en dépend pour son badge).
+    const liste = await callHandler(handleTachesList, {});
+    assert(liste.kind === "done", `list attendu 'done', reçu ${JSON.stringify(liste)}`);
+    const parNom = Object.fromEntries(liste.data.taches.map((t) => [t.name, t]));
+    assert(
+      parNom["temoin-serveur"]?.lieu === "serveur" && parNom["sans-lieu"]?.lieu === "local",
+      `list : lieux incorrects, reçu ${JSON.stringify(liste.data.taches.map((t) => [t.name, t.lieu]))}`,
+    );
+
+    // 6. Manifeste illisible : entrée 'invalid' repliée sur 'local' (jamais
+    //    présentée comme armée côté serveur).
+    await fsp.mkdir(tacheDir("cassee"), { recursive: true });
+    await fsp.writeFile(path.join(tacheDir("cassee"), "tache.yaml"), "name: cassee\nlieu: n'importe quoi\n", "utf8");
+    const liste2 = await callHandler(handleTachesList, {});
+    const cassee = liste2.data.taches.find((t) => t.name === "cassee");
+    assert(
+      cassee && typeof cassee.invalid === "string" && cassee.lieu === "local",
+      `list : entrée invalide attendue avec lieu 'local', reçu ${JSON.stringify(cassee)}`,
+    );
+  } finally {
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousXdg;
+    await fsp.rm(xdgDir, { recursive: true, force: true }).catch(() => {});
+  }
+  console.log("OK: T1 — champ 'lieu' des tâches (défaut, validation, aller-retour)");
+}
+
 async function testKnowledgePure() {
   const knowledgeModuleUrl = pathToFileURL(path.join(__dirname, "..", "dist", "knowledge.js")).href;
   const { chunkText, cosineSimilarity, rankChunks, CHUNK_SIZE, CHUNK_OVERLAP } = await import(knowledgeModuleUrl);
@@ -3777,6 +4559,16 @@ async function main() {
     // R5 — fonctions pures du RAG local (chunking, cosinus + topK).
     await testKnowledgePure();
 
+    // MCP v2 — fonctions pures (état constaté, secrets, préférences, fiche).
+    await testMcpPure();
+
+    // Recherche dans l'historique du Chat (outil MCP search_chat).
+    await testChatHistoryPure();
+
+    // T1 — champ `lieu` du manifeste des tâches (défaut, validation stricte,
+    // et surtout aller-retour par `taches.write {tache}`).
+    await testTachesLieu();
+
     // ---------------------------------------------------------------------
     // R1 — routeur heuristique (docs/spec-r1-routeur.md §5) : cas unitaires
     // de classify (module compilé), puis router.route/router.set en protocole.
@@ -4223,8 +5015,12 @@ async function main() {
     // claude.release + plafond d'attente des tâches de fond (sous-processus dédié).
     await testClaudeBackgroundRelease();
 
-    // Support MCP v1 de claude.start : lecture de <cwd>/.mcp.json (troisième
-    // sous-processus sidecar isolé, voir testClaudeMcpConfig ci-dessus).
+    // S3 : claude.push — demande glissée dans le tour en cours.
+    await testClaudePush();
+
+    // Support MCP de claude.start : lecture de <cwd>/.mcp.json, interrupteurs,
+    // secrets, allowlist et état constaté (troisième sous-processus sidecar
+    // isolé, voir testClaudeMcpConfig ci-dessus).
     await testClaudeMcpConfig();
 
     // Lot O1 : CRUD agents.*/orch.* (quatrième sous-processus sidecar isolé,

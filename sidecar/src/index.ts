@@ -29,6 +29,7 @@ import {
   handleClaudeCommands,
   handleClaudeConfigure,
   handleClaudePermission,
+  handleClaudePush,
   handleClaudeRelease,
   handleClaudeSessionTitles,
   handleClaudeStart,
@@ -40,6 +41,10 @@ import { flushWrites } from "./jsonlStore.js";
 import * as journal from "./journal.js";
 import { handleLogAppend, handleLogPurge, handleLogRead, handleLogStats } from "./logs.js";
 import { handleKnowledgeIndex, handleKnowledgeSearch, handleKnowledgeStatus } from "./knowledge.js";
+import { handleMcpSetServer, handleMcpStatus } from "./mcp.js";
+import { handleMcpAdd, handleMcpCatalog, handleMcpRemove } from "./mcpCatalog.js";
+import { handleMcpSecretDelete, handleMcpSecretSet, handleMcpSecretsList } from "./mcpSecrets.js";
+import { handleProjectEnsureDoc } from "./projectDoc.js";
 import { handleNeutralAbort, handleNeutralPermission, handleNeutralStart } from "./neutralAgent.js";
 import { handleRouterRoute, handleRouterSet } from "./router.js";
 import { handleUsageClaudeHistory, handleUsageStats } from "./usageStats.js";
@@ -200,6 +205,33 @@ async function dispatch(
       case "knowledge.status":
         await handleKnowledgeStatus(id, params, engineEmitter);
         break;
+      case "mcp.status":
+        await handleMcpStatus(id, params, engineEmitter);
+        break;
+      case "mcp.setServer":
+        await handleMcpSetServer(id, params, engineEmitter);
+        break;
+      case "mcp.catalog":
+        await handleMcpCatalog(id, engineEmitter);
+        break;
+      case "mcp.add":
+        await handleMcpAdd(id, params, engineEmitter);
+        break;
+      case "mcp.remove":
+        await handleMcpRemove(id, params, engineEmitter);
+        break;
+      case "mcp.secrets":
+        await handleMcpSecretsList(id, engineEmitter);
+        break;
+      case "mcp.secretSet":
+        await handleMcpSecretSet(id, params, engineEmitter);
+        break;
+      case "mcp.secretDelete":
+        await handleMcpSecretDelete(id, params, engineEmitter);
+        break;
+      case "project.ensureDoc":
+        await handleProjectEnsureDoc(id, params, engineEmitter);
+        break;
       case "claude.configure":
         await handleClaudeConfigure(id, params, engineEmitter);
         break;
@@ -211,6 +243,9 @@ async function dispatch(
         break;
       case "claude.abort":
         await handleClaudeAbort(id, params, engineEmitter);
+        break;
+      case "claude.push":
+        await handleClaudePush(id, params, engineEmitter);
         break;
       case "claude.release":
         await handleClaudeRelease(id, params, engineEmitter);

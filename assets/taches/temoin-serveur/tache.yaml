@@ -1,0 +1,26 @@
+# Manifeste de la tâche « temoin-serveur » — gabarit VERSIONNÉ, non installé.
+# Tranche D1 de docs/etude-remote.md : premier cobaye du conteneur `ia-runner`.
+# Forme du manifeste : docs/protocol.md § « Méthodes T1 — tâches planifiées ».
+#
+# But : valider la CHAÎNE, pas produire de la valeur métier. Un run réussi
+# prouve d'un coup que la synchro descendante a bien déposé le projet sur le
+# serveur, que le jeton d'abonnement Claude fonctionne en headless, que le
+# runner écrit son rapport, et que la synchro montante le ramène jusqu'à
+# l'app. Coût quasi nul (Haiku, une seule étape, ~15 lignes de réponse).
+#
+# Installation : voir le README.md de ce dossier. Livrée DÉSARMÉE.
+name: temoin-serveur
+description: Témoin de bon fonctionnement du conteneur ia-runner — relève l'environnement d'exécution et confirme que le projet a bien été synchronisé. Aucun effet de bord.
+orchestration: temoin-serveur
+# Toutes les heures pendant le rodage de D1, puis à espacer (le témoin n'a
+# d'intérêt que tant qu'on doute de la chaîne). Syntaxe OnCalendar systemd,
+# convertie en cron par plan-cron.mjs côté serveur.
+schedule: "*-*-* *:00:00"
+# Nouveau champ D1 : `local` (défaut) = ignorée par le serveur, `serveur` =
+# exécutée par ia-runner. Garde-fou anti-double-déclenchement (une tâche ne
+# doit JAMAIS être armée à la fois en timer systemd local et côté serveur).
+lieu: serveur
+inputs:
+  date: "{{today}}"
+report: rapports/{{today}}.md
+enabled: false

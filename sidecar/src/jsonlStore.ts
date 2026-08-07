@@ -17,7 +17,6 @@
  */
 
 import { promises as fsp } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -45,11 +44,7 @@ export function errMessage(err: unknown): string {
  * jamais mis en cache (même convention que orchestrator.ts/taches.ts : les
  * tests redéfinissent XDG_CONFIG_HOME et doivent être suivis).
  */
-export function globalConfigRoot(): string {
-  const xdg = process.env.XDG_CONFIG_HOME;
-  const base = isNonEmptyString(xdg) ? xdg : path.join(os.homedir(), ".config");
-  return path.join(base, "net.duvam.iaction");
-}
+export { globalConfigRoot } from "./appPaths.js";
 
 // ---------------------------------------------------------------------------
 // Convention d'id interne `<runId>::<stepId>`

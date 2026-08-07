@@ -18,6 +18,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { readConfig, writeConfig } from "./appConfig";
 import { getProviderKey, readProviders, type ProviderConfig } from "./providerAdmin";
+import { DEFAULT_SEND_KEYWORD } from "./sendKeyword";
 import { request } from "./sidecar";
 
 export type SpeechMode = "local" | "remote";
@@ -107,6 +108,18 @@ export interface SpeechConversationConfig {
   maxUtteranceMs: number;
   /** Lire la réponse de l'assistant à voix haute. */
   autoPlayReply: boolean;
+  /**
+   * Déclencheur de l'envoi en mode conversation : « silence » = chaque phrase
+   * part à la fin du silence qui la clôt ; « keyword » = tout s'accumule dans
+   * le brouillon du composeur, l'envoi n'a lieu que sur le mot-clé
+   * (voir sendKeyword.ts).
+   */
+  sendMode: "silence" | "keyword";
+  /**
+   * Mot-clé d'envoi prononcé en fin de dictée. Vide → défaut (« transmets »,
+   * voir sendKeyword.ts pour la justification du choix).
+   */
+  sendKeyword: string;
 }
 
 export interface SpeechConfig {
@@ -143,6 +156,8 @@ export const DEFAULT_SPEECH_CONFIG: SpeechConfig = {
     silenceMs: 900,
     maxUtteranceMs: 30000,
     autoPlayReply: true,
+    sendMode: "silence",
+    sendKeyword: DEFAULT_SEND_KEYWORD,
   },
 };
 
@@ -328,6 +343,10 @@ function toConversationConfig(raw: unknown): SpeechConversationConfig {
     silenceMs: toBounded(c.silenceMs, d.silenceMs, 200, 5000),
     maxUtteranceMs: toBounded(c.maxUtteranceMs, d.maxUtteranceMs, 2000, 300000),
     autoPlayReply: toBool(c.autoPlayReply, d.autoPlayReply),
+    // Toute valeur autre que « keyword » (champ absent d'une config antérieure
+    // compris) retombe sur le défaut : rétrocompatible, aucune migration.
+    sendMode: c.sendMode === "keyword" ? "keyword" : d.sendMode,
+    sendKeyword: toStr(c.sendKeyword, d.sendKeyword).trim() || d.sendKeyword,
   };
 }
 

@@ -1,0 +1,119 @@
+# Pile `ia-runner` — tranche D1 de docs/etude-remote.md.
+# Cible : VPS OVH `automatisation` (Ubuntu, Docker 28, 24 Go de disque libre).
+#
+# Usage : depuis CE répertoire (le fichier `.env` doit être à côté).
+#   docker compose build
+#   docker compose up -d
+#   docker compose logs -f
+# Mode d'emploi complet : README.md.
+#
+# Rien n'écoute sur le réseau en D1 : aucun port publié. Le récepteur de
+# webhooks (tranche D5) sera la seule surface entrante, et passera par le
+# nginx de l'hôte — pas par une exposition directe.
+
+name: ia-runner
+
+services:
+  ia-runner:
+    build:
+      # Le contexte est la RACINE du dépôt : l'image a besoin du sidecar, du
+      # runner headless et du package-lock.json. Le `.dockerignore` de la
+      # racine écarte node_modules, src-tauri/target, etc.
+      context: ../..
+      dockerfile: docker/ia-runner/Dockerfile
+    image: iaction/ia-runner:0.1.0
+    container_name: ia-runner
+    restart: unless-stopped
+
+    # PID 1 minimal fourni par Docker : réapte les processus zombies laissés
+    # par les runs (sidecar + CLI Claude) et relaie proprement SIGTERM.
+    init: true
+
+    # Secrets et paramètres : fichier `.env` chmod 600, hors dépôt et hors
+    # Nextcloud (décision du grill, étude § 5). Voir .env.example.
+    env_file:
+      - .env
+
+    volumes:
+      # Tout l'état persistant : /data/{taches,projets,etat,home}.
+      # Volume NOMMÉ à dessein — Docker l'initialise avec le contenu et les
+      # droits de /data dans l'image, donc l'utilisateur non-root (10001) peut
+      # y écrire sans intervention. Pour un bind mount (par exemple pour poser
+      # les données sur un autre disque), voir la section « Stockage » du
+      # README : il faut chowner soi-même.
+      - ia-runner-data:/data
+
+    # Garde-fous de ressources. 7,6 Go de RAM sur la machine, partagés avec
+    # Gitea et orgaia : le runner ne doit jamais devenir le voisin bruyant.
+    # L'exécution est de toute façon séquentielle (une tâche à la fois).
+    mem_limit: 3g
+    memswap_limit: 3g
+    cpus: 2.0
+    pids_limit: 512
+
+    # Le conteneur n'a besoin d'aucune capacité privilégiée : il lit/écrit des
+    # fichiers et sort en HTTPS.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # 24 Go de disque libre : des logs Docker non bornés sont un incident qui
+    # attend son heure. 10 Mo × 3 fichiers = 30 Mo au grand maximum.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Laisse à une tâche en cours le temps de s'annuler proprement (le runner
+    # headless intercepte SIGTERM, envoie `orch.abort` et attend le `done`)
+    # sans immobiliser un `docker compose down` pendant 30 minutes.
+    stop_grace_period: 60s
+
+    # D2 — santé du conteneur. À activer quand le heartbeat existera : « le
+    # fichier d'état a-t-il été touché depuis moins de 15 min ? ».
+    # healthcheck:
+    #   test: ["CMD", "node", "-e", "const{statSync}=require('node:fs');process.exit(Date.now()-statSync('/data/etat/heartbeat.json').mtimeMs < 15*60*1000 ? 0 : 1)"]
+    #   interval: 5m
+    #   timeout: 10s
+    #   retries: 2
+    #   start_period: 2m
+
+  # -------------------------------------------------------------------------
+  # D2 — notifications push d'échec (étude § 7 : ntfy AUTO-HÉBERGÉ, aucun
+  # service tiers dans la boucle). L'emplacement est prêt ; à activer avec la
+  # tranche D2, en épinglant alors la version exacte de l'image.
+  #
+  # Le port n'est publié que sur la boucle locale : c'est le nginx de l'hôte
+  # qui exposera ntfy en HTTPS (vhost + certificat Let's Encrypt à créer, même
+  # chantier que `automatisation.example.net` pour les webhooks de D5).
+  # Côté runner, il suffira de renseigner NTFY_URL/NTFY_TOPIC dans le `.env`
+  # (NTFY_URL=http://ntfy:80 en interne, sans passer par l'extérieur).
+  # -------------------------------------------------------------------------
+  # ntfy:
+  #   image: binwiederhier/ntfy:v2
+  #   container_name: ia-runner-ntfy
+  #   command: ["serve"]
+  #   restart: unless-stopped
+  #   environment:
+  #     TZ: ${TZ:-Europe/Paris}
+  #     NTFY_BASE_URL: https://automatisation.example.net
+  #     NTFY_BEHIND_PROXY: "true"
+  #     NTFY_AUTH_FILE: /var/lib/ntfy/user.db
+  #     NTFY_AUTH_DEFAULT_ACCESS: deny-all
+  #     NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+  #   volumes:
+  #     - ntfy-data:/var/lib/ntfy
+  #   ports:
+  #     - "127.0.0.1:8090:80"
+  #   mem_limit: 256m
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+
+volumes:
+  ia-runner-data:
+  # ntfy-data:

@@ -106,6 +106,27 @@ function MarkdownInlineCode({ node, className, children }: Readonly<ComponentPro
   return <code className={className}>{children}</code>;
 }
 
+/**
+ * Referme une fence de code restée ouverte en fin de contenu (cas du
+ * streaming : le ``` fermant n'est pas encore arrivé). Sans ça, tout le texte
+ * qui suit l'ouverture bascule en bloc de code puis « ressort » à l'arrivée de
+ * la fermeture — le rendu saute. Une fermeture doit utiliser le même caractère
+ * (` ou ~) et au moins autant de répétitions que l'ouverture (règle CommonMark).
+ */
+export function closeDanglingFence(content: string): string {
+  let open: { char: string; len: number } | null = null;
+  for (const line of content.split("\n")) {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (!m) continue;
+    const char = m[1][0];
+    const len = m[1].length;
+    if (!open) open = { char, len };
+    else if (char === open.char && len >= open.len) open = null;
+  }
+  if (!open) return content;
+  return content + (content.endsWith("\n") ? "" : "\n") + open.char.repeat(open.len);
+}
+
 const baseComponents: Components = { a: MarkdownLink, table: MarkdownTable };
 const componentsWithFileRef: Components = { ...baseComponents, code: MarkdownInlineCode };
 

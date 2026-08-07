@@ -31,15 +31,17 @@ Deux principes non négociables, écrits dans le prompt de l'agent :
 - **Rapport seul.** L'agent ne modifie jamais `docs/tickets.md`, ni aucun
   fichier : il propose, l'humain attribue les IDs et décide.
 
-> ⚠️ **Ces deux principes reposent aujourd'hui sur le prompt, pas sur le
-> moteur.** L'agent déclare `tools: [Read, Grep, Glob, Bash]`, mais cette
-> allowlist **n'est pas encore appliquée** pour une étape `engine: claude`
-> (voir [T-003](../../../docs/tickets.md)) : la palette complète — Write,
-> Edit comprises — lui est réellement accessible, et une tâche planifiée
-> tourne forcément en `permissionMode: bypassPermissions` (le runner headless
-> n'a personne pour répondre au flux de permission). Autrement dit : un prompt
-> n'est pas une frontière de sécurité. C'est une raison de plus de **roder en
-> rapport seul** et de relire les premiers rapports avant d'armer le timer.
+L'allowlist `tools: [Read, Grep, Glob, Bash]` de l'agent est **appliquée par le
+moteur** depuis le 2026-08-07 ([T-003](../../../docs/tickets.md)) : Write et
+Edit ne lui sont pas exposées, quel que soit le `permissionMode`. C'est ce qui
+tient la « lecture seule », le prompt n'étant pas une frontière de sécurité.
+
+> ⚠️ Bash reste dans la liste (agrégation `grep`/`awk`/`jq` sur du JSONL) — et
+> Bash peut écrire comme sortir sur le réseau. Sur ces deux points, seul le
+> prompt garde : une tâche planifiée tourne forcément en
+> `permissionMode: bypassPermissions` (le runner headless n'a personne pour
+> répondre au flux de permission). Raison de plus pour **roder en rapport
+> seul** et relire les premiers rapports avant d'armer le timer.
 
 ## Installation
 

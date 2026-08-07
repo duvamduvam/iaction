@@ -1906,6 +1906,18 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { combos: [["Entrée"]], action: "Envoyer le message" },
       { combos: [["Maj", "Entrée"]], action: "Saut de ligne" },
       {
+        combos: [["Ctrl", "Z"]],
+        action: "Annuler la dernière modification",
+        note: "Historique propre au composeur, conversation par conversation : la frappe est annulée par petits blocs, et les insertions automatiques (dictée vocale, vidage à l'envoi…) sont annulables aussi.",
+      },
+      {
+        combos: [
+          ["Ctrl", "Maj", "Z"],
+          ["Ctrl", "Y"],
+        ],
+        action: "Rétablir la modification annulée",
+      },
+      {
         combos: [["/"]],
         action: "Ouvrir le menu des commandes",
         note: "En début de ligne, dans le composeur de la page Projets.",
@@ -2451,6 +2463,47 @@ function ConversationNumberField({
         min={min}
         max={max}
         step={step}
+        value={draft}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.currentTarget.blur();
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * Mot-clé d'envoi de la dictée — même UX de validation (blur/Entrée) que les
+ * champs numériques voisins. Une saisie vide est refusée : le champ revient à
+ * la valeur courante, le mot-clé n'est jamais « rien ».
+ */
+function ConversationKeywordField({
+  id,
+  value,
+  onCommit,
+}: Readonly<{ id: string; value: string; onCommit: (value: string) => void }>) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function commit() {
+    const cleaned = draft.trim();
+    if (cleaned && cleaned !== value) onCommit(cleaned);
+    else setDraft(value);
+  }
+
+  return (
+    <div className="field">
+      <label htmlFor={id}>Mot-clé d'envoi</label>
+      <input
+        id={id}
+        type="text"
         value={draft}
         onChange={(e) => setDraft(e.currentTarget.value)}
         onBlur={commit}
@@ -3077,6 +3130,22 @@ function VoiceSection({
             />
             <span>Lire la réponse à voix haute</span>
           </label>
+          <label className="field field--checkbox" htmlFor="voice-conversation-keyword">
+            <input
+              id="voice-conversation-keyword"
+              type="checkbox"
+              checked={config.conversation.sendMode === "keyword"}
+              onChange={(e) =>
+                save({ conversation: { sendMode: e.currentTarget.checked ? "keyword" : "silence" } })
+              }
+            />
+            <span>Envoyer sur mot-clé plutôt qu'à chaque phrase</span>
+          </label>
+          <ConversationKeywordField
+            id="voice-conversation-keyword-word"
+            value={config.conversation.sendKeyword}
+            onCommit={(v) => save({ conversation: { sendKeyword: v } })}
+          />
           <p className="empty-hint voice-form__hint">
             Sensibilité : plus elle est haute, plus la parole est détectée facilement — au risque de
             réagir au bruit ambiant (ventilateur, conversation voisine) et de transcrire pour rien.
@@ -3084,7 +3153,15 @@ function VoiceSection({
             est le temps de blanc qui clôt une phrase : l'augmenter laisse le temps de réfléchir en
             parlant, le diminuer rend l'échange plus vif. La durée maximale d'un segment est un
             garde-fou de coût : au-delà, l'enregistrement est clos d'office, ce qui évite qu'un micro
-            resté ouvert n'envoie une longue plage d'audio à la transcription.
+            resté ouvert n'envoie une longue plage d'audio à la transcription. En mode mot-clé,
+            chaque phrase dictée s'ajoute au brouillon du composeur — visible et modifiable — et
+            rien ne part tant qu'une dictée ne se TERMINE pas par le mot-clé. Le défaut
+            « transmets » est choisi pour être rare en fin de phrase et stable à la transcription
+            (« transmet » et « transmets » sont acceptés) ; les tournures réelles comme « que je te
+            transmets » ne déclenchent pas. Si vous préférez « envoie », ses homophones
+            (« l'envoi », « en voie »…) sont reconnus aussi, mais ce mot courant est plus exposé
+            aux déclenchements imprévus. La dictée ponctuelle 🎤 obéit toujours au mot-clé, que ce
+            réglage soit actif ou non.
           </p>
         </div>
       </section>

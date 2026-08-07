@@ -101,7 +101,8 @@ import { FileEditorView, type OpenFileState } from "./FileEditor";
 import { FileTree } from "./FileTree";
 import { readClipboardImage } from "./clipboardClient";
 import { fsFindByName, fsListDir, fsReadFile, fsWriteFile, type DirEntry } from "./fsClient";
-import { Markdown } from "./Markdown";
+import { closeDanglingFence, Markdown } from "./Markdown";
+import { McpPanel } from "./McpPanel";
 import { readFeatured, splitFeatured } from "./modelCatalog";
 import { agentsList, type AgentInfo, type AgentScope } from "./orchestrationClient";
 import { OllamaPanel } from "./OllamaPanel";
@@ -118,6 +119,7 @@ import {
   claudeCommands,
   claudeSessionTitles,
   claudePermission,
+  claudePush,
   claudeStart,
   isRouteTier,
   knowledgeIndex,
@@ -128,6 +130,7 @@ import {
   neutralStart,
   parseClaudeDone,
   parseNeutralDone,
+  projectEnsureDoc,
   routerRoute,
   toRouteTarget,
   type ChatAttachment,
@@ -146,7 +149,10 @@ import {
 import { mergeRoutingTable, readRoutingDebord, readRoutingTable, ROUTE_TIERS } from "./routerAdmin";
 import { capSessions, deriveTitleFromText, formatRelativeDate, newSessionMeta, sortByRecent } from "./sessionStore";
 import { SidebarSection } from "./SidebarSection";
+import { useComposerLiveDraft } from "./useComposerLiveDraft";
+import { useComposerUndo } from "./useComposerUndo";
 import { useRovingFocus } from "./useRovingFocus";
+import { useStickToBottom } from "./useStickToBottom";
 import { TtsButton, VoiceButtons, VoiceStatus } from "./VoiceControls";
 import {
   DEFAULT_CONVERSATION_SETTINGS,
@@ -191,6 +197,11 @@ interface AgentTurn {
    */
   content?: string;
   displayContent?: string;
+  /**
+   * S3 — demande glissée dans un tour DÉJÀ en cours (claude.push) : sert au
+   * rendu (liseré « en cours de tour »). Absent = tour utilisateur ordinaire.
+   */
+  injected?: boolean;
   /** Nombre de documents de connaissances injectés dans ce tour (0/absent = aucun). */
   injectedKnowledgeCount?: number;
   blocks?: AgentBlock[];
@@ -204,6 +215,22 @@ interface AgentTurn {
    * (chunk `background_wait`) ; la liste vide efface l'encart (tout est fini).
    */
   backgroundTasks?: { count: number; descriptions: string[]; waiting: boolean };
+  /**
+   * Compaction de contexte survenue pendant ce tour (« /compact » manuel ou
+   * compaction auto du CLI) : affichée comme confirmation de fin de travail —
+   * sans elle, un « /compact » se clôturait en « résultat vide du moteur ».
+   * `preTokens` = taille du contexte avant compaction, si connue.
+   */
+  compacted?: { trigger: string; preTokens: number | null };
+  /**
+   * S3 — bulle assistant close parce que le flux a été redirigé vers une bulle
+   * plus récente (message glissé dans le tour en cours) : la réponse CONTINUE
+   * plus bas. Sans cette clôture, la bulle restait « streaming » à vie
+   * (curseur clignotant permanent, et contenu perdu à la persistance qui
+   * filtre les tours en streaming). Le drapeau supprime l'avertissement
+   * « résultat vide » si la bulle a été scindée avant tout contenu.
+   */
+  continued?: boolean;
   /**
    * Pièces jointes du tour utilisateur (voir Attachments.tsx). Uniquement
    * porté par le moteur Claude (voir le contrat, docs/protocol.md — ni
@@ -219,10 +246,17 @@ interface AgentTurn {
   routeReasons?: string[];
 }
 
-let idCounter = 0;
+/**
+ * Ids de tours/blocs : PERSISTÉS avec la session, ils doivent rester uniques
+ * à vie — clés React du fil (`turns.map`) et cibles des patchs de streaming
+ * (`withTurnDone`, `withBlocks`) supposent l'unicité. Un compteur de module
+ * repartirait de zéro à chaque lancement/HMR et un tour neuf reprendrait
+ * l'id d'un tour déjà persisté (constaté le 2026-08-04 : DOM fantôme d'une
+ * ancienne conversation, `doneInfo` recopié dans un vieux tour) — d'où
+ * l'UUID, comme pour les ids de session (sessionStore.ts).
+ */
 function nextId(prefix: string): string {
-  idCounter += 1;
-  return `${prefix}-${idCounter}`;
+  return `${prefix}-${crypto.randomUUID()}`;
 }
 
 // Helpers purs (hors composant), même esprit que withAppendedDelta dans ChatPage.tsx.
@@ -256,15 +290,32 @@ function setToolResult(blocks: AgentBlock[], toolUseId: string, isError: boolean
  * Repli sur l'ancien calcul (cacheRead + in + out de l'usage) seulement pour les
  * tours d'AVANT ce champ (persistés) ou le moteur neutre — imparfait, mais mieux
  * que rien tant qu'un nouveau tour n'a pas rafraîchi la valeur.
+ *
+ * Un total NUL n'est jamais une mesure : c'est le cas d'un tour « /compact »,
+ * qui ne fait aucun appel modèle visible (pas de message `assistant`, donc
+ * `contextTokens` absent) et clôt sur un usage à 0/0. Le prendre pour argent
+ * comptant affichait « Contexte 0 % · 0/200 k » juste après une compaction
+ * (cas réel du 2026-08-07) — un fil vide, alors qu'il porte le résumé.
+ *
+ * Et après une compaction SANS mesure, les tours antérieurs sont périmés (ils
+ * décrivent la fenêtre d'AVANT le résumé) : la taille est alors INCONNUE, on
+ * rend `null` (l'encart disparaît) jusqu'au prochain appel modèle, qui la
+ * remontera. Une compaction automatique en cours de tour, elle, garde sa mesure
+ * post-compaction et sort par la branche du dessus.
  */
 function contextTokens(turns: AgentTurn[]): number | null {
   for (let i = turns.length - 1; i >= 0; i -= 1) {
-    const done = turns[i].doneInfo;
-    if (!done) continue;
-    if (typeof done.contextTokens === "number") return done.contextTokens;
-    if (done.usage) {
-      return (done.usage.cacheReadInputTokens ?? 0) + done.usage.inputTokens + done.usage.outputTokens;
+    const turn = turns[i];
+    const done = turn.doneInfo;
+    if (done) {
+      if (typeof done.contextTokens === "number" && done.contextTokens > 0) return done.contextTokens;
+      if (done.usage) {
+        const total =
+          (done.usage.cacheReadInputTokens ?? 0) + done.usage.inputTokens + done.usage.outputTokens;
+        if (total > 0) return total;
+      }
     }
+    if (turn.compacted) return null;
   }
   return null;
 }
@@ -512,7 +563,10 @@ const AgentTurnView = memo(function AgentTurnView({
     const shown = turn.displayContent ?? turn.content;
     const count = turn.injectedKnowledgeCount ?? 0;
     return (
-      <div className="chat-bubble chat-bubble--user">
+      <div className={`chat-bubble chat-bubble--user${turn.injected ? " chat-bubble--injected" : ""}`}>
+        {/* S3 — demande glissée dans un tour déjà en cours : dite comme telle,
+            sinon on croirait à un tour normal (l'agent n'a pas « redémarré »). */}
+        {turn.injected && <div className="chat-bubble__note">en cours de tour</div>}
         <div className="chat-bubble__content">{shown}</div>
         {turn.attachments && turn.attachments.length > 0 && <SentAttachments items={turn.attachments} />}
         {count > 0 && (
@@ -524,7 +578,16 @@ const AgentTurnView = memo(function AgentTurnView({
     );
   }
 
-  const blocks = turn.blocks ?? [];
+  const rawBlocks = turn.blocks ?? [];
+  // Pendant le streaming, seul le DERNIER bloc texte peut porter une fence de
+  // code encore ouverte (les blocs précédents sont figés) : on la referme pour
+  // le rendu — voir closeDanglingFence (Markdown.tsx), stabilité du parse.
+  const blocks =
+    turn.status === "streaming"
+      ? rawBlocks.map((b, i) =>
+          i === rawBlocks.length - 1 && b.type === "text" ? { ...b, content: closeDanglingFence(b.content) } : b,
+        )
+      : rawBlocks;
   return (
     <div className="chat-bubble chat-bubble--assistant">
       <div className="chat-bubble__content">
@@ -567,9 +630,18 @@ const AgentTurnView = memo(function AgentTurnView({
             {turnSubtypeNotice(turn.doneInfo.subtype)}
           </div>
         )}
+        {/* Compaction de contexte : confirmation explicite — c'est tout le
+            « résultat » d'un /compact, qui ne produit aucun texte par ailleurs. */}
+        {turn.compacted && (
+          <div className="chat-bubble__note">
+            {turn.status === "streaming" ? "Compactage du contexte…" : "Contexte compacté"}
+            {turn.compacted.preTokens !== null && ` (${Math.round(turn.compacted.preTokens / 1000)} k tokens avant)`}
+            {turn.status !== "streaming" && " — la session continue sur l'historique résumé."}
+          </div>
+        )}
         {/* Tour clos sans le moindre contenu : on le DIT, au lieu de laisser une
             bulle vide qui donne l'impression que l'application est bloquée. */}
-        {turn.status === "done" && !hasVisibleContent(blocks) && (
+        {turn.status === "done" && !hasVisibleContent(blocks) && !turn.compacted && !turn.continued && (
           <div className="chat-bubble__note">
             L'agent a terminé sans produire de réponse (résultat vide du moteur). Renvoyez votre message ;
             si cela se reproduit, ouvrez une « Nouvelle session ».
@@ -616,11 +688,25 @@ function permissionTitle(item: PermissionRequestItem): string {
     return `Créer/écraser ${input.file_path}`;
   }
   if (item.toolName === "Bash" || item.toolName === "bash") return "Exécuter une commande";
-  if (item.toolName === "AskUserQuestion") return "Question de l'agent";
+  if (isAskQuestionTool(item.toolName)) return "Question de l'agent";
   return `Autoriser ${item.toolName} ?`;
 }
 
-/* ---------- AskUserQuestion : rendu lisible (au lieu du JSON brut) ---------- */
+/* ---------- Question de l'agent : rendu lisible (au lieu du JSON brut) ---------- */
+
+/**
+ * Outils dont la « demande de permission » est en réalité une QUESTION posée à
+ * l'utilisateur : la modale affiche des choix cliquables et la réponse repart
+ * comme résultat de l'outil (voir sidecar/src/askUser.ts).
+ *
+ * - `mcp__studio__ask_user` : notre outil in-process, le seul en service.
+ * - `AskUserQuestion` : l'outil intégré du CLI, désactivé côté sidecar
+ *   (`disallowedTools`) parce que non adressable via le SDK — gardé ici pour
+ *   qu'un tour venu d'ailleurs reste lisible.
+ */
+function isAskQuestionTool(toolName: string): boolean {
+  return toolName === "mcp__studio__ask_user" || toolName === "AskUserQuestion";
+}
 
 interface AskOption {
   label: string;
@@ -671,6 +757,42 @@ const ANSWER_SEPARATOR = " ; ";
  *  propre choix, sélectionner dans l'une ne touche plus aux autres. */
 type AskAnswers = Record<string, string>;
 
+/**
+ * Réponses libres « Autre », une entrée par question. La CLÉ PRÉSENTE (même
+ * avec une valeur vide) signifie « cette question est en réponse libre » —
+ * distinct de la valeur vide seule, qui ne dirait pas si le champ est ouvert.
+ * Le complément libre global (`note`) répond à côté des questions ; ceci
+ * répond À une question précise, quand aucune suggestion ne convient.
+ */
+type AskCustomAnswers = Record<string, string>;
+
+/**
+ * Réponse effective d'une question : la réponse libre remplace les choix
+ * (question à choix unique) ou s'y ajoute (choix multiple — les suggestions
+ * cochées restent pertinentes, la précision libre les complète).
+ */
+function effectiveAnswer(q: AskQuestion, answers: AskAnswers, customs: AskCustomAnswers): string {
+  const picked = answers[q.question] ?? "";
+  if (!(q.question in customs)) return picked;
+  const custom = customs[q.question].trim();
+  if (!q.multiSelect) return custom;
+  return [picked, custom].filter(Boolean).join(ANSWER_SEPARATOR);
+}
+
+/** Réponses effectives de toutes les questions (choix + réponses libres). */
+function effectiveAnswers(
+  questions: AskQuestion[],
+  answers: AskAnswers,
+  customs: AskCustomAnswers,
+): AskAnswers {
+  const out: AskAnswers = {};
+  for (const q of questions) {
+    const value = effectiveAnswer(q, answers, customs);
+    if (value) out[q.question] = value;
+  }
+  return out;
+}
+
 /** Un choix est « sélectionné » s'il figure dans la réponse de SA question. */
 function isPicked(answerForQuestion: string | undefined, label: string, multiSelect: boolean): boolean {
   if (!answerForQuestion) return false;
@@ -695,11 +817,18 @@ function composeAskMessage(questions: AskQuestion[], answers: AskAnswers): strin
 function AskUserQuestionBody({
   questions,
   answers,
+  customs,
   onPickAnswer,
+  onToggleCustom,
+  onCustomChange,
 }: Readonly<{
   questions: AskQuestion[];
   answers: AskAnswers;
+  customs: AskCustomAnswers;
   onPickAnswer: (question: string, label: string, multiSelect: boolean) => void;
+  /** Ouvre/ferme la réponse libre de CETTE question. */
+  onToggleCustom: (question: string) => void;
+  onCustomChange: (question: string, text: string) => void;
 }>) {
   return (
     <div className="ask-question">
@@ -734,7 +863,49 @@ function AskUserQuestionBody({
                 </li>
               );
             })}
+            {/* Échappatoire systématique : aucune suggestion ne convient
+                toujours, et terminer le tour pour cause de choix inadapté
+                coûte plus cher que d'écrire la réponse ici. */}
+            <li>
+              {(() => {
+                const open = q.question in customs;
+                return (
+                  <button
+                    type="button"
+                    className={`ask-question__option${open ? " ask-question__option--picked" : ""}`}
+                    aria-pressed={open}
+                    onClick={() => onToggleCustom(q.question)}
+                    title={open ? "Abandonner la réponse libre" : "Répondre autre chose"}
+                  >
+                    <span className="ask-question__label">
+                      <span className="ask-question__check" aria-hidden="true">
+                        {open ? "✓" : ""}
+                      </span>
+                      Autre…
+                    </span>
+                    <span className="ask-question__desc">
+                      {q.multiSelect
+                        ? "Ajouter une réponse à vous, en plus des choix cochés"
+                        : "Aucune suggestion ne convient : écrire la réponse"}
+                    </span>
+                  </button>
+                );
+              })()}
+            </li>
           </ul>
+          {q.question in customs && (
+            <input
+              type="text"
+              className="ask-question__custom"
+              value={customs[q.question]}
+              onChange={(e) => onCustomChange(q.question, e.currentTarget.value)}
+              placeholder="Votre réponse…"
+              aria-label={`Réponse libre — ${q.header || q.question}`}
+              // Le champ vient d'apparaître sur un clic explicite : y placer le
+              // curseur évite un second clic.
+              autoFocus
+            />
+          )}
         </div>
       ))}
     </div>
@@ -744,19 +915,34 @@ function AskUserQuestionBody({
 function PermissionBody({
   item,
   answers,
+  customs,
   onPickAnswer,
+  onToggleCustom,
+  onCustomChange,
 }: Readonly<{
   item: PermissionRequestItem;
   answers: AskAnswers;
+  customs: AskCustomAnswers;
   onPickAnswer: (question: string, label: string, multiSelect: boolean) => void;
+  onToggleCustom: (question: string) => void;
+  onCustomChange: (question: string, text: string) => void;
 }>) {
   const input = asRecord(item.toolInput);
 
-  if (item.toolName === "AskUserQuestion") {
+  if (isAskQuestionTool(item.toolName)) {
     const questions = parseAskQuestions(item.toolInput);
     // Forme inattendue : on retombe sur le JSON plutôt que d'afficher un vide.
     if (questions.length > 0) {
-      return <AskUserQuestionBody questions={questions} answers={answers} onPickAnswer={onPickAnswer} />;
+      return (
+        <AskUserQuestionBody
+          questions={questions}
+          answers={answers}
+          customs={customs}
+          onPickAnswer={onPickAnswer}
+          onToggleCustom={onToggleCustom}
+          onCustomChange={onCustomChange}
+        />
+      );
     }
   }
   if (item.toolName === "Edit" || item.toolName === "edit_file") {
@@ -789,21 +975,54 @@ function PermissionModal({
 }>) {
   const [reason, setReason] = useState("");
   const [answers, setAnswers] = useState<AskAnswers>({});
+  const [customs, setCustoms] = useState<AskCustomAnswers>({});
   const [note, setNote] = useState("");
   const [rememberTool, setRememberTool] = useState(false);
-  const isAskQuestion = item.toolName === "AskUserQuestion";
+  const isAskQuestion = isAskQuestionTool(item.toolName);
   const askQuestions = isAskQuestion ? parseAskQuestions(item.toolInput) : [];
 
   // Nouvelle demande affichée : on repart d'un état vierge.
   useEffect(() => {
     setReason("");
     setAnswers({});
+    setCustoms({});
     setNote("");
     setRememberTool(false);
   }, [item.permissionId]);
 
+  /** Ouvre/ferme la réponse libre d'une question. À l'ouverture, en choix
+      unique, le choix suggéré est abandonné : les deux se contrediraient. */
+  function handleToggleCustom(question: string) {
+    const q = askQuestions.find((x) => x.question === question);
+    setCustoms((prev) => {
+      if (question in prev) {
+        const { [question]: _removed, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [question]: "" };
+    });
+    if (q && !q.multiSelect && !(question in customs)) {
+      setAnswers((prev) => {
+        const { [question]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }
+  }
+
+  function handleCustomChange(question: string, text: string) {
+    setCustoms((prev) => ({ ...prev, [question]: text }));
+  }
+
   /** Choix cliqué : remplace la réponse de SA question (choix unique) ou l'y bascule (choix multiple). */
   function handlePickAnswer(question: string, label: string, multiSelect: boolean) {
+    // Choix unique : cliquer une suggestion ferme la réponse libre ouverte —
+    // sinon la modale afficherait deux réponses contradictoires cochées.
+    if (!multiSelect && question in customs) {
+      setCustoms((prev) => {
+        const { [question]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }
     setAnswers((prev) => {
       const current = prev[question];
       if (!multiSelect) {
@@ -828,11 +1047,17 @@ function PermissionModal({
 
   // Message final : réponses composées (une par question) + complément libre
   // éventuel. Hors question (demande de permission), c'est la raison du refus.
-  const composed = composeAskMessage(askQuestions, answers);
+  // Réponses effectives = choix cochés + réponses libres « Autre » (voir
+  // effectiveAnswers) : c'est ce qui part à l'agent ET ce qui compte comme
+  // « répondu », une réponse libre valant une réponse.
+  const finalAnswers = effectiveAnswers(askQuestions, answers, customs);
+  const composed = composeAskMessage(askQuestions, finalAnswers);
   const askMessage = [composed, note.trim()].filter(Boolean).join("\n");
   const decisionMessage = isAskQuestion ? askMessage : reason;
   // Toutes les questions ont-elles reçu une réponse ? (garde-fou avant envoi.)
-  const allAnswered = askQuestions.every((q) => Boolean(answers[q.question]));
+  // Un « Autre… » ouvert mais laissé vide ne compte pas : la question reste
+  // sans réponse, et le bouton d'envoi reste bloqué.
+  const allAnswered = askQuestions.every((q) => Boolean(finalAnswers[q.question]));
 
   return (
     <div className="permission-overlay">
@@ -842,7 +1067,14 @@ function PermissionModal({
           {extraCount > 0 && <span className="permission-modal__badge">+{extraCount} en attente</span>}
         </div>
         <div className="permission-modal__body">
-          <PermissionBody item={item} answers={answers} onPickAnswer={handlePickAnswer} />
+          <PermissionBody
+            item={item}
+            answers={answers}
+            customs={customs}
+            onPickAnswer={handlePickAnswer}
+            onToggleCustom={handleToggleCustom}
+            onCustomChange={handleCustomChange}
+          />
         </div>
         {isAskQuestion ? (
           <div className="field">
@@ -1378,17 +1610,61 @@ function withSessionsRoutingRepair(value: unknown): unknown {
  * dernier. Les champs d'affinité de routage sont RÉPARÉS avant validation
  * (voir `withRoutingRepair`) : jamais une invalidation d'entrée pour eux.
  */
+/**
+ * Réattribue un id frais à tout tour (et bloc) dont l'id est déjà porté par un
+ * tour vu AVANT lui — dans la même session ou dans n'importe quelle autre :
+ * `seenTurns`/`seenBlocks` sont PARTAGÉS sur tout le document, car les
+ * doublons constatés (2026-08-04 : 122 ids partagés entre sessions de rdpl,
+ * `u-1`/`a-2` dans presque chaque conversation) sont inter-sessions — le
+ * compteur d'ids repartait de zéro à chaque lancement. Or le fil rend toutes
+ * les conversations dans le MÊME composant : au changement d'onglet, React
+ * réconcilie par clé, et deux tours de conversations différentes portant la
+ * même clé se font « réutiliser » — c'est le fantôme d'une ancienne
+ * conversation dans un onglet neuf. On répare à la lecture, une fois pour
+ * toutes (la prochaine sauvegarde persiste les ids corrigés).
+ */
+function dedupeTurnIds(turns: AgentTurn[], seenTurns: Set<string>, seenBlocks: Set<string>): AgentTurn[] {
+  return turns.map((t) => {
+    let turn = seenTurns.has(t.id) ? { ...t, id: nextId(t.role === "user" ? "u" : "a") } : t;
+    seenTurns.add(turn.id);
+    if (turn.blocks) {
+      turn = {
+        ...turn,
+        blocks: turn.blocks.map((b) => {
+          const block = seenBlocks.has(b.id) ? { ...b, id: nextId("blk") } : b;
+          seenBlocks.add(block.id);
+          return block;
+        }),
+      };
+    }
+    return turn;
+  });
+}
+
+/** Applique `dedupeTurnIds` aux sessions d'une entrée, avec les « déjà vus » du document entier. */
+function withDedupedTurnIds(
+  entry: PersistedProjectEntry,
+  seenTurns: Set<string>,
+  seenBlocks: Set<string>,
+): PersistedProjectEntry {
+  return { ...entry, sessions: entry.sessions.map((s) => ({ ...s, turns: dedupeTurnIds(s.turns, seenTurns, seenBlocks) })) };
+}
+
 function sanitizePersistedConversations(raw: unknown): PersistedConversations {
   if (typeof raw !== "object" || raw === null) return {};
   const out: PersistedConversations = {};
+  // Unicité GLOBALE des ids de tours/blocs — voir dedupeTurnIds : les
+  // collisions à réparer sont inter-sessions et inter-projets.
+  const seenTurns = new Set<string>();
+  const seenBlocks = new Set<string>();
   for (const [id, rawValue] of Object.entries(raw as Record<string, unknown>)) {
     const value = withSessionsRoutingRepair(rawValue);
     if (isPersistedProjectEntry(value)) {
-      out[id] = value;
+      out[id] = withDedupedTurnIds(value, seenTurns, seenBlocks);
     } else if (isOldMultiSessionEntry(value)) {
-      out[id] = migrateOldMultiSessionEntry(value);
+      out[id] = withDedupedTurnIds(migrateOldMultiSessionEntry(value), seenTurns, seenBlocks);
     } else if (isLegacyPersistedProjectState(value)) {
-      out[id] = migrateLegacyProjectState(value);
+      out[id] = withDedupedTurnIds(migrateLegacyProjectState(value), seenTurns, seenBlocks);
     }
   }
   return out;
@@ -1641,36 +1917,6 @@ async function buildKnowledgeBlock(docs: PinnedDoc[], root: string): Promise<str
   return `Documents de connaissances du projet :\n\n${sections.join("\n")}\n\n---\n\n`;
 }
 
-/* ---------- MCP (lecture seule .mcp.json + compteurs d'usage) ---------- */
-
-interface McpServerInfo {
-  name: string;
-  kind: "stdio" | "http" | "sse";
-  detail: string;
-}
-
-function truncateDetail(text: string, max = 80): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-
-/** Format attendu : `{ mcpServers: { <nom>: { command } | { type, url } } }` — voir docs/protocol.md. */
-function parseMcpConfig(raw: string): McpServerInfo[] {
-  try {
-    const data = JSON.parse(raw) as { mcpServers?: unknown };
-    const servers = asRecord(data.mcpServers);
-    return Object.entries(servers).map(([name, value]) => {
-      const v = asRecord(value);
-      if (typeof v.command === "string") {
-        return { name, kind: "stdio" as const, detail: truncateDetail(v.command) };
-      }
-      const kind = v.type === "sse" ? ("sse" as const) : ("http" as const);
-      return { name, kind, detail: truncateDetail(typeof v.url === "string" ? v.url : "") };
-    });
-  } catch {
-    return [];
-  }
-}
-
 /* ---------- Page ---------- */
 
 interface AgentPageProps {
@@ -1735,7 +1981,20 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   }: Readonly<AgentPageProps>,
   ref,
 ) {
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectIdState] = useState<string | null>(null);
+  /*
+   * Miroir SYNCHRONE (même patron que `sessionsRef`) : la fin d'un tour
+   * d'ARRIÈRE-PLAN lit ce ref pour savoir si le projet affiché est encore
+   * celui qui a lancé le tour. Sans lui, la sauvegarde de fin de tour
+   * combinait le `selectedProjectId` capturé à l'envoi (ancien projet) avec
+   * les sessions lues par refs (nouveau projet) — et écrivait les sessions du
+   * nouveau projet sous la clé de l'ancien. Voir la garde de `handleSend`.
+   */
+  const selectedProjectIdRef = useRef<string | null>(null);
+  function setSelectedProjectId(next: string | null) {
+    selectedProjectIdRef.current = next;
+    setSelectedProjectIdState(next);
+  }
   // Sauvegarde de la dernière conversation vidée (Ctrl+K) + bandeau d'annulation.
   // `convId` identifie LA conversation vidée : « Annuler » restaure dans
   // celle-là précisément — jamais dans la conversation active du moment, qui a
@@ -1750,6 +2009,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     routedTarget: RouteTarget | null;
   } | null>(null);
   const [clearedNotice, setClearedNotice] = useState(false);
+  /**
+   * S3 — injecteurs des tours Claude en cours, par conversation : posés par
+   * `handleSend` au démarrage du tour, retirés à sa fin. Leur présence EST le
+   * signal qu'une demande peut être glissée dans le tour (voir claude.push).
+   */
+  const injectorsRef = useRef<Map<string, (text: string) => void>>(new Map());
   // Dernier projet ouvert, relu du disque au démarrage. `lastProjectLoaded`
   // sert de garde : tant que la lecture n'a pas abouti, on ne sélectionne rien.
   const lastProjectIdRef = useRef<string | null>(null);
@@ -1924,10 +2189,20 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   const mcpUsage = activeRuntime.mcpUsage;
   // R3 — bandeau de débord de la conversation ACTIVE (voir DebordNotice).
   const debordNotice = activeRuntime.debordNotice;
+  /**
+   * S3 — une demande peut-elle être glissée dans le tour en cours ? Moteur
+   * Claude uniquement : le moteur neutre n'a pas d'entrée streamée à alimenter,
+   * et le Chat en mode pur n'appelle aucun outil (aucun point d'injection).
+   */
+  const canInject = activeRuntime.activeEngine === "claude" && activeRuntime.activeRequestId !== null;
 
   /** Brouillon : toujours celui de la conversation ACTIVE — seule celle-ci a un composeur affiché. */
   function setDraft(value: string) {
     if (activeSessionId) updateRuntime(activeSessionId, (r) => ({ ...r, draft: value }));
+  }
+  /** Brouillon VIF de la conversation active (le runtime, jamais la valeur de rendu — voir useComposerLiveDraft.ts). */
+  function getLiveDraft(): string {
+    return activeSessionId ? getRuntime(activeSessionId).draft : "";
   }
   /** File d'attente de la conversation ACTIVE : retire le message à l'index donné (pastille d'annulation). */
   function removeQueuedPrompt(index: number) {
@@ -1952,6 +2227,21 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     start: 0,
     selected: 0,
   });
+  // Frappe fluide : écriture silencieuse dans le runtime + re-rendu de
+  // rattrapage débouncé, au lieu d'un re-rendu de page par caractère. Déclaré
+  // AVANT l'effet de curseur ci-dessous : la valeur doit être poussée dans le
+  // DOM avant qu'on y pose `setSelectionRange`.
+  const { onComposerChange, onComposerBlur } = useComposerLiveDraft({
+    textareaRef,
+    draft,
+    writeDraft: (value) => {
+      if (activeSessionId) runtimesRef.current.set(activeSessionId, { ...getRuntime(activeSessionId), draft: value });
+    },
+    tick: () => setRuntimeTick((t) => t + 1),
+  });
+  // Ctrl+Z/Ctrl+Maj+Z dans le composeur : pile d'annulation maison, le natif
+  // étant cassé par les écritures programmatiques du brouillon (voir useComposerUndo.ts).
+  const { handleUndoKey } = useComposerUndo(activeSessionId, getLiveDraft, setDraft);
   // Applique une position de curseur en attente APRÈS que React a commité la
   // nouvelle valeur du textarea (voir `applySlashCommand`) — poser
   // `setSelectionRange` avant le commit viserait encore l'ancienne valeur.
@@ -1977,10 +2267,21 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // `neutral.start` — le composeur les désactive donc tant que le moteur
   // neutre est actif pour la session (voir `attachmentsSupported`), et les
   // purge à chaque bascule de moteur/session/projet pour ne jamais en garder
-  // en attente pour le mauvais moteur. Purgées après un envoi réussi
-  // seulement (voir `handleSend`) : conservées si l'envoi échoue.
-  const { attachments, addFiles, beginImage, resolveImage, removeAttachment, clear: clearAttachments, error: attachmentsError, setError: setAttachmentsError } =
-    useAttachmentDraft();
+  // en attente pour le mauvais moteur. Purgées DÈS L'ENVOI (voir `handleSend`)
+  // — elles sont déjà parties et figurent dans le tour affiché ; les laisser
+  // dans le tiroir pendant tout le tour laissait croire qu'elles n'étaient pas
+  // encore envoyées. Reposées telles quelles si le tour échoue (`restore`).
+  const {
+    attachments,
+    addFiles,
+    beginImage,
+    resolveImage,
+    removeAttachment,
+    clear: clearAttachments,
+    restore: restoreAttachments,
+    error: attachmentsError,
+    setError: setAttachmentsError,
+  } = useAttachmentDraft();
   const [composerDragOver, setComposerDragOver] = useState(false);
   // R2 — en mode « Auto (routeur) », le moteur réel n'est connu qu'après
   // routage (possiblement neutre, qui ne supporte pas les pièces jointes) :
@@ -2094,10 +2395,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     });
   }
 
-  // MCP (v1 lecture seule) : état déclaré ici, chargé un peu plus bas
-  // (l'effet a besoin de `cwd`, calculé après — voir juste après sa
-  // déclaration ci-dessous).
-  const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([]);
+  // MCP : le panneau (McpPanel.tsx) interroge `mcp.status` lui-même — la page
+  // ne garde que le compteur du badge et un jeton de rafraîchissement, bumpé
+  // au chunk `init` de chaque tour (l'état constaté vient d'être réécrit).
+  const [mcpServerCount, setMcpServerCount] = useState(0);
+  const [mcpReloadToken, setMcpReloadToken] = useState(0);
 
   // Les compteurs d'appels par serveur MCP sont PAR CONVERSATION (portés par
   // `ConvRuntime.mcpUsage`, incrémentés dans le `onToolUse` de `handleSend`) :
@@ -2157,8 +2459,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     }
   }, [engineProviderId, permissionMode]);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const stickToBottomRef = useRef(true);
+  // Recollage en bas du fil : voir useStickToBottom.ts (logique partagée avec
+  // ChatPage — l'intention de l'utilisateur prime sur la position).
+  const { scrollRef, scrollProps, collerEnBas } = useStickToBottom(turns);
 
   // Miroirs toujours à jour de l'état affiché, pour la sauvegarde immédiate
   // en fin de tour (`handleSend`) : à ce moment-là, l'état React capturé à
@@ -2184,27 +2487,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
   const cwd = selectedProject?.path ?? "";
 
-  // MCP (v1 lecture seule) : liste des serveurs déclarés dans `.mcp.json` à
-  // la racine du projet courant, rechargée à chaque changement de `cwd`.
-  // Fichier absent/JSON invalide → liste vide (voir le rendu de la section,
-  // qui affiche alors l'état « aucun serveur déclaré »).
-  useEffect(() => {
-    setMcpServers([]);
-    if (!cwd) return;
-    let cancelled = false;
-    fsReadFile(`${cwd}/.mcp.json`)
-      .then((fc) => {
-        if (cancelled || fc.kind !== "text") return;
-        setMcpServers(parseMcpConfig(fc.text ?? ""));
-      })
-      .catch(() => {
-        // fichier absent/illisible : aucun serveur déclaré, état par défaut déjà posé ci-dessus
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [cwd]);
-
   // Connaissances AUTOMATIQUES (piste 1 « flexibilité », docs/plan.md) :
   // tout fichier posé dans `.iaction/connaissances/` (pas de récursion,
   // fichiers seulement) rejoint les épinglées comme connaissance injectée au
@@ -2213,11 +2495,32 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // illisible → liste vide, jamais d'erreur affichée (même esprit que la
   // lecture de `.mcp.json` ci-dessus).
   const [autoKnowledgeFiles, setAutoKnowledgeFiles] = useState<DirEntry[]>([]);
+  /**
+   * Relit la liste quand elle a pu changer sous nos pieds : le sidecar dépose
+   * `iaction.md` (guide d'intégration) et un tour peut écrire dans
+   * `connaissances/`. Sans cette relecture, un projet neuf gardait une liste
+   * vide toute la session — ni affichage, ni injection (constaté le
+   * 2026-08-03). Bumpé après `knowledge.status` et en fin de tour.
+   */
+  const [autoKnowledgeTick, setAutoKnowledgeTick] = useState(0);
+  const autoKnowledgeCwdRef = useRef<string>("");
   useEffect(() => {
-    setAutoKnowledgeFiles([]);
+    // Vidage réservé au CHANGEMENT DE PROJET : sur une simple relecture, garder
+    // la liste courante — la vider ouvrirait une fenêtre où un tour parti à cet
+    // instant n'injecterait aucune connaissance.
+    if (autoKnowledgeCwdRef.current !== cwd) {
+      autoKnowledgeCwdRef.current = cwd;
+      setAutoKnowledgeFiles([]);
+    }
     if (!cwd) return;
     let cancelled = false;
-    fsListDir(`${cwd}/.iaction/connaissances`)
+    // Dépôt du guide d'intégration AVANT le scan (best effort) : c'est ce qui
+    // garantit qu'un projet neuf a sa connaissance dès le premier tour. Un
+    // échec (sidecar pas prêt, projet en lecture seule) ne doit rien empêcher :
+    // on scanne quand même.
+    projectEnsureDoc(cwd)
+      .catch(() => {})
+      .then(() => fsListDir(`${cwd}/.iaction/connaissances`))
       .then((entries) => {
         if (!cancelled) setAutoKnowledgeFiles(entries.filter((e) => !e.isDir));
       })
@@ -2227,7 +2530,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     return () => {
       cancelled = true;
     };
-  }, [cwd]);
+  }, [cwd, autoKnowledgeTick]);
 
   // Mémoire Claude Code détectée (`.claude/memory/*.md`, groupe « Détectées »
   // du panneau, aux côtés de CLAUDE.md — voir `projectBadges.claudeMdPath`
@@ -2459,19 +2762,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     claudeCode: projectAgents.filter((a) => a.scope === "claude-code"),
   };
 
-  useEffect(() => {
-    if (stickToBottomRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [turns]);
-
-  function handleScroll() {
-    const el = scrollRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceFromBottom < 48;
-  }
-
   /** Écrit l'entrée `id` dans le document persisté complet (best effort, no-op tant que non hydraté). */
   function persistProject(id: string, liveSessions: ProjectSession[], activeId?: string) {
     // Tant que l'hydratation initiale n'a pas eu lieu, `persistedConversationsRef`
@@ -2496,6 +2786,44 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       // best effort : une écriture ratée ne bloque pas l'UI, la prochaine
       // sauvegarde (debounce ou fin de tour suivant) retentera.
     });
+  }
+
+  /**
+   * Fin d'un tour dont le PROJET n'est plus affiché (l'utilisateur a basculé
+   * pendant un streaming d'arrière-plan) : reporte le runtime de la
+   * conversation dans l'état mémorisé du projet d'ORIGINE (Map en mémoire +
+   * document persisté), sans rien reconstruire depuis les refs — elles
+   * décrivent le projet AFFICHÉ, et les combiner avec la clé de l'ancien
+   * écrivait les sessions d'un projet sous la clé d'un autre.
+   */
+  function persistBackgroundConversation(projectId: string, convId: string) {
+    const stored = projectStatesRef.current.get(projectId);
+    const runtime = runtimesRef.current.get(convId);
+    if (!stored || !runtime) return;
+    const sessions = stored.sessions.map((s) =>
+      s.id === convId
+        ? {
+            ...s,
+            turns: runtime.turns,
+            sessionId: runtime.sessionId,
+            routedTier: runtime.routedTier,
+            routedTarget: runtime.routedTarget,
+            updatedAt: new Date().toISOString(),
+            title: s.titleCustom ? s.title : deriveSessionTitle(runtime.turns),
+          }
+        : s,
+    );
+    const nextState: ProjectState = { ...stored, sessions };
+    projectStatesRef.current.set(projectId, nextState);
+    // Même garde d'hydratation que persistProject : ne jamais écraser le
+    // document disque avec un état partiel d'avant chargement.
+    if (!hydrationDoneRef.current) return;
+    const next: PersistedConversations = {
+      ...persistedConversationsRef.current,
+      [projectId]: buildPersistedEntry(nextState),
+    };
+    persistedConversationsRef.current = next;
+    void stateWrite(CONVERSATIONS_STATE_KEY, next).catch(() => {});
   }
 
   /**
@@ -2631,13 +2959,22 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   /** Charge un `ProjectState` restauré (ou vierge) dans l'affichage — onglets ouverts, session active, liste complète. */
   function loadProjectStateIntoView(next: ProjectState) {
     const activeSession = next.sessions.find((s) => s.id === next.activeId) ?? next.sessions[0];
-    // Runtimes repartis de zéro : on change de PROJET, aucune conversation de
-    // l'ancien ne doit rester vivante (leurs tours viennent d'être sauvegardés
-    // par l'appelant). Ceux des conversations ouvertes sont amorcés depuis
-    // leur dernière copie persistée.
-    runtimesRef.current = new Map();
+    // Runtimes repartis de zéro : on change de PROJET, les conversations de
+    // l'ancien tombent (leurs tours viennent d'être sauvegardés par
+    // l'appelant) — SAUF celles encore en cours de STREAMING : couper leur
+    // runtime perdrait le flux en route (les callbacks écrivent par convId
+    // dans cette Map), et c'est leur survie ici qui permet à la fin du tour
+    // de sauvegarder son résultat dans le projet d'ORIGINE (voir la garde de
+    // fin de tour dans handleSend). Au retour dans ce projet, une
+    // conversation dont le runtime a survécu n'est PAS ré-amorcée depuis sa
+    // copie persistée (qui serait partielle).
+    const kept = new Map<string, ConvRuntime>();
+    for (const [convId, runtime] of runtimesRef.current) {
+      if (runtime.streaming) kept.set(convId, runtime);
+    }
+    runtimesRef.current = kept;
     for (const conv of next.sessions) {
-      if (next.openConversationIds.includes(conv.id)) {
+      if (next.openConversationIds.includes(conv.id) && !runtimesRef.current.has(conv.id)) {
         runtimesRef.current.set(conv.id, freshRuntime(conv.turns, conv.sessionId, conv.routedTier, conv.routedTarget));
       }
     }
@@ -3168,7 +3505,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * R2 — `modelId`/`meta` figés par `handleSend` (modèle du sélecteur, ou cible routée en mode Auto + routeTier). */
   function sendViaClaudeEngine(
     content: string,
-    assistantId: string,
+    /**
+     * S3 — bulle assistant qui reçoit le flux, MUTABLE : une demande injectée
+     * en cours de tour (claude.push) en ouvre une nouvelle, et la suite du
+     * streaming doit atterrir dedans, pas dans celle d'avant l'injection.
+     */
+    target: { id: string },
     common: {
       onText: (delta: string) => void;
       onToolUse: (toolUseId: string, toolName: string, toolInput: unknown) => void;
@@ -3189,22 +3531,31 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         sessionId: getRuntime(convId).sessionId,
         model: modelId,
         permissionMode,
+        // Page ouverte devant l'utilisateur : l'agent peut poser ses questions
+        // dans une modale à choix cliquables (outil mcp__studio__ask_user).
+        interactive: true,
         // R5 — instructions de l'agent + ligne RAG éventuelle (mode `rag`).
         systemPrompt: composeSystemInstructions() ?? null,
+        // T-003 — allowlist `tools:` de l'agent (voir sendViaNeutralEngine).
+        tools: selectedAgent?.tools ?? null,
         attachments,
         meta,
       },
       {
         onInit: (sid) => updateRuntime(convId, (r) => ({ ...r, sessionId: sid })),
+        // Le sidecar vient de réécrire l'état constaté des serveurs MCP
+        // (.iaction/mcp.runtime.json) : le panneau se rafraîchit pour montrer
+        // ce qui s'est VRAIMENT connecté à ce tour.
+        onMcpInit: () => setMcpReloadToken((n) => n + 1),
         onText: common.onText,
         onThinking: (delta) =>
-          updateTurnsFor(convId, (prev) => withBlocks(prev, assistantId, (b) => appendToLastBlock(b, "thinking", delta))),
+          updateTurnsFor(convId, (prev) => withBlocks(prev, target.id, (b) => appendToLastBlock(b, "thinking", delta))),
         onToolUse: common.onToolUse,
         onToolResult: common.onToolResult,
         onBackgroundTasks: (count, descriptions) =>
           updateTurnsFor(convId, (prev) =>
             prev.map((t) =>
-              t.id === assistantId
+              t.id === target.id
                 ? {
                     ...t,
                     backgroundTasks:
@@ -3217,7 +3568,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
           ),
         onBackgroundWait: (count, descriptions) =>
           updateTurnsFor(convId, (prev) =>
-            prev.map((t) => (t.id === assistantId ? { ...t, backgroundTasks: { count, descriptions, waiting: true } } : t)),
+            prev.map((t) => (t.id === target.id ? { ...t, backgroundTasks: { count, descriptions, waiting: true } } : t)),
+          ),
+        onCompact: (trigger, preTokens) =>
+          updateTurnsFor(convId, (prev) =>
+            prev.map((t) => (t.id === target.id ? { ...t, compacted: { trigger, preTokens } } : t)),
           ),
         onPermissionRequest: (permissionId, toolName, toolInput) => {
           // Outil mémorisé (« ne plus demander ») : auto-autorisation sans modale.
@@ -3256,6 +3611,10 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         messages: historyMessages,
         permissionMode: neutralPermissionMode,
         maxTurns: selectedAgent?.maxTurns ?? undefined,
+        // T-003 — allowlist `tools:` de l'agent : appliquée ici comme en
+        // orchestration (jusqu'au 2026-08-07 le champ n'était transmis à
+        // personne, donc purement décoratif).
+        tools: selectedAgent?.tools ?? null,
         meta,
       },
       {
@@ -3458,23 +3817,53 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     // la réponse n'atterrisse dans la mauvaise conversation.
     const convId = activeSessionId;
     if (!convId) return;
+    // Brouillon VIF du runtime — jamais `draft` (valeur de rendu) : la frappe
+    // n'est répercutée au rendu que par un rattrapage débouncé (voir
+    // useComposerLiveDraft.ts), un Entrée immédiat lirait un texte tronqué.
+    const liveDraft = getRuntime(convId).draft;
 
-    // Pendant un tour en cours : on ne lance pas un second envoi, on met le
-    // message en file (envoyé à la fin du tour, voir l'effet d'auto-envoi).
+    // Pendant un tour en cours : jamais de second envoi. Deux issues —
+    // S3, moteur Claude : la demande est GLISSÉE dans le tour en cours
+    // (claude.push), prise en compte au prochain retour d'outil sans rien
+    // couper ; c'est ce qui permet d'interroger l'agent pendant qu'il attend
+    // ses tâches de fond. Sinon (moteur neutre, tour déjà fini côté sidecar) :
+    // mise en file automatique, envoyée à la fin du tour (voir l'effet
+    // d'auto-envoi) — un seul bouton « Envoyer », le repli est transparent.
     // L'auto-envoi rappelle handleSend avec `overrideContent` une fois
     // `streaming` repassé à false — ce chemin-là ne re-file jamais.
     if (streaming && overrideContent === undefined) {
-      const pending = draft.trim();
-      if (pending) {
-        updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, pending], draft: "" }));
-        setSlashMenu((m) => ({ ...m, open: false }));
+      const pending = liveDraft.trim();
+      if (!pending) return;
+      setSlashMenu((m) => ({ ...m, open: false }));
+      // Ni une demande glissée (claude.push) ni la file ne transportent de
+      // pièces jointes : on le DIT et on les garde dans le tiroir pour le
+      // prochain message complet, plutôt que de les laisser partir en fumée.
+      if (attachments.length > 0) {
+        setAttachmentsError(
+          "Pièces jointes conservées : elles ne partent pas avec un message envoyé pendant un tour — elles seront jointes à votre prochain message complet.",
+        );
       }
+      const runtime = getRuntime(convId);
+      const inject = injectorsRef.current.get(convId);
+      if (inject && runtime.activeEngine === "claude" && runtime.activeRequestId) {
+        // Le brouillon part tout de suite : si le sidecar refuse (tour déjà
+        // clos), il est reposé en file juste en dessous — jamais perdu.
+        updateRuntime(convId, (r) => ({ ...r, draft: "" }));
+        const pushed = await claudePush(runtime.activeRequestId, pending).catch(() => false);
+        if (pushed) {
+          inject(pending);
+          return;
+        }
+        updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, pending] }));
+        return;
+      }
+      updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, pending], draft: "" }));
       return;
     }
 
     // Chemin « file » (overrideContent) : texte seul, pas de pièces jointes.
     const usesComposer = overrideContent === undefined;
-    const rawContent = (overrideContent ?? draft).trim();
+    const rawContent = (overrideContent ?? liveDraft).trim();
     if ((!rawContent && (!usesComposer || attachments.length === 0)) || streaming || !cwd) return;
     // Une image collée est encore en cours d'encodage : on attend plutôt que
     // d'envoyer une pièce jointe sans données.
@@ -3496,6 +3885,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     const attachmentsAllowed = usesComposer && engineSelected === "claude" && !isAutoTurn;
     const contractAttachments = attachmentsAllowed ? toContractAttachments(attachments) : [];
     const sentAttachments = attachmentsAllowed ? toSentAttachments(attachments) : [];
+    // Brouillons d'origine, gardés pour les reposer si le tour échoue (voir le
+    // `catch`) : le tiroir, lui, est vidé dès l'envoi.
+    const sentDrafts = attachmentsAllowed ? attachments : [];
 
     // Verrouille l'envoi tout de suite (avant les résolutions asynchrones
     // ci-dessous — routage Auto, lecture des documents épinglés) : sans ça, un
@@ -3596,6 +3988,16 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       ...(sentAttachments.length > 0 ? { attachments: sentAttachments } : {}),
     };
     const assistantId = nextId("a");
+    // Le message part MAINTENANT : le tiroir de pièces jointes se vide ici, pas
+    // à la fin du tour — les vignettes figurent désormais dans le tour affiché,
+    // les garder en bas laissait croire qu'elles restaient à envoyer. Reposées
+    // par le `catch` si le tour échoue. Vidage conditionné à ce qui est
+    // RÉELLEMENT parti : rien n'est retiré si le moteur n'en accepte pas
+    // (neutre, mode Auto), où le tiroir n'a de toute façon pas à être touché.
+    if (sentDrafts.length > 0) clearAttachments();
+    // S3 — bulle assistant courante du tour (voir sendViaClaudeEngine) :
+    // remplacée à chaque demande injectée pour préserver l'ordre de lecture.
+    const streamTarget = { id: assistantId };
     updateTurnsFor(convId, (prev) => [
       ...prev,
       userTurn,
@@ -3611,7 +4013,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
           : {}),
       },
     ]);
-    stickToBottomRef.current = true;
+    collerEnBas();
 
     // R2/R6 — affinité de session EN ATTENTE : mémorisée au PREMIER signe de
     // succès du tour (premier texte reçu, ou `done` sans erreur) — un tour
@@ -3631,10 +4033,10 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     const common = {
       onText: (delta: string) => {
         commitAffinity?.();
-        updateTurnsFor(convId, (prev) => withBlocks(prev, assistantId, (b) => appendToLastBlock(b, "text", delta)));
+        updateTurnsFor(convId, (prev) => withBlocks(prev, streamTarget.id, (b) => appendToLastBlock(b, "text", delta)));
       },
       onToolUse: (toolUseId: string, toolName: string, toolInput: unknown) => {
-        updateTurnsFor(convId, (prev) => withBlocks(prev, assistantId, (b) => addToolBlock(b, toolUseId, toolName, toolInput)));
+        updateTurnsFor(convId, (prev) => withBlocks(prev, streamTarget.id, (b) => addToolBlock(b, toolUseId, toolName, toolInput)));
         // Compteur d'usage MCP (section « MCP ») : porté par le runtime de
         // CETTE conversation, donc juste même si l'onglet affiché a changé.
         const server = mcpServerFromToolName(toolName);
@@ -3647,12 +4049,15 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         }
       },
       onToolResult: (toolUseId: string, isError: boolean, summary: string) =>
-        updateTurnsFor(convId, (prev) => withBlocks(prev, assistantId, (b) => setToolResult(b, toolUseId, isError, summary))),
+        updateTurnsFor(convId, (prev) => withBlocks(prev, streamTarget.id, (b) => setToolResult(b, toolUseId, isError, summary))),
     };
 
     // R2 — meta commun aux deux moteurs : routeTier quand le tour a été routé
     // (persisté dans events.jsonl, voir docs/protocol.md § S1).
     const meta: RequestMeta = { source: "projet", conversationId: convId };
+    // S2 — imputation du tour au projet ouvert (encart « Usage par projet »).
+    if (selectedProjectId) meta.projectId = selectedProjectId;
+    if (cwd) meta.projectPath = cwd;
     if (autoRoute) meta.routeTier = autoRoute.tier;
     // R3 — tour réellement débordé : marqué pour le plafond mensuel (events.jsonl).
     if (autoRoute?.debord?.active) meta.routeDebord = true;
@@ -3660,8 +4065,31 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     const { id, done } =
       engine === "neutral"
         ? sendViaNeutralEngine(turnProviderId as string, historyMessages, common, turnModel, meta)
-        : sendViaClaudeEngine(sentContent, assistantId, common, contractAttachments, convId, turnModel || null, meta);
+        : sendViaClaudeEngine(sentContent, streamTarget, common, contractAttachments, convId, turnModel || null, meta);
     updateRuntime(convId, (r) => ({ ...r, activeRequestId: id }));
+
+    // S3 — injecteur de CE tour : appelé par le composeur quand le sidecar a
+    // accepté la demande (claude.push). Il ouvre la bulle utilisateur puis une
+    // nouvelle bulle assistant, et redirige le flux vers elle — la suite de la
+    // réponse s'affiche donc APRÈS la demande, comme dans Claude Code.
+    if (engine === "claude") {
+      injectorsRef.current.set(convId, (text: string) => {
+        const nextAssistantId = nextId("a");
+        // La bulle en cours est close (`continued`) avant la redirection :
+        // plus rien ne la repassera à « done » ensuite (le `done` du tour ne
+        // patche que la DERNIÈRE cible) — laissée en streaming, elle
+        // clignotait à vie et disparaissait à la persistance.
+        updateTurnsFor(convId, (prev) => [
+          ...prev.map((t) =>
+            t.id === streamTarget.id && t.status === "streaming" ? { ...t, status: "done" as const, continued: true } : t,
+          ),
+          { id: nextId("u"), role: "user", content: text, displayContent: text, status: "done", injected: true },
+          { id: nextAssistantId, role: "assistant", blocks: [], status: "streaming" },
+        ]);
+        streamTarget.id = nextAssistantId;
+        collerEnBas();
+      });
+    }
 
     try {
       const data = await done;
@@ -3678,15 +4106,25 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         // R2 — `turnModel` : le modèle réellement utilisé (cible routée en Auto).
         await recordModelUsage(turnModel, parsed.usage);
       }
-      updateTurnsFor(convId, (prev) => withTurnDone(prev, assistantId, parsed));
-      // Envoi réussi : composeur purgé des pièces jointes — conservées en cas
-      // d'échec (voir le `catch`), pour éviter de devoir tout rejoindre. Chemin
-      // « file » : ne touche pas aux pièces jointes du message suivant.
-      if (usesComposer) clearAttachments();
+      updateTurnsFor(convId, (prev) => withTurnDone(prev, streamTarget.id, parsed));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      updateTurnsFor(convId, (prev) => withTurnError(prev, assistantId, message));
+      updateTurnsFor(convId, (prev) => withTurnError(prev, streamTarget.id, message));
+      // Tour échoué : les pièces jointes reviennent dans le composeur (elles
+      // avaient été retirées à l'envoi) — pas question de les rejoindre à la
+      // main pour réessayer.
+      restoreAttachments(sentDrafts);
     } finally {
+      injectorsRef.current.delete(convId);
+      // Filet de sécurité : après la fin du tour (done, erreur ou abort),
+      // aucune bulle de cette conversation ne doit rester « streaming » —
+      // sinon curseur clignotant à vie et bulle perdue à la persistance.
+      updateTurnsFor(convId, (prev) =>
+        prev.map((t) => (t.status === "streaming" ? { ...t, status: "done" as const } : t)),
+      );
+      // Un tour a pu écrire dans `.iaction/connaissances/` (guide déposé,
+      // document produit par l'agent) : relecture de la liste automatique.
+      setAutoKnowledgeTick((t) => t + 1);
       updateRuntime(convId, (r) => ({ ...r, streaming: false, activeRequestId: null }));
       // Sécurité : purge les demandes de permission orphelines de ce tour
       // (le sidecar les refuse déjà normalement à l'abort/fin de tour).
@@ -3699,9 +4137,19 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       // streaming) — l'utilisateur a pu changer d'onglet entre-temps, donc on
       // ne peut plus supposer que cette conversation est encore l'active.
       if (selectedProjectId) {
-        const liveSessions = buildLiveSessions();
-        setSessions(liveSessions);
-        persistProject(selectedProjectId, liveSessions);
+        if (selectedProjectIdRef.current === selectedProjectId) {
+          const liveSessions = buildLiveSessions();
+          setSessions(liveSessions);
+          persistProject(selectedProjectId, liveSessions);
+        } else {
+          // Le projet AFFICHÉ a changé pendant ce tour d'arrière-plan :
+          // `buildLiveSessions`/`persistProject` liraient les refs du nouveau
+          // projet et écriraient ses sessions sous la clé de l'ancien
+          // (contamination croisée du document persisté). On reporte le
+          // résultat du tour dans l'état du projet d'ORIGINE, sans toucher à
+          // l'affichage.
+          persistBackgroundConversation(selectedProjectId, convId);
+        }
       }
     }
   }
@@ -3806,6 +4254,14 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       // fragment devenu caduc.
       setSlashMenu((m) => (m.open ? { ...m, open: false } : m));
     },
+    // Envoi par mot-clé : le brouillon rendu est celui que l'utilisateur voit
+    // (dicté ET tapé), et il est vidé — c'est lui qui part.
+    takeDraft: () => {
+      if (!activeSessionId) return "";
+      const draft = getRuntime(activeSessionId).draft;
+      if (draft) updateRuntime(activeSessionId, (r) => ({ ...r, draft: "" }));
+      return draft;
+    },
     focusComposer: () => focusComposer(),
   });
 
@@ -3885,14 +4341,17 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   /** Insère « /name » (remplace le fragment « /frag » courant), ferme le menu, replace le curseur juste après l'espace. */
   function applySlashCommand(cmd: SlashCommandInfo) {
     const insertion = `/${cmd.name} `;
-    const before = draft.slice(0, slashMenu.start);
-    const after = draft.slice(slashMenu.start + 1 + slashMenu.fragment.length);
+    // Brouillon vif : le menu se pilote à la frappe, dont le rendu retarde.
+    const current = getLiveDraft();
+    const before = current.slice(0, slashMenu.start);
+    const after = current.slice(slashMenu.start + 1 + slashMenu.fragment.length);
     pendingCursorRef.current = before.length + insertion.length;
     setDraft(`${before}${insertion}${after}`);
     setSlashMenu((m) => ({ ...m, open: false }));
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (handleUndoKey(e)) return;
     if (slashMenu.open) {
       const matches = matchSlashCommands(slashCommands, slashMenu.fragment);
       if (matches.length > 0) {
@@ -4546,7 +5005,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
           <div className="agent-tabs__body">
             {isConvTab(activeTab) ? (
               <div className="agent-conversation">
-                <div className="chat-log" ref={scrollRef} onScroll={handleScroll}>
+                <div className="chat-log" ref={scrollRef} {...scrollProps}>
                   {turns.length === 0 && (
                     <p className="empty-hint">
                       {cwd
@@ -4657,15 +5116,21 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                           la voix est désactivée comme l'est la zone de saisie. */}
                       <VoiceButtons voice={voice} disabled={!cwd} />
                     </div>
+                    {/* Semi-non-contrôlé (defaultValue + ref) : la frappe
+                        n'impose plus un re-rendu de page par caractère — voir
+                        useComposerLiveDraft.ts, qui pousse aussi les écritures
+                        programmatiques (dictée, insertion « / », vidage…)
+                        vers le DOM. */}
                     <textarea
                       ref={textareaRef}
                       rows={5}
-                      value={draft}
+                      defaultValue={draft}
                       onChange={(e) => {
                         const value = e.currentTarget.value;
-                        setDraft(value);
+                        onComposerChange(value);
                         updateSlashMenu(value, e.currentTarget.selectionStart ?? value.length);
                       }}
+                      onBlur={onComposerBlur}
                       onKeyDown={handleKeyDown}
                       onPaste={(e) => {
                         // Moteur neutre : les pièces jointes ne passent pas par
@@ -4703,22 +5168,33 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                       }}
                       disabled={!cwd}
                       placeholder={
-                        streaming
-                          ? "L'agent travaille… (Entrée met votre message en file, envoyé à la fin du tour)"
-                          : "Décrivez une tâche pour l'agent… (Entrée pour envoyer, Maj+Entrée pour un saut de ligne)"
+                        streaming && canInject
+                          ? "L'agent travaille… (Entrée envoie dans le tour en cours, pris en compte au prochain outil)"
+                          : streaming
+                            ? "L'agent travaille… (Entrée met votre message en file, envoyé à la fin du tour)"
+                            : "Décrivez une tâche pour l'agent… (Entrée pour envoyer, Maj+Entrée pour un saut de ligne)"
                       }
                     />
                     <div className="actions">
                       {streaming ? (
                         <>
+                          {/* Un SEUL bouton d'envoi pendant un tour (choix
+                              utilisateur 2026-08-04) : handleSend glisse la
+                              demande dans le tour en cours quand c'est possible
+                              (claude.push) et la met en file sinon — le repli
+                              est automatique, pas besoin de deux boutons. */}
                           <button
                             type="button"
                             className="btn"
                             onClick={() => void handleSend()}
                             disabled={!draft.trim() || !cwd}
-                            title="Envoyer à la fin du tour en cours"
+                            title={
+                              canInject
+                                ? "Glisser la demande dans le tour en cours (prise en compte au prochain outil)"
+                                : "Mettre en file : envoyé automatiquement à la fin du tour en cours"
+                            }
                           >
-                            Mettre en file
+                            Envoyer
                           </button>
                           <button type="button" className="btn btn--ghost" onClick={() => void handleAbort()}>
                             Arrêter
@@ -4875,7 +5351,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                           className="session-item__action"
                           title="Renommer"
                           aria-label={`Renommer ${s.title}`}
-                          disabled={streaming}
                           onClick={() => startEditSessionTitle(s)}
                         >
                           ✎
@@ -5257,35 +5732,14 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
             id="mcp"
             title="MCP"
             defaultOpen={false}
-            badge={mcpServers.length > 0 ? <span className="sidebar-section__count">{mcpServers.length}</span> : undefined}
+            badge={mcpServerCount > 0 ? <span className="sidebar-section__count">{mcpServerCount}</span> : undefined}
           >
-            {mcpServers.length === 0 ? (
-              <p className="empty-hint">
-                Aucun serveur MCP déclaré. Déclarez-les dans .mcp.json à la racine du projet.
-              </p>
-            ) : (
-              <ul className="mcp-list">
-                {mcpServers.map((s) => {
-                  const usage = mcpUsage[s.name];
-                  return (
-                    <li key={s.name} className="mcp-item">
-                      <div className="mcp-item__head">
-                        <span className="mcp-item__name">{s.name}</span>
-                        <span className="mcp-item__kind">{s.kind}</span>
-                      </div>
-                      <div className="mcp-item__detail" title={s.detail}>
-                        {s.detail}
-                      </div>
-                      {usage && (
-                        <div className="mcp-item__usage">
-                          {usage.calls} appel{usage.calls > 1 ? "s" : ""} · dernier : {usage.lastTool}
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            <McpPanel
+              cwd={cwd}
+              usage={mcpUsage}
+              reloadToken={mcpReloadToken}
+              onServerCount={setMcpServerCount}
+            />
           </SidebarSection>
         </aside>
       </div>

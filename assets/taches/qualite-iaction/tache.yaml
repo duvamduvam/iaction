@@ -9,8 +9,8 @@ name: qualite-iaction
 description: Revue qualité hebdomadaire — agrège le journal applicatif et les événements d'usage locaux, puis PROPOSE des tickets (aucune écriture dans docs/tickets.md).
 orchestration: qualite-iaction
 # Cadence hebdomadaire, syntaxe OnCalendar systemd : tous les lundis à 09h00.
-# (Horaire choisi pour ne pas
-# empiler plusieurs runs LLM sur la même minute au réveil de la machine.)
+# (Décalé de menage-mails 08:15 et de revue-doc-site 08:00 pour ne pas
+# empiler trois runs LLM sur la même minute au réveil de la machine.)
 schedule: "Mon *-*-* 09:00"
 inputs:
   date: "{{today}}"

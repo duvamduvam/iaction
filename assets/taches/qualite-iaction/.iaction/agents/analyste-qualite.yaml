@@ -5,10 +5,11 @@
 # un tour qui en émet une resterait bloqué jusqu'au timeout du run.
 #
 # tools : liste blanche SANS WebSearch ni WebFetch — le principe local-first
-# du projet interdit toute sortie réseau (docs/etude-logs.md § 4). Bash est
-# accordé pour l'agrégation (grep/awk/jq sur du JSONL) ; l'interdiction des
-# commandes réseau est répétée dans les instructions ci-dessous, qui font foi
-# tant que le moteur ne restreint pas la palette lui-même.
+# du projet interdit toute sortie réseau (docs/etude-logs.md § 4). Elle est
+# APPLIQUÉE par le moteur depuis le 2026-08-07 (T-003) : Write/Edit ne sont
+# pas exposées. Bash est accordé pour l'agrégation (grep/awk/jq sur du JSONL),
+# et lui peut écrire comme sortir sur le réseau : l'interdiction reste portée
+# par les instructions ci-dessous, qui font foi sur ce point.
 name: analyste-qualite
 description: Analyste qualité — agrège le journal applicatif et les événements d'usage locaux d'iaction, en rapport hebdomadaire avec propositions de tickets.
 engine: claude

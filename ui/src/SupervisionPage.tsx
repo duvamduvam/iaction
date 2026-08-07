@@ -15,6 +15,7 @@ import {
   type ClaudeWindowSnapshot,
   type UsageBucket,
   type UsageBucketKind,
+  type UsageProjet,
   type UsageRoutage,
   type UsageStats,
 } from "./usageStatsClient";
@@ -251,6 +252,90 @@ function ModelsPanel({ models }: Readonly<{ models: UsageStats["models"] }>) {
   );
 }
 
+/* ---------- S2 — Usage par projet (le Chat compte comme un projet) ---------- */
+
+/**
+ * Part d'un projet dans la période : en TOKENS (proxy le plus fidèle de la
+ * consommation), avec repli sur les tours quand aucun token n'a été compté
+ * sur la période — sans ce repli, l'encart serait vide alors que des tours
+ * ont bien eu lieu (un fournisseur peut ne pas remonter d'usage).
+ */
+function projetShares(
+  projets: UsageProjet[],
+  totals: UsageStats["totals"],
+): { parTokens: boolean; rows: Array<{ p: UsageProjet; pct: number; autonomePct: number }> } {
+  const parTokens = totals.totalTokens > 0;
+  const share = (part: number, whole: number) => (whole > 0 ? (part / whole) * 100 : 0);
+  const rows = projets.map((p) => ({
+    p,
+    pct: parTokens ? (p.partTokensPct ?? 0) : share(p.tours, totals.tours),
+    autonomePct: parTokens ? (p.autonomePct ?? 0) : share(p.autonomeTours, p.tours),
+  }));
+  return { parTokens, rows };
+}
+
+function ProjetsPanel({
+  parProjet,
+  totals,
+}: Readonly<{ parProjet: UsageProjet[] | null; totals: UsageStats["totals"] }>) {
+  if (!parProjet) {
+    return (
+      <section className="panel">
+        <div className="panel__title">Usage par projet</div>
+        <p className="empty-hint">Répartition par projet indisponible (sidecar antérieur ?).</p>
+      </section>
+    );
+  }
+  const { parTokens, rows } = projetShares(parProjet, totals);
+  return (
+    <section className="panel">
+      <div className="panel__title">Usage par projet</div>
+      {rows.length === 0 ? (
+        <p className="empty-hint">Aucun tour sur cette période.</p>
+      ) : (
+        <>
+          <div className="supervision-models-list">
+            {rows.map(({ p, pct, autonomePct }) => (
+              <div key={p.projectId ?? "(non attribué)"} className="supervision-model-row">
+                <div className="supervision-model-name" title={p.projectId ?? "sans projet identifiable"}>
+                  <span className="supervision-model-name__label">{p.name}</span>
+                  <span className="supervision-model-name__engine">
+                    {p.tours} tour{p.tours > 1 ? "s" : ""} · {formatTokens(p.totalTokens)}
+                  </span>
+                </div>
+                {/* Barre à l'échelle ABSOLUE (les parts se somment sur la largeur),
+                    segment contrasté = part autonome, même code couleur que l'histogramme. */}
+                <div className="supervision-model-bar-track">
+                  <div className="supervision-model-bar-fill" style={{ width: `${Math.min(100, pct)}%` }}>
+                    <div
+                      className="supervision-projet-bar-autonome"
+                      style={{ width: `${Math.min(100, autonomePct)}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="supervision-model-metrics">
+                  {Math.round(pct)} %
+                  {p.autonomeTours > 0 ? ` · dont ${Math.round(autonomePct)} % autonome` : ""}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="supervision-hist-legend">
+            <span>
+              <i className="supervision-legend-dot supervision-legend-dot--cyan" />{" "}
+              {parTokens ? "Part des tokens" : "Part des tours (aucun token compté)"}
+            </span>
+            <span>
+              <i className="supervision-legend-dot supervision-legend-dot--magenta" /> dont autonome
+              (orchestration)
+            </span>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 /* ---------- Histogramme des buckets ---------- */
 
 function bucketLabel(bucket: UsageBucketKind, start: string): string {
@@ -441,7 +526,7 @@ function RoutagePanel({ routage, totalTours }: Readonly<{ routage: UsageRoutage 
   );
 }
 
-/* ---------- Abonnement Claude — fenêtre 7 jours ---------- */
+/* ---------- Abonnement Claude — utilisation hebdomadaire ---------- */
 
 interface SevenDayPoint {
   ts: string;
@@ -458,10 +543,29 @@ function extractSevenDayPct(snap: ClaudeWindowSnapshot): number | null {
 
 interface WeekSummary {
   key: string;
+  label: string;
   max: number;
-  saturated: boolean;
+  enCours: boolean;
 }
 
+/**
+ * Échelle de couleur INVERSÉE par rapport à une jauge de risque : la cible est
+ * 100 % — l'abonnement est payé, le sous-consommer est le gaspillage. Rouge =
+ * semaine très en dessous de la cible, turquoise = cible atteinte.
+ */
+function weekColor(pct: number): string {
+  if (pct >= 90) return "var(--status-ok)";
+  if (pct >= 70) return "var(--neon-cyan)";
+  if (pct >= 40) return "var(--status-warn)";
+  return "var(--status-error)";
+}
+
+/**
+ * Utilisation d'une semaine = PIC atteint par la fenêtre glissante 7 jours
+ * pendant cette semaine ISO. La fenêtre n'est pas calée sur le lundi : son pic
+ * hebdomadaire reste le meilleur proxy de « ce que j'ai consommé cette
+ * semaine-là », et c'est aussi lui qui déclenche la saturation.
+ */
 function summarizeByIsoWeek(points: SevenDayPoint[]): WeekSummary[] {
   const map = new Map<string, number>();
   for (const p of points) {
@@ -470,54 +574,88 @@ function summarizeByIsoWeek(points: SevenDayPoint[]): WeekSummary[] {
     const key = isoWeekKey(d);
     map.set(key, Math.max(map.get(key) ?? 0, p.pct));
   }
+  const courante = isoWeekKey(new Date());
   return Array.from(map.entries())
-    .map(([key, max]) => ({ key, max, saturated: max >= 95 }))
-    .sort((a, b) => (a.key < b.key ? 1 : -1));
+    .map(([key, max]) => ({
+      key,
+      label: key.slice(key.indexOf("-") + 1),
+      max,
+      enCours: key === courante,
+    }))
+    .sort((a, b) => (a.key < b.key ? -1 : 1));
 }
 
-const LINE_W = 640;
-const LINE_H = 130;
+const WEEK_H = 260;
+const WEEK_BAR_W = 44;
+const WEEK_GAP = 18;
+/** Marge au-dessus des barres : la valeur en % s'y écrit. */
+const WEEK_TOP = 26;
+/** Marge sous les barres : l'étiquette de semaine s'y écrit. */
+const WEEK_BOTTOM = 24;
+/** Colonne de droite réservée à la légende « 100 % » de la ligne repère. */
+const WEEK_AXIS_W = 52;
 /** Plafond d'affichage au-delà de 100 % : un peu de marge visuelle pour la ligne repère. */
-const LINE_CEIL = 120;
+const WEEK_CEIL = 120;
+/**
+ * Largeur totale visée : celle de la légende sous le graphe — au-delà, on
+ * n'affiche que les semaines les plus récentes plutôt que d'étaler l'encart.
+ */
+const WEEK_CHART_W = 620;
+const WEEKS_SHOWN = Math.floor((WEEK_CHART_W - WEEK_AXIS_W + WEEK_GAP) / (WEEK_BAR_W + WEEK_GAP));
 
-function ClaudeWindowChart({ points }: Readonly<{ points: SevenDayPoint[] }>) {
-  const n = points.length;
-  const stepX = n > 1 ? LINE_W / (n - 1) : 0;
-  const yFor = (pct: number) => LINE_H - (Math.min(LINE_CEIL, Math.max(0, pct)) / LINE_CEIL) * LINE_H;
-  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"}${i * stepX},${yFor(p.pct)}`).join(" ");
+function ClaudeWeeklyChart({ weeks }: Readonly<{ weeks: WeekSummary[] }>) {
+  const barsW = weeks.length * (WEEK_BAR_W + WEEK_GAP) - WEEK_GAP;
+  const width = Math.max(barsW, 160) + WEEK_AXIS_W;
+  const yFor = (pct: number) =>
+    WEEK_TOP + WEEK_H - (Math.min(WEEK_CEIL, Math.max(0, pct)) / WEEK_CEIL) * WEEK_H;
   const y100 = yFor(100);
   return (
     <div className="supervision-chart-wrap">
       <svg
-        width={n > 1 ? LINE_W : 40}
-        height={LINE_H + 10}
-        viewBox={`0 0 ${n > 1 ? LINE_W : 40} ${LINE_H + 10}`}
-        preserveAspectRatio="none"
+        width={width}
+        height={WEEK_TOP + WEEK_H + WEEK_BOTTOM}
         role="img"
-        aria-label="Pourcentage de la fenêtre d'abonnement 7 jours dans le temps"
+        aria-label="Utilisation hebdomadaire de l'abonnement Claude, en pourcentage de la fenêtre 7 jours"
       >
-        <line x1={0} x2={n > 1 ? LINE_W : 40} y1={y100} y2={y100} className="supervision-line-ref" />
-        <path d={pathD} className="supervision-line-path" fill="none" />
-        {points.map((p, i) => (
-          <circle key={p.ts} cx={i * stepX} cy={yFor(p.pct)} r={2.5} className="supervision-line-dot">
-            <title>{`${new Date(p.ts).toLocaleString("fr-FR")} — ${Math.round(p.pct)} %`}</title>
-          </circle>
-        ))}
+        <line x1={0} x2={width} y1={y100} y2={y100} className="supervision-line-ref" />
+        <text x={width} y={y100 - 6} textAnchor="end" className="supervision-week-axis">
+          cible 100 %
+        </text>
+        {weeks.map((w, i) => {
+          const y = yFor(w.max);
+          return (
+            <g key={w.key} transform={`translate(${i * (WEEK_BAR_W + WEEK_GAP)},0)`}>
+              <title>{`${w.key} — ${Math.round(w.max)} % de la fenêtre 7 jours${w.enCours ? " (semaine en cours)" : ""}`}</title>
+              <rect
+                x={0}
+                y={y}
+                width={WEEK_BAR_W}
+                height={WEEK_TOP + WEEK_H - y}
+                rx={3}
+                style={{ fill: weekColor(w.max), opacity: w.enCours ? 0.55 : 1 }}
+              />
+              <text
+                x={WEEK_BAR_W / 2}
+                y={Math.max(16, y - 8)}
+                textAnchor="middle"
+                className="supervision-week-value"
+                style={{ fill: weekColor(w.max) }}
+              >
+                {Math.round(w.max)} %
+              </text>
+              <text
+                x={WEEK_BAR_W / 2}
+                y={WEEK_TOP + WEEK_H + 17}
+                textAnchor="middle"
+                className="supervision-week-label"
+              >
+                {w.label}
+                {w.enCours ? " ·" : ""}
+              </text>
+            </g>
+          );
+        })}
       </svg>
-    </div>
-  );
-}
-
-function ClaudeWeeklySummary({ weeks }: Readonly<{ weeks: WeekSummary[] }>) {
-  return (
-    <div className="supervision-claude-summary-grid">
-      {weeks.map((w) => (
-        <div key={w.key} className="supervision-week-card">
-          <div className="supervision-week-card__label">{w.key}</div>
-          <div className="supervision-week-card__value">{Math.round(w.max)} %</div>
-          {w.saturated && <span className="supervision-badge supervision-badge--saturated">saturé</span>}
-        </div>
-      ))}
     </div>
   );
 }
@@ -556,16 +694,33 @@ function ClaudeSubscriptionPanel() {
 
   return (
     <section className="panel">
-      <div className="panel__title">Abonnement Claude — fenêtre 7 jours</div>
+      <div className="panel__title">Abonnement Claude — utilisation hebdomadaire</div>
       {snapshots === null && !errored && <p className="empty-hint">Chargement…</p>}
       {errored && <p className="empty-hint empty-hint--error">Historique indisponible (sidecar injoignable ?).</p>}
-      {snapshots !== null && !errored && points.length === 0 && (
+      {snapshots !== null && !errored && weeks.length === 0 && (
         <p className="empty-hint">Pas encore d'historique — il se construit au fil de l'usage.</p>
       )}
-      {points.length > 0 && (
+      {weeks.length > 0 && (
         <>
-          <ClaudeWindowChart points={points} />
-          <ClaudeWeeklySummary weeks={weeks} />
+          <ClaudeWeeklyChart weeks={weeks.slice(-WEEKS_SHOWN)} />
+          <div className="supervision-hist-legend">
+            <span>
+              <i className="supervision-legend-dot supervision-legend-dot--ok" /> ≥ 90 %
+            </span>
+            <span>
+              <i className="supervision-legend-dot supervision-legend-dot--cyan" /> 70–89 %
+            </span>
+            <span>
+              <i className="supervision-legend-dot supervision-legend-dot--warn" /> 40–69 %
+            </span>
+            <span>
+              <i className="supervision-legend-dot supervision-legend-dot--error" /> &lt; 40 %
+            </span>
+          </div>
+          <p className="empty-hint">
+            Semaine = pic de la fenêtre glissante 7 jours ; cible 100 % (l'abonnement est payé, le rouge signale le
+            sous-usage). Semaine en cours (·) encore partielle, barre estompée.
+          </p>
         </>
       )}
     </section>
@@ -630,6 +785,8 @@ export function SupervisionPage() {
       {stats && (
         <>
           <KpiCards totals={stats.totals} />
+          {/* S2 — répartition par projet (Chat compris), part autonome incluse. */}
+          <ProjetsPanel parProjet={stats.parProjet} totals={stats.totals} />
           <div className="panels">
             <ModelsPanel models={stats.models} />
             <Histogram bucket={bucket} buckets={stats.buckets} />

@@ -32,6 +32,7 @@ import {
   type TicketPrio,
   type TicketStatut,
 } from "./ticketsClient";
+import { tachesReportRead, tachesReports, type TacheReportInfo } from "./tachesClient";
 import { useRovingFocus } from "./useRovingFocus";
 
 const MAX_LOG_LINES = 200;
@@ -223,8 +224,8 @@ function StreamEntryView({ entry }: Readonly<{ entry: StreamEntry }>) {
 
 /*
  * Chaque niveau porte un GLYPHE et un libellé en plus de sa couleur : la
- * criticité doit rester lisible sans percevoir la couleur (même principe que
- * les pastilles de `.status-badge`, qui ne se contentent jamais de la teinte).
+ * criticité doit rester lisible sans percevoir la couleur — jamais la teinte
+ * seule.
  */
 const LEVEL_META: Record<LogLevel, { glyph: string; label: string; titre: string }> = {
   fatal: { glyph: "✖", label: "fatal", titre: "Fatal — l'app ou un sous-système est hors service" },
@@ -246,6 +247,60 @@ const PERIODES: { id: PeriodeId; label: string; ms: number | null }[] = [
 
 /** Plafond de lecture : large sans atteindre le plafond dur du contrat (5000). */
 const JOURNAL_LIMIT = 2000;
+
+/*
+ * T-002 — dernier rapport de la tâche hebdomadaire `qualite-iaction`
+ * (docs/etude-logs.md § 2.7) : c'est ce qui referme la boucle
+ * « erreur vécue → ligne de journal → agrégat → rapport hebdo → ticket », et
+ * elle doit se voir depuis l'endroit où l'on constate les erreurs.
+ *
+ * Tolérant par construction : la tâche n'est pas forcément installée sur le
+ * poste. Sans rapport, pas de lien — et jamais de message d'erreur.
+ */
+const TACHE_QUALITE = "qualite-iaction";
+
+/** Libellé d'un rapport : son nom de fichier (les rapports sont datés `AAAA-MM-JJ.md`), à défaut son mtime. */
+function libelleRapport(rapport: TacheReportInfo): string {
+  const sansExt = rapport.file.replace(/\.md$/i, "");
+  if (sansExt) return sansExt;
+  return new Date(rapport.mtimeMs).toLocaleDateString("fr-FR");
+}
+
+/** Modale de lecture du dernier rapport qualité — contenu chargé à l'ouverture. */
+function RapportQualiteModal({ rapport, onClose }: Readonly<{ rapport: TacheReportInfo; onClose: () => void }>) {
+  const [contenu, setContenu] = useState<string | null>(null);
+  const [erreur, setErreur] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    tachesReportRead(TACHE_QUALITE, rapport.file)
+      .then((texte) => {
+        if (!cancelled) setContenu(texte);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setErreur(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rapport.file]);
+
+  return (
+    <Modal label={`Rapport qualité du ${libelleRapport(rapport)}`} onClose={onClose}>
+      <div className="orch-modal rapport-modal">
+        <header className="rapport-modal__head">
+          <h3>Rapport qualité · {libelleRapport(rapport)}</h3>
+          <button type="button" className="btn btn--ghost" onClick={onClose}>
+            Fermer
+          </button>
+        </header>
+        {erreur && <p className="empty-hint empty-hint--error">Rapport illisible : {erreur}</p>}
+        {!erreur && contenu === null && <p className="empty-hint">Chargement…</p>}
+        {contenu !== null && <Markdown content={contenu} />}
+      </div>
+    </Modal>
+  );
+}
 
 type JournalEtat = "chargement" | "ok" | "indisponible" | "erreur";
 
@@ -415,6 +470,9 @@ function JournalPanel() {
   const [deplie, setDeplie] = useState<ReadonlySet<string>>(new Set());
   const [purgeOuverte, setPurgeOuverte] = useState(false);
   const [purgeEnCours, setPurgeEnCours] = useState(false);
+  /** T-002 — dernier rapport `qualite-iaction`, ou `null` (tâche non installée, aucun rapport). */
+  const [rapport, setRapport] = useState<TacheReportInfo | null>(null);
+  const [rapportOuvert, setRapportOuvert] = useState(false);
   const [message, setMessage] = useState("");
   /** Incrémenté par « Rafraîchir » : relance l'effet de chargement. */
   const [tick, setTick] = useState(0);
@@ -456,6 +514,23 @@ function JournalPanel() {
       cancelled = true;
     };
   }, [minLevel, scope, periode, tick]);
+
+  // T-002 — dernier rapport qualité, best effort : toute erreur (tâche
+  // absente, sidecar sans `taches.*`) se solde par « pas de lien », jamais par
+  // un message dans un panneau qui parle d'autre chose.
+  useEffect(() => {
+    let cancelled = false;
+    tachesReports(TACHE_QUALITE)
+      .then((liste) => {
+        if (!cancelled) setRapport(liste[0] ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setRapport(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tick]);
 
   // TODO(L2) : brancher ici l'abonnement au tampon temps réel de
   // `ui/src/journal.ts` (complétion en direct des entrées déjà chargées) —
@@ -523,6 +598,16 @@ function JournalPanel() {
       <div className="journal-panel__head">
         <h2 className="panel__title">Journal</h2>
         <div className="actions journal-actions">
+          {rapport && (
+            <button
+              type="button"
+              className="btn btn--ghost journal-rapport"
+              onClick={() => setRapportOuvert(true)}
+              title={`Rapport hebdomadaire de la tâche ${TACHE_QUALITE} — top des erreurs, régressions, tickets proposés`}
+            >
+              ▤ Dernier rapport qualité · {libelleRapport(rapport)}
+            </button>
+          )}
           <button type="button" className="btn btn--ghost" onClick={() => setTick((t) => t + 1)}>
             Rafraîchir
           </button>
@@ -642,6 +727,10 @@ function JournalPanel() {
           {affichees.length} entrée(s) affichée(s) · {total} sur la fenêtre lue
           {truncated ? " · journal plus ancien non lu (fenêtre tronquée)" : ""}
         </p>
+      )}
+
+      {rapport && rapportOuvert && (
+        <RapportQualiteModal rapport={rapport} onClose={() => setRapportOuvert(false)} />
       )}
 
       {purgeOuverte && (

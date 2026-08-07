@@ -32,6 +32,7 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { buildHeaders, getProvider, joinUrl, type EngineEmitter } from "./engine.js";
 import { autoDebordCostUsdThisMonth, isLocalProviderId, readLatestClaudeWindows } from "./usageStats.js";
+import { projectDir } from "./appPaths.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -525,7 +526,7 @@ const NO_PROJECT_ROUTING: ProjectRouting = { table: {}, classifier: undefined, i
  * pour que `reasons` le mentionne ; chaque tier est validé individuellement.
  */
 async function readProjectRouting(cwd: string): Promise<ProjectRouting> {
-  const filePath = path.join(path.resolve(cwd), ".iaction", "routage.yaml");
+  const filePath = projectDir(cwd, "routage.yaml");
   let content: string;
   try {
     content = await fsp.readFile(filePath, "utf8");

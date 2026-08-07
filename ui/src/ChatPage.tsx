@@ -44,13 +44,16 @@ import {
   type SentAttachment,
 } from "./Attachments";
 import { readClipboardImage } from "./clipboardClient";
-import { Markdown } from "./Markdown";
+import { closeDanglingFence, Markdown } from "./Markdown";
 import { Modal } from "./Modal";
 import { readFeatured, splitFeatured } from "./modelCatalog";
 import { OllamaPanel } from "./OllamaPanel";
 import { capSessions, deriveTitleFromText, formatRelativeDate, newSessionMeta, sortByRecent } from "./sessionStore";
 import { SidebarSection } from "./SidebarSection";
+import { useComposerLiveDraft } from "./useComposerLiveDraft";
+import { useComposerUndo } from "./useComposerUndo";
 import { useRovingFocus } from "./useRovingFocus";
+import { useStickToBottom } from "./useStickToBottom";
 import {
   DEFAULT_CLASSIFIER,
   maxRouteTier,
@@ -201,10 +204,15 @@ interface ChatEntry {
   routeReasons?: string[];
 }
 
-let entryCounter = 0;
+/**
+ * Ids d'entrées : PERSISTÉS avec la session (clés React du fil, cibles des
+ * patchs `withAppendedDelta`/`withEntryDone`) — un compteur de module
+ * repartirait de zéro à chaque lancement/HMR et ferait entrer en collision
+ * une entrée neuve avec une entrée persistée (même défaut que `nextId` côté
+ * AgentPage.tsx, constaté le 2026-08-04). D'où l'UUID.
+ */
 function nextEntryId(prefix: string): string {
-  entryCounter += 1;
-  return `${prefix}-${entryCounter}`;
+  return `${prefix}-${crypto.randomUUID()}`;
 }
 
 /**
@@ -267,8 +275,13 @@ function contextTokens(entries: ChatEntry[]): number | null {
     // Priorité à l'occupation réelle mesurée côté sidecar (moteur Claude, voir
     // ChatEntry.contextTokens) ; repli sur prompt + complétion (moteur neutre,
     // ou entrées d'avant ce champ).
-    if (typeof entry.contextTokens === "number") return entry.contextTokens;
-    if (entry.usage) return entry.usage.promptTokens + entry.usage.completionTokens;
+    // Un total nul n'est pas une mesure (fournisseur muet, tour sans appel
+    // modèle) : on continue de remonter plutôt que d'afficher une jauge à 0 %.
+    if (typeof entry.contextTokens === "number" && entry.contextTokens > 0) return entry.contextTokens;
+    if (entry.usage) {
+      const total = entry.usage.promptTokens + entry.usage.completionTokens;
+      if (total > 0) return total;
+    }
   }
   return null;
 }
@@ -512,6 +525,23 @@ function withCompactionDefault(value: unknown): unknown {
  * session active est toujours garantie ouverte en onglet (le Chat n'a pas
  * d'onglets fichier : une active sans onglet n'aurait aucun sens ici).
  */
+/**
+ * Réattribue un id frais aux entrées dont l'id est déjà porté par une entrée
+ * vue avant — `seen` est PARTAGÉ sur toutes les sessions du document (même
+ * réparation inter-sessions que `dedupeTurnIds` côté AgentPage.tsx : le fil
+ * rend toutes les conversations dans le même composant, une clé partagée
+ * entre deux conversations fait réutiliser le DOM au changement d'onglet).
+ * Ne réordonne ni ne supprime rien : les index restent stables, la
+ * compaction (`upToIndex`) n'est pas affectée.
+ */
+function dedupeEntryIds(entries: ChatEntry[], seen: Set<string>): ChatEntry[] {
+  return entries.map((e) => {
+    const entry = seen.has(e.id) ? { ...e, id: nextEntryId(e.role === "user" ? "u" : "a") } : e;
+    seen.add(entry.id);
+    return entry;
+  });
+}
+
 function sanitizeChatState(raw: unknown): PersistedChatState | null {
   if (typeof raw !== "object" || raw === null) return null;
   const v = raw as Record<string, unknown>;
@@ -530,8 +560,10 @@ function sanitizeChatState(raw: unknown): PersistedChatState | null {
       : [activeId];
   const knownOpen = rawOpen.filter((id) => normalizedSessions.some((s) => s.id === id));
   const openConversationIds = knownOpen.length > 0 ? knownOpen : [activeId];
+  // Unicité GLOBALE des ids d'entrées, toutes sessions confondues (voir dedupeEntryIds).
+  const seenEntryIds = new Set<string>();
   return {
-    sessions: normalizedSessions,
+    sessions: normalizedSessions.map((s) => ({ ...s, entries: dedupeEntryIds(s.entries, seenEntryIds) })),
     activeId,
     openConversationIds: openConversationIds.includes(activeId)
       ? openConversationIds
@@ -600,8 +632,14 @@ const ChatBubble = memo(function ChatBubble({ entry }: Readonly<{ entry: ChatEnt
   return (
     <div className={`chat-bubble ${roleClass}`}>
       <div className="chat-bubble__content">
-        {/* Rendu Markdown pour l'assistant uniquement — l'utilisateur reste en texte brut pre-wrap. */}
-        {entry.role === "assistant" ? <Markdown content={entry.content} /> : entry.content}
+        {/* Rendu Markdown pour l'assistant uniquement — l'utilisateur reste en
+            texte brut pre-wrap. En streaming, une fence de code encore ouverte
+            est refermée pour le rendu (stabilité du parse — voir Markdown.tsx). */}
+        {entry.role === "assistant" ? (
+          <Markdown content={entry.status === "streaming" ? closeDanglingFence(entry.content) : entry.content} />
+        ) : (
+          entry.content
+        )}
         {entry.status === "streaming" && <span className="cursor" />}
       </div>
       {entry.attachments && entry.attachments.length > 0 && <SentAttachments items={entry.attachments} />}
@@ -834,6 +872,23 @@ export const ChatPage = forwardRef<
   function setDraft(value: string) {
     if (activeSessionId) updateRuntime(activeSessionId, (r) => ({ ...r, draft: value }));
   }
+  /** Brouillon VIF de la conversation active (le runtime, jamais la valeur de rendu — voir useComposerLiveDraft.ts). */
+  function getLiveDraft(): string {
+    return activeSessionId ? getRuntime(activeSessionId).draft : "";
+  }
+  // Frappe fluide : écriture silencieuse dans le runtime + re-rendu de
+  // rattrapage débouncé, au lieu d'un re-rendu de page par caractère.
+  const { onComposerChange, onComposerBlur } = useComposerLiveDraft({
+    textareaRef,
+    draft,
+    writeDraft: (value) => {
+      if (activeSessionId) runtimesRef.current.set(activeSessionId, { ...getRuntime(activeSessionId), draft: value });
+    },
+    tick: () => setRuntimeTick((t) => t + 1),
+  });
+  // Ctrl+Z/Ctrl+Maj+Z dans le composeur : pile d'annulation maison, le natif
+  // étant cassé par les écritures programmatiques du brouillon (voir useComposerUndo.ts).
+  const { handleUndoKey } = useComposerUndo(activeSessionId, getLiveDraft, setDraft);
   /** File d'attente de la conversation ACTIVE : retire le message à l'index donné (pastille d'annulation). */
   function removeQueuedPrompt(index: number) {
     if (activeSessionId)
@@ -881,11 +936,20 @@ export const ChatPage = forwardRef<
   // en erreur donne une table vide, le seuil tours s'applique alors seul).
   const contextLengthsRef = useRef<Map<string, Map<string, number>>>(new Map());
 
-  // Pièces jointes du composeur (voir Attachments.tsx) — purgées après un
-  // envoi réussi seulement (voir `handleSend`) : conservées si l'envoi
-  // échoue, pour éviter d'avoir à tout rejoindre.
-  const { attachments, addFiles, beginImage, resolveImage, removeAttachment, clear: clearAttachments, error: attachmentsError, setError: setAttachmentsError } =
-    useAttachmentDraft();
+  // Pièces jointes du composeur (voir Attachments.tsx) — purgées DÈS L'ENVOI
+  // (voir `handleSend`) et reposées si le tour échoue, pour éviter d'avoir à
+  // tout rejoindre.
+  const {
+    attachments,
+    addFiles,
+    beginImage,
+    resolveImage,
+    removeAttachment,
+    clear: clearAttachments,
+    restore: restoreAttachments,
+    error: attachmentsError,
+    setError: setAttachmentsError,
+  } = useAttachmentDraft();
   const [composerDragOver, setComposerDragOver] = useState(false);
   // Au moins une image collée encore en cours d'encodage : l'envoi doit attendre.
   const attachmentsPending = attachments.some((a) => a.loading);
@@ -897,8 +961,6 @@ export const ChatPage = forwardRef<
   const sessionTitleSkipBlurRef = useRef(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const stickToBottomRef = useRef(true);
   const isClaude = providerId === CLAUDE_PROVIDER_ID;
 
   /**
@@ -1069,18 +1131,9 @@ export const ChatPage = forwardRef<
 
   const featuredModels = splitFeatured(models, featuredIds);
 
-  function handleScroll() {
-    const el = scrollRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceFromBottom < 48;
-  }
-
-  useEffect(() => {
-    if (stickToBottomRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [entries]);
+  // Recollage en bas du fil : voir useStickToBottom.ts (logique partagée avec
+  // AgentPage — l'intention de l'utilisateur prime sur la position).
+  const { scrollRef, scrollProps, collerEnBas } = useStickToBottom(entries);
 
   /**
    * Tour de chat via le moteur Agent SDK en mode chat pur (fournisseur
@@ -1399,12 +1452,16 @@ export const ChatPage = forwardRef<
     // la réponse n'atterrisse dans la mauvaise conversation.
     const convId = activeSessionId;
     if (!convId) return;
+    // Brouillon VIF du runtime — jamais `draft` (valeur de rendu) : la frappe
+    // n'est répercutée au rendu que par un rattrapage débouncé (voir
+    // useComposerLiveDraft.ts), un Entrée immédiat lirait un texte tronqué.
+    const liveDraft = getRuntime(convId).draft;
 
     // Pendant un tour : on met le message en file (envoyé à la fin du tour,
     // voir l'effet d'auto-envoi). L'auto-envoi rappelle handleSend avec
     // `overrideContent` une fois `streaming` repassé à false.
     if (streaming && overrideContent === undefined) {
-      const pending = draft.trim();
+      const pending = liveDraft.trim();
       if (pending) {
         updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, pending], draft: "" }));
       }
@@ -1413,7 +1470,7 @@ export const ChatPage = forwardRef<
 
     // Chemin « file » (overrideContent) : texte seul, pas de pièces jointes.
     const usesComposer = overrideContent === undefined;
-    const content = (overrideContent ?? draft).trim();
+    const content = (overrideContent ?? liveDraft).trim();
     if (
       (!content && (!usesComposer || attachments.length === 0)) ||
       streaming ||
@@ -1436,11 +1493,14 @@ export const ChatPage = forwardRef<
     const engineIsClaude = isClaude;
     const isAutoTurn = model === AUTO_MODEL;
 
-    // Capturées avant tout envoi : le brouillon de pièces jointes n'est purgé
-    // qu'en cas de succès (voir le `finally`/`try` ci-dessous), ces variables
-    // locales restent donc valables même si `attachments` change entre-temps.
+    // Capturées avant tout envoi : ces variables locales restent valables même
+    // si `attachments` change entre-temps. Le tiroir est vidé DÈS L'ENVOI (les
+    // vignettes figurent alors dans le tour affiché ; les garder en bas
+    // laissait croire qu'elles restaient à envoyer) et reposé si le tour
+    // échoue (voir le `catch`).
     const contractAttachments = usesComposer ? toContractAttachments(attachments) : [];
     const sentAttachments = usesComposer ? toSentAttachments(attachments) : [];
+    const sentDrafts = usesComposer ? attachments : [];
 
     // Historique pour `chat.send` (moteur neutre) : lu dans le runtime de
     // CETTE conversation, AVANT l'ajout du nouveau tour (toApiMessages
@@ -1455,6 +1515,9 @@ export const ChatPage = forwardRef<
       ...(sentAttachments.length > 0 ? { attachments: sentAttachments } : {}),
     };
     const assistantId = nextEntryId("a");
+    // Le message part : le tiroir se vide ici, pas à la fin du tour (vidage
+    // conditionné à ce qui est réellement parti).
+    if (sentDrafts.length > 0) clearAttachments();
 
     // Verrouille l'envoi et pose les deux entrées d'un coup. `preSendAbort`
     // repart de zéro : c'est le drapeau de CE tour (voir `handleAbort` et le
@@ -1469,7 +1532,7 @@ export const ChatPage = forwardRef<
       entries: [...r.entries, userEntry, { id: assistantId, role: "assistant", content: "", status: "streaming" }],
       ...(usesComposer ? { draft: "" } : {}),
     }));
-    stickToBottomRef.current = true;
+    collerEnBas();
 
     // R6/R7 — plancher de session EN ATTENTE d'un tour Auto : relevé au
     // PREMIER signe de succès (premier chunk reçu, ou `done` sans erreur) —
@@ -1588,14 +1651,12 @@ export const ChatPage = forwardRef<
         const { finishReason, usage } = parseChatDone(data);
         updateEntriesFor(convId, (prev) => withEntryDone(prev, assistantId, finishReason === "aborted", usage));
       }
-      // Envoi réussi (la requête n'a pas rejeté) : composeur purgé des pièces
-      // jointes — conservées en cas d'échec (voir le `catch`), pour éviter de
-      // devoir tout rejoindre après une simple erreur réseau/API. Chemin
-      // « file » : ne touche pas aux pièces jointes du message suivant.
-      if (usesComposer) clearAttachments();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       updateEntriesFor(convId, (prev) => withEntryError(prev, assistantId, message));
+      // Tour échoué : les pièces jointes reviennent dans le composeur (retirées
+      // à l'envoi) — pas question de les rejoindre à la main pour réessayer.
+      restoreAttachments(sentDrafts);
     } finally {
       updateRuntime(convId, (r) => ({ ...r, streaming: false, activeRequestId: null }));
       // Fin de tour : la conso (Claude et/ou OpenRouter) a pu changer.
@@ -1669,6 +1730,14 @@ export const ChatPage = forwardRef<
       if (activeSessionId) {
         updateRuntime(activeSessionId, (r) => ({ ...r, draft: r.draft ? `${r.draft} ${text}` : text }));
       }
+    },
+    // Envoi par mot-clé : le brouillon rendu est celui que l'utilisateur voit
+    // (dicté ET tapé), et il est vidé — c'est lui qui part.
+    takeDraft: () => {
+      if (!activeSessionId) return "";
+      const draft = getRuntime(activeSessionId).draft;
+      if (draft) updateRuntime(activeSessionId, (r) => ({ ...r, draft: "" }));
+      return draft;
     },
     focusComposer: () => focusComposer(),
   });
@@ -2056,6 +2125,7 @@ export const ChatPage = forwardRef<
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (handleUndoKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
@@ -2311,7 +2381,6 @@ export const ChatPage = forwardRef<
                           className="session-item__action"
                           title="Renommer"
                           aria-label={`Renommer ${s.title}`}
-                          disabled={streaming}
                           onClick={() => startEditSessionTitle(s)}
                         >
                           ✎
@@ -2435,7 +2504,7 @@ export const ChatPage = forwardRef<
                   : `⚠ Mode débord : abonnement saturé (fenêtre 5 h à ${Math.round(debordNotice.fiveHourPct ?? 0)} %) — tour envoyé sur ${debordNotice.model}`}
             </div>
           )}
-          <div className="chat-log" ref={scrollRef} onScroll={handleScroll}>
+          <div className="chat-log" ref={scrollRef} {...scrollProps}>
             {/* R4 — indicateur discret en tête de transcription : le résumé
                 remplace les anciens tours À L'ENVOI seulement, la transcription
                 affichée reste intégrale. Clic → modale (résumé consultable). */}
@@ -2520,11 +2589,16 @@ export const ChatPage = forwardRef<
                 <AttachmentPickerButton onFiles={(files) => addFiles(files)} disabled={streaming} />
                 <VoiceButtons voice={voice} />
               </div>
+              {/* Semi-non-contrôlé (defaultValue + ref) : la frappe n'impose
+                  plus un re-rendu de page par caractère — voir
+                  useComposerLiveDraft.ts, qui pousse aussi les écritures
+                  programmatiques (dictée, vidage…) vers le DOM. */}
               <textarea
                 ref={textareaRef}
                 rows={5}
-                value={draft}
-                onChange={(e) => setDraft(e.currentTarget.value)}
+                defaultValue={draft}
+                onChange={(e) => onComposerChange(e.currentTarget.value)}
+                onBlur={onComposerBlur}
                 onKeyDown={handleKeyDown}
                 onPaste={(e) => {
                   const files = filesFromClipboard(e);
@@ -2553,14 +2627,17 @@ export const ChatPage = forwardRef<
               <div className="actions">
                 {streaming ? (
                   <>
+                    {/* Même libellé qu'au repos (choix utilisateur 2026-08-04) :
+                        la mise en file est un détail d'exécution, dit dans
+                        l'infobulle et le placeholder — pas un bouton à part. */}
                     <button
                       type="button"
                       className="btn"
                       onClick={() => void handleSend()}
                       disabled={!draft.trim() || !providerId || !model}
-                      title="Envoyer à la fin du tour en cours"
+                      title="Mettre en file : envoyé automatiquement à la fin du tour en cours"
                     >
-                      Mettre en file
+                      Envoyer
                     </button>
                     <button type="button" className="btn btn--ghost" onClick={() => void handleAbort()}>
                       Arrêter

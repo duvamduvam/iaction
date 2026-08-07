@@ -20,8 +20,6 @@
  */
 
 import os from "node:os";
-import path from "node:path";
-import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import type { EngineEmitter } from "./engine.js";
 import {
@@ -32,7 +30,16 @@ import {
   type Attachment,
 } from "./attachments.js";
 import * as journal from "./journal.js";
+import { buildAskUserMcpServer, type AskUserAnswer } from "./askUser.js";
 import { buildKnowledgeMcpServer } from "./knowledge.js";
+import {
+  buildRuntimeSnapshot,
+  ensureMcpDoc,
+  logMcpCall,
+  prepareMcpForTurn,
+  splitMcpToolName,
+  writeMcpRuntime,
+} from "./mcp.js";
 import { ensureProjectDoc } from "./projectDoc.js";
 import { recordClaudeWindowsSnapshot, recordUsageEvent, type UsageStatus } from "./usageStats.js";
 
@@ -98,11 +105,12 @@ export interface ClaudeQueryOptions {
   /**
    * Sources de réglages filesystem chargées par le SDK (`user` = ~/.claude,
    * `project` = <cwd>/.claude, `local` = settings.local). Omis = toutes les
-   * sources (défaut CLI). On passe `['project', 'local']` pour le moteur
-   * projet : seuls les skills/réglages DU projet comptent, pas les skills
-   * globaux (~/.claude/skills) — isolation entre projets
-   * (voir docs/protocol.md, claude.start). `'project'` doit rester présent
-   * pour que CLAUDE.md du projet soit chargé.
+   * sources (défaut CLI). On passe les trois pour le moteur projet : les
+   * skills GLOBAUX du poste (~/.claude/skills : grill-me, maison…) et les
+   * commandes globales (~/.claude/commands) sont volontairement hérités par
+   * tous les projets — décision du 2026-08-03, qui remplace l'isolation
+   * stricte d'origine (voir docs/protocol.md, claude.start). `'project'` doit
+   * rester présent pour que CLAUDE.md du projet soit chargé.
    */
   settingSources?: ("user" | "project" | "local")[];
   /**
@@ -292,7 +300,8 @@ function buildUserMessage(promptText: string, attachments: Attachment[]): Record
 
 /**
  * Prompt d'un tour en ENTRÉE STREAMÉE : yield le message utilisateur, puis
- * reste suspendu jusqu'à `close()`.
+ * reste suspendu jusqu'à `close()` — en livrant au passage les messages
+ * poussés par `push()` (claude.push, voir plus bas).
  *
  * Pourquoi ne pas passer une simple chaîne : avec un prompt-chaîne (ou un
  * générateur d'un seul élément), le SDK ferme l'entrée aussitôt et le CLI
@@ -304,20 +313,66 @@ function buildUserMessage(promptText: string, attachments: Attachment[]): Record
  * réveillent l'agent (nouveau tour → nouveau `result`), et c'est le sidecar
  * qui décide de la fin (plafond BACKGROUND_WAIT_TIMEOUT_MS ou claude.release).
  * `close()` est donc OBLIGATOIRE en fin de tour, sinon le process CLI fuit.
+ *
+ * S3 — `push()` glisse un message utilisateur SUPPLÉMENTAIRE dans cette même
+ * entrée pendant que le tour tourne (« demande en cours de route », méthode
+ * `claude.push`). Le CLI l'injecte au prochain retour d'outil, DANS le tour
+ * courant — vérifié sur le vrai moteur : un message poussé à T+6 s a été pris
+ * en compte à T+18 s (fin du premier Bash), sans `result` intermédiaire. Même
+ * comportement que Claude Code dans VSCode. Le générateur ne se termine
+ * toujours que sur `close()`.
  */
 function createTurnPrompt(
   promptText: string,
   attachments: Attachment[],
-): { iterable: AsyncIterable<Record<string, unknown>>; close: () => void } {
-  let closeResolve: (() => void) | null = null;
-  const closeSignal = new Promise<void>((resolve) => {
-    closeResolve = resolve;
-  });
+): {
+  iterable: AsyncIterable<Record<string, unknown>>;
+  push: (text: string) => void;
+  close: () => void;
+} {
+  const queued: Record<string, unknown>[] = [];
+  let closed = false;
+  // Réveil du générateur suspendu : `null` quand personne n'attend (push
+  // avant la première suspension → le message reste simplement dans `queued`).
+  let wake: (() => void) | null = null;
+
+  function signal(): void {
+    const resolve = wake;
+    wake = null;
+    resolve?.();
+  }
+
   async function* gen(): AsyncGenerator<Record<string, unknown>> {
     yield buildUserMessage(promptText, attachments);
-    await closeSignal;
+    while (true) {
+      while (queued.length > 0) {
+        yield queued.shift() as Record<string, unknown>;
+      }
+      if (closed) {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+    }
   }
-  return { iterable: gen(), close: () => closeResolve?.() };
+
+  return {
+    iterable: gen(),
+    push: (text: string) => {
+      if (closed) {
+        return;
+      }
+      // Pas de pièces jointes sur un message poussé : le contrat `claude.push`
+      // est volontairement texte seul (voir docs/protocol.md § claude.push).
+      queued.push(buildUserMessage(text, []));
+      signal();
+    },
+    close: () => {
+      closed = true;
+      signal();
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -372,55 +427,12 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: 
 const COMMANDS_TIMEOUT_MS = 15000;
 
 // ---------------------------------------------------------------------------
-// Support MCP v1 — lecture optionnelle de <cwd>/.mcp.json (convention Claude
-// Code : {"mcpServers": {"<nom>": {...}}}). Tolérant aux erreurs : un fichier
-// absent, invalide, ou mal formé ne fait jamais échouer le tour — juste un
-// log stderr et la poursuite sans MCP (voir docs/protocol.md, claude.start §
-// MCP).
+// Support MCP — la lecture de <cwd>/.mcp.json, les interrupteurs locaux, les
+// secrets et l'allowlist d'outils vivent dans mcp.ts (prepareMcpForTurn) ; ce
+// module ne fait que consommer le résultat et rapporter l'état constaté.
+// Invariant conservé : un fichier absent, invalide ou mal formé ne fait
+// JAMAIS échouer le tour (voir docs/protocol.md, claude.start § MCP).
 // ---------------------------------------------------------------------------
-
-async function loadMcpServersConfig(cwd: string): Promise<Record<string, unknown> | null> {
-  const mcpConfigPath = path.join(cwd, ".mcp.json");
-  let raw: string;
-  try {
-    raw = await readFile(mcpConfigPath, "utf8");
-  } catch {
-    // Fichier absent (ou illisible) : comportement inchangé, silencieux.
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    // `warn` et non `error` : le tour continue sans les serveurs MCP du
-    // projet — dégradation acceptée, pas un échec de l'action utilisateur.
-    journal.warn("claude", ".mcp.json contient du JSON invalide, ignoré", {
-      fields: { fichier: mcpConfigPath, erreur: message },
-    });
-    return null;
-  }
-
-  if (!isPlainObject(parsed) || !isPlainObject(parsed.mcpServers)) {
-    journal.warn("claude", ".mcp.json sans objet \"mcpServers\" valide, ignoré", {
-      fields: { fichier: mcpConfigPath },
-    });
-    return null;
-  }
-
-  const servers = parsed.mcpServers;
-  for (const [name, config] of Object.entries(servers)) {
-    if (!isPlainObject(config)) {
-      journal.warn("claude", ".mcp.json — entrée mcpServers invalide, fichier ignoré", {
-        fields: { fichier: mcpConfigPath, entree: name },
-      });
-      return null;
-    }
-  }
-
-  return servers;
-}
 
 // ---------------------------------------------------------------------------
 // usage.claude — instantané des limites d'abonnement (mini-tranche du Lot 8)
@@ -505,13 +517,29 @@ async function captureUsageSnapshot(query: ClaudeQuery): Promise<ClaudeUsageSnap
 // Moteur : createClaudeEngine({queryFn}) — état en mémoire isolé, injectable
 // ---------------------------------------------------------------------------
 
+/**
+ * Nom complet de l'outil de question interactive : côté SDK, un outil servi
+ * par un serveur MCP s'appelle `mcp__<serveur>__<outil>` (ici serveur `studio`,
+ * outil `ask_user` — voir askUser.ts).
+ */
+export const ASK_USER_TOOL_NAME = "mcp__studio__ask_user";
+
 interface PendingPermission {
   resolve: (result: PermissionResult) => void;
+}
+
+interface PendingQuestion {
+  resolve: (answer: AskUserAnswer) => void;
 }
 
 interface RunState {
   query: ClaudeQuery;
   pendingPermissions: Map<string, PendingPermission>;
+  /** Questions `mcp__studio__ask_user` en attente de réponse humaine (voir
+      askUser.ts). Même espace d'identifiants et même méthode de réponse
+      (`claude.permission`) que les permissions : côté UI, une question EST une
+      modale bloquante de plus. `resolve` rend le texte au handler de l'outil. */
+  pendingQuestions: Map<string, PendingQuestion>;
   permCounter: number;
   aborted: boolean;
   /** Tour du modèle fini mais process gardé ouvert en attente des rapports de
@@ -520,6 +548,8 @@ interface RunState {
   /** Ferme l'entrée streamée du tour (voir createTurnPrompt) : sans cet appel,
       le process CLI reste vivant en attente d'un message qui ne viendra pas. */
   closePrompt: () => void;
+  /** S3 — glisse un message utilisateur dans le tour EN COURS (claude.push). */
+  pushPrompt: (text: string) => void;
 }
 
 /** Plafond d'attente des rapports de tâches de fond après la fin du tour du
@@ -542,6 +572,7 @@ export interface ClaudeEngine {
   ): Promise<void>;
   handleClaudePermission(id: string, params: Record<string, unknown>, emitter: EngineEmitter): void;
   handleClaudeAbort(id: string, params: Record<string, unknown>, emitter: EngineEmitter): void;
+  handleClaudePush(id: string, params: Record<string, unknown>, emitter: EngineEmitter): void;
   handleClaudeRelease(id: string, params: Record<string, unknown>, emitter: EngineEmitter): void;
   handleClaudeUsage(id: string, params: Record<string, unknown>, emitter: EngineEmitter): void;
   handleClaudeUsageInit(
@@ -573,6 +604,12 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       pending.resolve({ behavior: "deny", message });
     }
     run.pendingPermissions.clear();
+    // Une question restée sans réponse ne doit JAMAIS laisser le handler de
+    // l'outil suspendu : on la clôt comme « ignorée ».
+    for (const pending of run.pendingQuestions.values()) {
+      pending.resolve({ answered: false, text: message });
+    }
+    run.pendingQuestions.clear();
   }
 
   function handleClaudeConfigure(
@@ -601,6 +638,13 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
   ): Promise<void> {
     const chatOnly = params.chatOnly === true;
     const webSearch = params.webSearch === true;
+    // `mcp: false` — un agent d'orchestration peut refuser d'hériter du
+    // .mcp.json du projet (champ `mcp` du manifeste, documenté de longue date
+    // mais resté inerte jusqu'ici). Absent = hérite, comportement historique.
+    const mcpAllowed = params.mcp !== false;
+    // Un humain est-il devant l'écran pour répondre à une question de l'agent ?
+    // Armé par la page Projets uniquement (voir askUser.ts).
+    const interactive = params.interactive === true && !chatOnly;
     // En mode chat pur, aucun outil ne touche au disque : un cwd neutre
     // (répertoire personnel) suffit si l'appelant n'en fournit pas.
     let cwd: string | null = null;
@@ -639,9 +683,14 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     if (!chatOnly) {
       await ensureProjectDoc(cwd);
     }
-    // Support MCP v1 : lecture de <cwd>/.mcp.json, sauf en mode chat pur (le
-    // chat pur ne doit voir aucun outil, MCP compris — voir docs/protocol.md).
-    const mcpServers = chatOnly ? null : await loadMcpServersConfig(cwd);
+    // Support MCP : <cwd>/.mcp.json filtré par les préférences locales
+    // (interrupteurs, allowlist) et secrets résolus — voir mcp.ts. Jamais en
+    // mode chat pur (le chat pur ne doit voir aucun outil, MCP compris).
+    const preparedMcp =
+      chatOnly || !mcpAllowed
+        ? { servers: null, disabled: [], missingSecrets: [], disallowedTools: [] }
+        : await prepareMcpForTurn(cwd);
+    const mcpServers = preparedMcp.servers;
     // R5 — RAG local : serveur MCP in-process `iaction` (outil
     // `mcp__iaction__search_knowledge`, voir knowledge.ts), exposé SEULEMENT
     // quand l'index du projet existe — même flux de permission que les autres
@@ -652,13 +701,46 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       // Initialisé juste après l'appel à queryFn ci-dessous.
       query: undefined as unknown as ClaudeQuery,
       pendingPermissions: new Map(),
+      pendingQuestions: new Map(),
       permCounter: 0,
       aborted: false,
       waitingBackground: false,
       closePrompt: turnPrompt.close,
+      pushPrompt: turnPrompt.push,
     };
 
+    /**
+     * Pont de l'outil `mcp__studio__ask_user` (voir askUser.ts) : émet la
+     * question sur le canal `permission_request` (même charge utile que
+     * l'`AskUserQuestion` intégré, que la modale de l'UI sait déjà rendre) et
+     * attend le `claude.permission` correspondant. `allow` = réponse donnée,
+     * `deny` = question ignorée.
+     */
+    const askUser = (questions: unknown): Promise<AskUserAnswer> => {
+      return new Promise<AskUserAnswer>((resolve) => {
+        runState.permCounter += 1;
+        const permissionId = `perm-${runState.permCounter}`;
+        runState.pendingQuestions.set(permissionId, { resolve });
+        emitter.chunk(id, {
+          kind: "permission_request",
+          permissionId,
+          toolName: ASK_USER_TOOL_NAME,
+          toolInput: { questions },
+        });
+      });
+    };
+    // Question interactive : SEULEMENT quand un humain est devant l'écran
+    // (`interactive`). Un tour headless (orchestration, planificateur) resterait
+    // bloqué sur une question que personne ne verrait — là, le modèle doit
+    // continuer à poser ses questions en texte.
+    const askServer = interactive ? await buildAskUserMcpServer(askUser) : null;
+
     const canUseTool: CanUseTool = (toolName, toolInput, toolOptions) => {
+      // L'outil de question EST déjà une interaction humaine : demander en plus
+      // l'autorisation de l'utiliser afficherait deux modales à la suite.
+      if (toolName === ASK_USER_TOOL_NAME) {
+        return Promise.resolve({ behavior: "allow" });
+      }
       return new Promise<PermissionResult>((resolve) => {
         runState.permCounter += 1;
         const permissionId = `perm-${runState.permCounter}`;
@@ -687,20 +769,56 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       cwd,
       includePartialMessages: true,
       permissionMode: isNonEmptyString(permissionModeParam) ? permissionModeParam : "default",
-      env: { ...process.env, ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}) },
+      env: {
+        ...process.env,
+        // Une question posée à l'humain occupe l'outil `ask_user` le temps
+        // qu'il réponde : sans plafond relevé, le délai d'exécution des outils
+        // MCP du CLI couperait la question au bout de quelques dizaines de
+        // secondes. Aligné sur l'attente des tâches de fond (10 min). Seulement
+        // sur les tours interactifs, et jamais si le poste l'a déjà fixé.
+        ...(interactive && !process.env.MCP_TOOL_TIMEOUT
+          ? { MCP_TOOL_TIMEOUT: String(BACKGROUND_WAIT_TIMEOUT_MS) }
+          : {}),
+        ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
+      },
       canUseTool,
     };
     if (chatOnly) {
       options.tools = webSearch ? ["WebSearch", "WebFetch"] : [];
     } else {
-      // Moteur projet : isolation stricte des skills/réglages au projet —
-      // on n'hérite pas des skills globaux (~/.claude/skills) ni des réglages
-      // utilisateur globaux. 'project' reste présent → CLAUDE.md chargé.
-      options.settingSources = ["project", "local"];
+      // Moteur projet : les trois sources. Les skills et commandes GLOBAUX du
+      // poste (~/.claude/skills, ~/.claude/commands) sont hérités par tous les
+      // projets — un skill transverse comme grill-me n'a pas à être recopié
+      // dans chaque projet. Contrepartie assumée : les réglages utilisateur
+      // globaux (~/.claude/settings.json : permissions, effortLevel) entrent
+      // aussi dans les tours de l'app. 'project' → CLAUDE.md du projet.
+      options.settingSources = ["user", "project", "local"];
       // AskUserQuestion retiré : non fonctionnel via le SDK (voir le champ
       // `disallowedTools`) — le modèle pose ses questions en texte, ce qui
-      // marche. Le mode chat pur n'a de toute façon aucun outil.
-      options.disallowedTools = ["AskUserQuestion"];
+      // marche. Le mode chat pur n'a de toute façon aucun outil. S'y ajoutent
+      // les outils MCP exclus par une allowlist locale (mcp.ts) : c'est le
+      // seul levier pour n'exposer que 2 outils d'un serveur qui en a 15, donc
+      // pour rendre au contexte ce que les serveurs bavards lui prennent.
+      options.disallowedTools = ["AskUserQuestion", ...preparedMcp.disallowedTools];
+      // O1/T-003 — allowlist `tools:` du manifeste d'agent, enfin APPLIQUÉE :
+      // elle était purement déclarative jusqu'au 2026-08-07 (un agent en
+      // lecture seule recevait Write/Edit/Bash malgré tout, et les tâches de
+      // fond tournent en `bypassPermissions`, sans garde-fou humain).
+      //
+      // C'est `tools` (base d'outils INTÉGRÉS exposée au modèle) et NON
+      // `allowedTools` qu'il faut poser : ce dernier ne fait qu'auto-approuver
+      // sans rien retirer de la palette — inopérant, donc, précisément sur les
+      // tours `bypassPermissions` qui en avaient le plus besoin.
+      const declaredTools = params.tools;
+      if (Array.isArray(declaredTools) && declaredTools.every((t) => typeof t === "string")) {
+        // Les outils MCP ne relèvent pas de `options.tools` : ils entrent par
+        // `mcpServers` et se gouvernent par le champ `mcp` du manifeste (plus
+        // l'allowlist locale de mcp.ts). On les écarte de la liste au lieu de
+        // les laisser passer pour des noms d'outils intégrés inconnus — dont
+        // `mcp__studio__ask_user` et `mcp__iaction__*`, qui restent donc
+        // disponibles quelle que soit l'allowlist déclarée.
+        options.tools = (declaredTools as string[]).filter((t) => !t.startsWith("mcp__"));
+      }
     }
     if (isNonEmptyString(sessionIdParam)) {
       options.resume = sessionIdParam;
@@ -711,11 +829,12 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     if (isNonEmptyString(systemPromptParam)) {
       options.systemPrompt = systemPromptParam;
     }
-    if (!chatOnly && (mcpServers || knowledgeServer)) {
-      // Le serveur `iaction` s'ajoute aux serveurs déclarés dans .mcp.json ;
-      // un serveur du projet nommé « iaction » prime (pas d'écrasement).
+    if (!chatOnly && (mcpServers || knowledgeServer || askServer)) {
+      // Les serveurs in-process s'ajoutent à ceux déclarés dans .mcp.json ;
+      // un serveur du projet de même nom prime (pas d'écrasement).
       options.mcpServers = {
         ...(knowledgeServer ? { iaction: knowledgeServer } : {}),
+        ...(askServer ? { studio: askServer } : {}),
         ...(mcpServers ?? {}),
       };
     }
@@ -736,6 +855,13 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     // message system/init prime sur celui demandé, s'il est connu.
     let lastModel: string | null = isNonEmptyString(modelParam) ? modelParam : null;
     let sawResult = false;
+    /** Départ du tour — sert la latence de démarrage (connexion des serveurs
+        MCP comprise) rapportée dans le chunk `init`. */
+    const turnStartedAt = Date.now();
+    /** Appels d'outils MCP en vol : `toolUseId` → outil + horodatage, pour
+        journaliser la durée réelle de chaque appel à la réception du résultat
+        (observabilité : quels serveurs servent, lesquels traînent). */
+    const inFlightMcpCalls = new Map<string, { server: string; tool: string; startedAt: number }>();
     /** Passe à true sur le message `result` FINAL : provoque la sortie de la boucle (voir ce case). */
     let turnFinished = false;
     /** Tâches de fond vivantes (system/background_tasks_changed, sémantique REPLACE :
@@ -837,11 +963,46 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
               if (typeof message.model === "string") {
                 lastModel = message.model;
               }
+              // État RÉEL des serveurs MCP : `mcp_servers` ([{name, status}])
+              // et `tools` (noms complets) du SDK. Jetés jusqu'ici — c'est ce
+              // qui rendait impossible de distinguer « branché » de
+              // « opérationnel » (serveur en panne, en attente d'auth, ou
+              // connecté mais sans aucun outil).
+              const snapshot = buildRuntimeSnapshot(
+                message.mcp_servers,
+                message.tools,
+                new Date().toISOString(),
+              );
               emitter.chunk(id, {
                 kind: "init",
                 sessionId: lastSessionId,
                 model: typeof message.model === "string" ? message.model : null,
+                mcpServers: snapshot.servers,
+                mcpToolCount: snapshot.servers.reduce((sum, s) => sum + s.tools.length, 0),
+                builtinToolCount: snapshot.builtinToolCount,
+                startupMs: Date.now() - turnStartedAt,
               });
+              if (!chatOnly && snapshot.servers.length > 0) {
+                // Deux petites écritures attendues ici (et non détachées) :
+                // l'UI recharge le panneau MCP dès ce chunk `init`, elle doit
+                // trouver l'instantané déjà posé. Les deux fonctions sont
+                // best effort et ne lèvent jamais. L'instantané sert aussi
+                // l'allowlist du tour SUIVANT ; la fiche annonce les outils
+                // au modèle (voir mcp.ts, renderMcpDoc).
+                await writeMcpRuntime(cwd, snapshot);
+                await ensureMcpDoc(cwd, snapshot);
+                journal.info("claude", "serveurs MCP du tour", {
+                  reqId: id,
+                  fields: {
+                    connectes: snapshot.servers.filter((s) => s.tools.length > 0).length,
+                    muets: snapshot.servers.filter((s) => s.tools.length === 0).length,
+                    outils: snapshot.servers.reduce((sum, s) => sum + s.tools.length, 0),
+                    eteints: preparedMcp.disabled.length,
+                    sansSecret: preparedMcp.missingSecrets.length,
+                    ms: Date.now() - turnStartedAt,
+                  },
+                });
+              }
             } else if (message.subtype === "background_tasks_changed") {
               // Liste COMPLÈTE des tâches de fond vivantes (REPLACE) : lancées
               // par le modèle (sous-agents en arrière-plan, jobs détachés).
@@ -855,6 +1016,18 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
                 kind: "background_tasks",
                 count: backgroundTasks.length,
                 descriptions: backgroundTasks.map((t) => t.description).filter(Boolean),
+              });
+            } else if (message.subtype === "compact_boundary") {
+              // Fin d'une compaction de contexte (« /compact » manuel ou
+              // compaction automatique du CLI). Sans relais, le tour se clôt
+              // sans aucun contenu et l'UI affichait « résultat vide du
+              // moteur » — l'utilisateur ne savait pas que le travail avait
+              // bien eu lieu (constaté le 2026-08-05).
+              const meta = isPlainObject(message.compact_metadata) ? message.compact_metadata : {};
+              emitter.chunk(id, {
+                kind: "compact",
+                trigger: typeof meta.trigger === "string" ? meta.trigger : "manual",
+                preTokens: typeof meta.pre_tokens === "number" ? meta.pre_tokens : null,
               });
             }
             break;
@@ -909,10 +1082,16 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
                 }
                 if (block.type === "tool_use") {
                   sawAssistantOutput = true;
+                  const toolUseId = typeof block.id === "string" ? block.id : null;
+                  const toolName = typeof block.name === "string" ? block.name : null;
+                  const mcp = toolName ? splitMcpToolName(toolName) : null;
+                  if (toolUseId && mcp) {
+                    inFlightMcpCalls.set(toolUseId, { ...mcp, startedAt: Date.now() });
+                  }
                   emitter.chunk(id, {
                     kind: "tool_use",
-                    toolUseId: typeof block.id === "string" ? block.id : null,
-                    toolName: typeof block.name === "string" ? block.name : null,
+                    toolUseId,
+                    toolName,
                     toolInput: block.input ?? {},
                   });
                 }
@@ -931,11 +1110,31 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
                 if (!isPlainObject(block) || block.type !== "tool_result") {
                   continue;
                 }
+                const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : null;
+                const isError = block.is_error === true;
+                const summary = summarizeToolResult(block.content);
+                // Un appel MCP terminé = une ligne de journal (serveur, outil,
+                // durée, issue) : c'est ce qui permettra de répondre par des
+                // faits à « quels serveurs servent vraiment ? ».
+                const call = toolUseId ? inFlightMcpCalls.get(toolUseId) : undefined;
+                let durationMs: number | null = null;
+                if (call && toolUseId) {
+                  inFlightMcpCalls.delete(toolUseId);
+                  durationMs = Date.now() - call.startedAt;
+                  logMcpCall({
+                    server: call.server,
+                    tool: call.tool,
+                    durationMs,
+                    ok: !isError,
+                    resultChars: summary.length,
+                  });
+                }
                 emitter.chunk(id, {
                   kind: "tool_result",
-                  toolUseId: typeof block.tool_use_id === "string" ? block.tool_use_id : null,
-                  isError: block.is_error === true,
-                  summary: summarizeToolResult(block.content),
+                  toolUseId,
+                  isError,
+                  summary,
+                  durationMs,
                 });
               }
             }
@@ -1161,6 +1360,17 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     }
 
     const run = runs.get(targetId);
+    // Question interactive (mcp__studio__ask_user) : même méthode de réponse,
+    // mais le message est la RÉPONSE rendue au modèle, pas un motif de refus.
+    const question = run?.pendingQuestions.get(permissionId);
+    if (run && question) {
+      run.pendingQuestions.delete(permissionId);
+      const message = isNonEmptyString(params.message) ? params.message : "";
+      question.resolve({ answered: decision === "allow" && message !== "", text: message });
+      emitter.done(id, { applied: true });
+      return;
+    }
+
     const pending = run?.pendingPermissions.get(permissionId);
     if (!run || !pending) {
       emitter.done(id, { applied: false });
@@ -1200,6 +1410,40 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       // le done du tour (émis par la boucle handleClaudeStart) fait foi.
     });
     emitter.done(id, { aborted: true });
+  }
+
+  /**
+   * S3 — glisse un message utilisateur dans le tour EN COURS, sans l'attendre
+   * ni le couper : le CLI l'injecte au prochain retour d'outil (comportement
+   * de Claude Code dans VSCode). Utile surtout quand l'agent attend des
+   * tâches de fond — on peut l'interroger pendant qu'il patiente.
+   *
+   * `pushed: false` (jamais une erreur) si le tour n'existe plus ou a été
+   * interrompu : côté UI, c'est le signal pour remettre le message dans la
+   * file d'attente du tour suivant plutôt que de le perdre.
+   */
+  function handleClaudePush(
+    id: string,
+    params: Record<string, unknown>,
+    emitter: EngineEmitter,
+  ): void {
+    const targetId = params.targetId;
+    const content = params.content;
+    if (!isNonEmptyString(targetId)) {
+      emitter.error(id, "params.targetId manquant ou invalide");
+      return;
+    }
+    if (!isNonEmptyString(content)) {
+      emitter.error(id, "params.content manquant ou invalide");
+      return;
+    }
+    const run = runs.get(targetId);
+    if (!run || run.aborted) {
+      emitter.done(id, { pushed: false });
+      return;
+    }
+    run.pushPrompt(content);
+    emitter.done(id, { pushed: true });
   }
 
   /** Rendre la main pendant l'attente des rapports de tâches de fond : clôt le
@@ -1320,10 +1564,11 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       includePartialMessages: false,
       permissionMode: "default",
       env: { ...process.env, ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}) },
-      // Même isolation que le moteur projet de claude.start : seuls les
-      // skills/réglages DU projet comptent, pas les skills globaux
-      // (~/.claude/skills).
-      settingSources: ["project", "local"],
+      // Mêmes sources que le moteur projet de claude.start : la liste des
+      // commandes doit refléter ce que le tour verra RÉELLEMENT — skills et
+      // commandes globaux du poste (~/.claude) compris, sinon le menu « / »
+      // afficherait moins que ce qui est réellement disponible.
+      settingSources: ["user", "project", "local"],
     };
 
     const { iterable: promptForQuery, close: closePrompt } = createNonYieldingPrompt();
@@ -1375,6 +1620,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     handleClaudeStart,
     handleClaudePermission,
     handleClaudeAbort,
+    handleClaudePush,
     handleClaudeRelease,
     handleClaudeUsage,
     handleClaudeUsageInit,
@@ -1444,6 +1690,15 @@ export async function handleClaudeAbort(
 ): Promise<void> {
   const engine = await enginePromise;
   engine.handleClaudeAbort(id, params, emitter);
+}
+
+export async function handleClaudePush(
+  id: string,
+  params: Record<string, unknown>,
+  emitter: EngineEmitter,
+): Promise<void> {
+  const engine = await enginePromise;
+  engine.handleClaudePush(id, params, emitter);
 }
 
 export async function handleClaudeRelease(

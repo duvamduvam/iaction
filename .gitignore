@@ -4,3 +4,14 @@ target/
 src-tauri/gen/schemas/
 *.log
 .DS_Store
+
+# Secrets : le `.env` du serveur (docker/ia-runner) ne doit jamais être
+# commité — seul le gabarit `.env.example` l'est.
+.env
+!.env.example
+
+# MCP : préférences locales (interrupteurs, allowlist d'outils) et état
+# constaté au dernier tour — propres au poste, régénérés, jamais du contrat
+# partagé (celui-ci, c'est `.mcp.json`, qui reste versionné).
+.iaction/mcp.local.json
+.iaction/mcp.runtime.json

@@ -1,0 +1,59 @@
+# Contexte des builds Docker (aujourd'hui : docker/ia-runner/Dockerfile, dont
+# le contexte est la racine du dépôt — voir docker/ia-runner/docker-compose.yml).
+#
+# Deux objectifs :
+#   1. ne JAMAIS envoyer de secret au démon Docker (un `.env` recopié dans une
+#      couche d'image y reste, même supprimé ensuite) ;
+#   2. garder le contexte petit — `node_modules/` (2 Go) et
+#      `src-tauri/target/` (12 Go) transiteraient sinon à chaque build, sur un
+#      serveur qui n'a que 24 Go de libre.
+#
+# Ce qui doit RESTER dans le contexte : package.json, package-lock.json,
+# ui/package.json (exigé par `npm ci` à cause des workspaces), sidecar/{package.json,
+# tsconfig.json,src}, scripts/orch-run-headless.mjs, docker/ia-runner/bin/.
+
+# --- Secrets ---------------------------------------------------------------
+# Y compris les `.env.example` : ils n'ont rien à faire dans une image, et une
+# exception ici serait le genre de subtilité qui finit par laisser passer le
+# vrai fichier.
+.env
+**/.env
+**/.env.*
+*.pem
+*.key
+
+# --- Volumineux et inutiles au build --------------------------------------
+node_modules
+**/node_modules
+src-tauri
+tools
+assets
+.git
+.github
+.vscode
+.claude
+.iaction
+
+# --- Artefacts de compilation (l'image recompile le sidecar elle-même) -----
+sidecar/dist
+ui/dist
+**/*.tsbuildinfo
+
+# --- Sources sans usage côté runner ---------------------------------------
+ui/src
+ui/public
+ui/index.html
+ui/vite.config.ts
+ui/tsconfig*.json
+sidecar/test
+docs
+scripts/dev.sh
+scripts/gen-horizon-grid.py
+scripts/usage-baseline.mjs
+
+# --- Divers ----------------------------------------------------------------
+*.log
+.DS_Store
+README.md
+docker/ia-runner/README.md
+docker/ia-runner/docker-compose.yml

@@ -8,8 +8,6 @@ import { ProvidersPage } from "./ProvidersPage";
 import { SupervisionPage } from "./SupervisionPage";
 import { SystemPage } from "./SystemPage";
 import {
-  fetchStatus,
-  request,
   subscribeReady,
   subscribeStatus,
   usageClaude,
@@ -18,8 +16,6 @@ import {
   type ClaudeUsageSnapshot,
   type ClaudeUsageWindow,
   type OpenrouterUsage,
-  type SidecarState,
-  type StatusPayload,
 } from "./sidecar";
 import {
   COMPACT_BUTTON_MIN_TOKENS,
@@ -40,91 +36,6 @@ import { useProjects } from "./useProjects";
 import { useProviders } from "./useProviders";
 import { useRovingFocus } from "./useRovingFocus";
 import { useSpeech } from "./useSpeech";
-
-/* ---------- En-tête / statut ---------- */
-
-type BadgeVariant = "ok" | "warn" | "error";
-
-function statusLabel(state: SidecarState, ready: boolean): string {
-  switch (state) {
-    case "starting":
-      return "Démarrage";
-    case "running":
-      return ready ? "En ligne" : "En ligne (attente ready)";
-    case "restarting":
-      return "Redémarrage";
-    case "dead":
-      return "Arrêté";
-  }
-}
-
-function statusVariant(state: SidecarState, ready: boolean): BadgeVariant {
-  if (state === "dead") return "error";
-  if (state === "running" && ready) return "ok";
-  return "warn";
-}
-
-function StatusBadge() {
-  const [status, setStatus] = useState<StatusPayload | null>(null);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    // L'event `ready` du sidecar part souvent AVANT que la webview ait posé
-    // ses listeners : on ne peut pas compter dessus au premier chargement.
-    // On sonde donc activement avec un `ping` (réponse = opérationnel).
-    const probe = () => {
-      request("ping", {})
-        .done.then(() => {
-          if (!cancelled) setReady(true);
-        })
-        .catch(() => {
-          /* pas encore joignable : le prochain statut/ready re-sondera */
-        });
-    };
-
-    fetchStatus()
-      .then((s) => {
-        if (cancelled) return;
-        setStatus(s);
-        if (s.state === "running") probe();
-      })
-      .catch(() => {
-        /* le sidecar peut ne pas encore être prêt à répondre : on attend l'event */
-      });
-
-    const offStatus = subscribeStatus((s) => {
-      setStatus(s);
-      // Un (re)démarrage invalide le "ready" du process précédent.
-      if (s.state !== "running") setReady(false);
-      else probe();
-    });
-    const offReady = subscribeReady(() => setReady(true));
-
-    return () => {
-      cancelled = true;
-      offStatus();
-      offReady();
-    };
-  }, []);
-
-  const state = status?.state ?? "starting";
-  const variant = statusVariant(state, ready);
-  const label = statusLabel(state, ready);
-
-  return (
-    <div className={`status-badge status-badge--${variant}`} title="État du sidecar">
-      <span className="status-badge__dot" />
-      <span>{label}</span>
-      {status && (
-        <span className="status-badge__meta">
-          {status.pid !== null ? `pid ${status.pid}` : "—"} · tentatives {status.attempts}
-        </span>
-      )}
-    </div>
-  );
-}
 
 /* ---------- Encart conso ---------- */
 
@@ -297,10 +208,32 @@ function ClaudeUsageBlock({
   );
 }
 
+/**
+ * Référence de « réservoir » OpenRouter : le solde disponible constaté juste
+ * après la dernière recharge. total_credits/total_usage de l'API étant des
+ * cumuls à vie du compte, leur ratio tend vers 100 % pour toujours — jauger
+ * là-dessus affiche un badge éternellement plein. On jauge donc la
+ * consommation du réservoir courant, réamorcé à chaque recharge.
+ */
+interface OpenrouterRef {
+  peakRemaining: number;
+  totalCredits: number;
+}
+
+function nextOpenrouterRef(prev: OpenrouterRef | null, usage: OpenrouterUsage): OpenrouterRef {
+  // Recharge (total_credits a monté) ou solde au-dessus du pic connu : le
+  // réservoir repart de ce solde. Sinon la référence ne bouge pas.
+  if (!prev || usage.totalCredits > prev.totalCredits || usage.remaining > prev.peakRemaining) {
+    return { peakRemaining: Math.max(usage.remaining, 0), totalCredits: usage.totalCredits };
+  }
+  return prev;
+}
+
 function OpenrouterUsageBlock({
   usage,
+  refPoint,
   error,
-}: Readonly<{ usage: OpenrouterUsage | null; error: boolean }>) {
+}: Readonly<{ usage: OpenrouterUsage | null; refPoint: OpenrouterRef | null; error: boolean }>) {
   if (error || !usage) {
     return (
       <span className="usage-widget__placeholder" title="Aucune clé OpenRouter configurée, ou erreur réseau">
@@ -308,15 +241,16 @@ function OpenrouterUsageBlock({
       </span>
     );
   }
-  // Camembert : part du crédit consommée. Si le compte n'a aucun crédit
-  // chargé (total 0), la notion de % n'a pas de sens.
-  const pct = usage.totalCredits > 0 ? (usage.totalUsage / usage.totalCredits) * 100 : 0;
+  // Camembert : part consommée du réservoir courant (solde depuis la dernière
+  // recharge). Sans référence (premier relevé), rien n'a été consommé depuis.
+  const peak = refPoint?.peakRemaining ?? 0;
+  const pct = peak > 0 ? ((peak - usage.remaining) / peak) * 100 : 0;
   return (
     <Donut
       label="OR"
       pct={pct}
       text={`reste ${usage.remaining.toFixed(2)}$`}
-      title={`Consommé ${usage.totalUsage.toFixed(2)} $ sur ${usage.totalCredits.toFixed(2)} $ (${Math.round(pct)} %) · Reste ${usage.remaining.toFixed(2)} $ (les recharges augmentent le total automatiquement)`}
+      title={`Depuis la dernière recharge : consommé ${Math.max(peak - usage.remaining, 0).toFixed(2)} $ sur ${peak.toFixed(2)} $ (${Math.round(Math.min(100, Math.max(0, pct)))} %) · Reste ${usage.remaining.toFixed(2)} $ · Historique du compte : ${usage.totalUsage.toFixed(2)} $ consommés sur ${usage.totalCredits.toFixed(2)} $ chargés`}
     />
   );
 }
@@ -329,6 +263,7 @@ function OpenrouterUsageBlock({
 interface UsageCache {
   claude: ClaudeUsageSnapshot | null;
   openrouter: OpenrouterUsage | null;
+  openrouterRef?: OpenrouterRef | null;
 }
 
 const USAGE_RETRY_DELAY_MS = 15_000;
@@ -336,6 +271,7 @@ const USAGE_RETRY_DELAY_MS = 15_000;
 function UsageWidget() {
   const [claudeSnapshot, setClaudeSnapshot] = useState<ClaudeUsageSnapshot | null>(null);
   const [openrouterUsage, setOpenrouterUsage] = useState<OpenrouterUsage | null>(null);
+  const [openrouterRef, setOpenrouterRef] = useState<OpenrouterRef | null>(null);
   const [openrouterError, setOpenrouterError] = useState(false);
   const [claudeInitializing, setClaudeInitializing] = useState(false);
 
@@ -365,7 +301,7 @@ function UsageWidget() {
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     // Relais vers le cache disque : on ne réécrit que ce qui a été rafraîchi
     // avec succès (l'autre moitié garde sa dernière valeur connue).
-    const cacheRef: UsageCache = { claude: null, openrouter: null };
+    const cacheRef: UsageCache = { claude: null, openrouter: null, openrouterRef: null };
 
     function persistCache() {
       stateWrite("usage-cache", cacheRef).catch(() => {
@@ -404,9 +340,12 @@ function UsageWidget() {
       usageOpenrouter("openrouter")
         .then((usage) => {
           if (cancelled) return;
+          const nextRef = nextOpenrouterRef(cacheRef.openrouterRef ?? null, usage);
           setOpenrouterUsage(usage);
+          setOpenrouterRef(nextRef);
           setOpenrouterError(false);
           cacheRef.openrouter = usage;
+          cacheRef.openrouterRef = nextRef;
           persistCache();
         })
         .catch(() => {
@@ -460,6 +399,10 @@ function UsageWidget() {
           setOpenrouterUsage((prev) => prev ?? cache.openrouter ?? null);
           setOpenrouterError(false);
         }
+        if (cache.openrouterRef && typeof cache.openrouterRef.peakRemaining === "number") {
+          cacheRef.openrouterRef = cache.openrouterRef;
+          setOpenrouterRef((prev) => prev ?? cache.openrouterRef ?? null);
+        }
       })
       .catch(() => {
         /* pas de cache : l'encart démarre à « — » comme avant */
@@ -504,7 +447,7 @@ function UsageWidget() {
   return (
     <div className="usage-widget" title="Consommation">
       <ClaudeUsageBlock snapshot={claudeSnapshot} initializing={claudeInitializing} onInit={handleClaudeInit} />
-      <OpenrouterUsageBlock usage={openrouterUsage} error={openrouterError} />
+      <OpenrouterUsageBlock usage={openrouterUsage} refPoint={openrouterRef} error={openrouterError} />
     </div>
   );
 }
@@ -978,7 +921,6 @@ function Header({
           <ContextWidget source={contextSourceFor(page)} />
           <SystemStatsWidget />
           <UsageWidget />
-          <StatusBadge />
         </div>
       </div>
       <Nav active={page} onSelect={onSelectPage} onOpenTerminal={onOpenTerminal} orchestrationAlert={orchestrationAlert} />
