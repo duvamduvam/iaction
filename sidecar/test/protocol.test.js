@@ -2784,13 +2784,20 @@ async function testR3Debord() {
     const parProjet = doneUsS2.data.parProjet;
     assert(Array.isArray(parProjet), `us-s2 : parProjet attendu, reçu ${JSON.stringify(doneUsS2.data)}`);
     const parts = parProjet.map((p) => `${p.projectId}:${p.name}:${p.partTokensPct}`);
+    // L'id d'un projet NON déclaré est `chemin:<répertoire résolu>` (voir
+    // `resolveProjet`/`normalizeDir`, sidecar/src/usageStats.ts) : on le calcule
+    // avec le même `path.resolve` que le code plutôt que de l'écrire en dur.
+    // Sous Windows, `/tmp/pas-declare` se résout en `D:\tmp\pas-declare` — un
+    // littéral POSIX faisait tomber ce test sur le runner Windows alors que le
+    // comportement était correct.
+    const cheminNonDeclare = `chemin:${path.resolve("/tmp/pas-declare")}`;
     assert(
       JSON.stringify(parts) ===
         JSON.stringify([
           "chat:Chat:40",
           "orgai:OrgAI:30",
           "rdpl:RDPL:30",
-          "chemin:/tmp/pas-declare:pas-declare:0",
+          `${cheminNonDeclare}:pas-declare:0`,
           "null:(non attribué):0",
         ]),
       `us-s2 : répartition par projet incorrecte, reçue ${JSON.stringify(parts)}`,
