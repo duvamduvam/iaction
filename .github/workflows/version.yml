@@ -82,9 +82,23 @@ jobs:
       - name: Tests unitaires UI (vitest)
         run: npm run test -w ui
 
+      # Même traitement que les tests du sidecar : les journaux de run étant
+      # réservés aux administrateurs du dépôt, l'échec doit voyager par une
+      # ANNOTATION, seule sortie lisible publiquement.
       - name: Tests Rust (cargo test)
+        shell: bash
         working-directory: src-tauri
-        run: cargo test --quiet
+        run: |
+          set +e
+          cargo test --quiet > sortie-cargo.txt 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            resume=$(grep -aE "^error(\[|:)|^thread .* panicked|^test .* FAILED|cannot find|no method|mismatched types" sortie-cargo.txt | head -4 | tr '\n' '¦')
+            echo "::error title=Tests Rust (${{ matrix.os }})::${resume:-échec sans ligne reconnaissable}"
+            echo "----- 80 dernières lignes -----"
+            tail -80 sortie-cargo.txt
+          fi
+          exit $code
 
       # Les journaux d'un run ne sont téléchargeables qu'avec des droits
       # d'administration sur le dépôt — inutilisables pour diagnostiquer depuis
