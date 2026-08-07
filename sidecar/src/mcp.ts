@@ -39,6 +39,7 @@
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import * as journal from "./journal.js";
 import { collectSecretRefs, readSecrets, resolveSecretRefs } from "./mcpSecrets.js";
@@ -115,13 +116,6 @@ export const EMPTY_MCP_STATE: McpLocalState = { disabled: [], allowedTools: {} }
 // Utilitaires purs
 // ---------------------------------------------------------------------------
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 function truncate(text: string, max = 100): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;

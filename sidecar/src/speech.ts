@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import { joinUrl, readBoundedBody, type EngineEmitter } from "./engine.js";
 import { globalDataRoot } from "./appPaths.js";
 import * as journal from "./journal.js";
@@ -196,13 +197,6 @@ async function importVoixLocale<T>(nom: string): Promise<T> {
   return (await import(pathToFileURL(resolu).href)) as T;
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Répertoire de cache des modèles : ~/.cache/iaction/models (XDG respecté). */
 function modelsCacheDir(): string {

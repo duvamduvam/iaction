@@ -21,11 +21,11 @@
 
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { errMessage, isNonEmptyString, isPlainObject } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import * as journal from "./journal.js";
 import {
   enqueueWrite,
-  errMessage,
   globalConfigRoot,
   parseCorrelationIds,
   readJsonlTail,
@@ -37,13 +37,6 @@ import { globalDataRoot } from "./appPaths.js";
 // Utilitaires (dupliqués depuis orchestrator.ts/taches.ts — non exportés là-bas)
 // ---------------------------------------------------------------------------
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /**
  * R3 — heuristique « provider local » (coût nul), partagée avec l'esprit de

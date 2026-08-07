@@ -201,7 +201,12 @@ Near-term: hardening, packaging/distribution, i18n, screenshots & demo project.
 
 ## 🤝 Contributing
 
-Issues and PRs are welcome — bug reports, i18n, docs, UI polish. The protocol test suite (`npm run sidecar:test`) is the safety net; please keep it green.
+Issues and PRs are welcome — bug reports, i18n, docs, UI polish.
+
+Before pushing: **`npm run verif`** (lint + UI unit tests + sidecar protocol
+suite + Rust tests) — the same sequence CI runs on Ubuntu and Windows. The test
+strategy, and what only a human can validate, is written down in
+[docs/plan-de-test.md](docs/plan-de-test.md) (French).
 
 ## 📄 License
 

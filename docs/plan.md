@@ -346,6 +346,13 @@ solo = énorme. À réconcilier à l'axe 8 (build vs réutiliser un agent exista
   faite (`agentTurns.ts`). **Ni réécriture, ni framework d'état** : le problème
   n'est pas le mécanisme mais l'absence de frontière.
 
+- **Stratégie de test** (rédigée 2026-08-07 : `docs/plan-de-test.md`) — quel
+  niveau prouve quoi, ce que la CI fait sans intervention, et les QUATRE
+  domaines qui ne relèvent que de l'humain (recette de version en 10 minutes,
+  matériel, intégrations réelles, jugement d'usage). Règle : tout défaut
+  devient un test au niveau le PLUS BAS qui l'aurait attrapé, et ce qui n'est
+  pas testé est écrit noir sur blanc.
+
 **Pistes flexibilité (proposées 2026-07-19, à valider au grill)**
 
 1. ✅ **Connaissances niveau 2 — dossier auto** (livré 2026-07-19) :

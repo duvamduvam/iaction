@@ -31,6 +31,7 @@ import {
   readBoundedBody,
   type EngineEmitter,
 } from "./engine.js";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import { formatChatSearchResults, sanitizeLimit, searchChatHistory } from "./chatHistory.js";
 import * as journal from "./journal.js";
 import { getEmbeddingsConfig } from "./router.js";
@@ -64,13 +65,6 @@ const INDEX_ABSENT_MESSAGE = "index absent — lancer l'indexation";
 // Utilitaires
 // ---------------------------------------------------------------------------
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Dossier de l'index d'un projet : `<cwd>/.iaction/connaissances-index/`. */
 function indexDir(cwd: string): string {

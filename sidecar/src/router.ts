@@ -30,6 +30,7 @@
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import { buildHeaders, getProvider, joinUrl, type EngineEmitter } from "./engine.js";
 import { autoDebordCostUsdThisMonth, isLocalProviderId, readLatestClaudeWindows } from "./usageStats.js";
 import { projectDir } from "./appPaths.js";
@@ -145,13 +146,6 @@ export function getEmbeddingsConfig(): EmbeddingsConfig {
 // Utilitaires
 // ---------------------------------------------------------------------------
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 // ---------------------------------------------------------------------------
 // Classification — fonction pure exportée (testable unitairement)

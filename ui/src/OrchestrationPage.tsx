@@ -20,6 +20,7 @@
  * notion de `cwd`/portée (répertoire racine unique côté sidecar).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toMessage } from "./base";
 import { Markdown } from "./Markdown";
 import { Modal } from "./Modal";
 import type { ProjectConfig } from "./projectAdmin";
@@ -81,9 +82,6 @@ function looksLikeUnknownMethod(message: string): boolean {
   return /m[ée]thode inconnue|unknown method|non impl[ée]ment[ée]e|not implemented/i.test(message);
 }
 
-function toMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function agentScopeLabel(scope: AgentScope): string {
   if (scope === "global") return "Global";

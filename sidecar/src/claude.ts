@@ -21,6 +21,7 @@
 
 import os from "node:os";
 import { pathToFileURL } from "node:url";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import {
   formatTextAttachmentPrefix,
@@ -166,13 +167,6 @@ export type ClaudeQueryFn = (params: {
 // Utilitaires
 // ---------------------------------------------------------------------------
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 const MAX_SUMMARY = 500;
 

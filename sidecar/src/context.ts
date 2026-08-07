@@ -1,3 +1,4 @@
+import { isNonEmptyString, isPlainObject } from "./base.js";
 /**
  * Économie de contexte — Lot 14, phase R4 (docs/spec-r4-contexte.md).
  *
@@ -52,13 +53,6 @@ const COMPACT_SYSTEM_PROMPT =
 // Utilitaires (mêmes conventions qu'engine.ts/router.ts)
 // ---------------------------------------------------------------------------
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 // ---------------------------------------------------------------------------
 // Fonctions pures (testées dans protocol.test.js, miroir côté ChatPage.tsx)

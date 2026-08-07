@@ -16,6 +16,7 @@ import {
   validateAttachments,
   type Attachment,
 } from "./attachments.js";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import { recordUsageEvent, type UsageStatus } from "./usageStats.js";
 
 // ---------------------------------------------------------------------------
@@ -70,13 +71,6 @@ export function getProvider(id: string): Provider | undefined {
 // Utilitaires
 // ---------------------------------------------------------------------------
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);

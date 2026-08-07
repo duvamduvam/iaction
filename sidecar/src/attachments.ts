@@ -1,3 +1,4 @@
+import { isNonEmptyString, isPlainObject } from "./base.js";
 /**
  * Pièces jointes (`chat.send`, `claude.start`) — validation et gabarits
  * partagés entre le moteur neutre (engine.ts) et le moteur Claude (claude.ts).
@@ -35,13 +36,6 @@ export type AttachmentValidation =
   | { ok: true; attachments: Attachment[] }
   | { ok: false; message: string };
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 function isAllowedImageMediaType(value: unknown): value is AllowedImageMediaType {
   return typeof value === "string" && (ALLOWED_IMAGE_MEDIA_TYPES as readonly string[]).includes(value);

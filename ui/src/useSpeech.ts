@@ -14,6 +14,7 @@
  * StrictMode (montage/démontage/remontage en dev).
  */
 import { useEffect, useRef, useState } from "react";
+import { toMessage } from "./base";
 import { subscribeReady } from "./sidecar";
 import {
   DEFAULT_SPEECH_CONFIG,
@@ -61,15 +62,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function toMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  try {
-    return JSON.stringify(err) ?? "erreur inconnue";
-  } catch {
-    return "erreur inconnue";
-  }
-}
 
 export function useSpeech(): UseSpeechResult {
   const [config, setConfig] = useState<SpeechConfig>(DEFAULT_SPEECH_CONFIG);

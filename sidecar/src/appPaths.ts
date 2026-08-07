@@ -26,6 +26,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isNonEmptyString } from "./base.js";
 
 /** Identifiant du produit sur le disque (config, données). */
 export const APP_ID = "net.duvam.iaction";
@@ -37,9 +38,6 @@ export const PROJECT_DIR = ".iaction";
 /** Ancien dossier projet — encore présent dans les projets non migrés. */
 export const LEGACY_PROJECT_DIR = ".iadadou";
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 function isDir(candidate: string): boolean {
   try {

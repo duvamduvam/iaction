@@ -11,7 +11,6 @@ import { describe, expect, it } from "vitest";
 import {
   addToolBlock,
   appendToLastBlock,
-  asRecord,
   contextTokens,
   hasVisibleContent,
   mcpServerFromToolName,
@@ -169,12 +168,6 @@ describe("affichage des outils", () => {
     expect(prettyJson({ a: 1 }, 800).endsWith("…")).toBe(false);
   });
 
-  it("asRecord neutralise ce qui n'est pas un objet", () => {
-    expect(asRecord({ a: 1 })).toEqual({ a: 1 });
-    expect(asRecord(null)).toEqual({});
-    expect(asRecord([1, 2])).toEqual({});
-    expect(asRecord("texte")).toEqual({});
-  });
 
   it("toolPreview reste court quel que soit l'outil", () => {
     expect(toolPreview("Bash", { command: "ls -la" }).length).toBeLessThanOrEqual(160);

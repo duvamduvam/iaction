@@ -18,6 +18,7 @@
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import { globalConfigRoot } from "./jsonlStore.js";
 import * as journal from "./journal.js";
@@ -27,13 +28,6 @@ export function mcpSecretsPath(): string {
   return path.join(globalConfigRoot(), "mcp-secrets.json");
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 // ---------------------------------------------------------------------------
 // Références `${SECRET:nom}` — fonctions PURES

@@ -36,6 +36,7 @@ import {
   handleClaudeUsage,
   handleClaudeUsageInit,
 } from "./claude.js";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import { migrerDepuisAncienNom } from "./appPaths.js";
 import { handleContextCompact } from "./context.js";
 import { flushWrites } from "./jsonlStore.js";
@@ -114,13 +115,6 @@ const engineEmitter: EngineEmitter = {
 // Utilitaires
 // ---------------------------------------------------------------------------
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

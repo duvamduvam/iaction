@@ -22,15 +22,9 @@
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import { globalDataRoot } from "./appPaths.js";
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Même résolution que la coquille Rust (`{app_data_dir}/state/<name>.json`). */
 export function chatConversationsPath(): string {

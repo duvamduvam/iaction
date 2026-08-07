@@ -185,6 +185,12 @@ mod tests {
         }
     }
 
+    /// La sonde mémoire lit `/proc/meminfo` : elle n'a de sens QUE sous Linux.
+    /// Ailleurs, `mem_mb()` rend `(0, 0)` — dégradation volontaire, vérifiée par
+    /// `stats_ne_paniquent_jamais` qui, lui, tourne partout. Sans cette garde,
+    /// le test échouait sur le runner Windows en affirmant « MemTotal
+    /// illisible » : il ne testait plus le code, seulement l'absence de `/proc`.
+    #[cfg(target_os = "linux")]
     #[test]
     fn mem_totale_plausible() {
         let (used, total) = mem_mb();
@@ -198,6 +204,15 @@ mod tests {
         assert!(stats.mem_total_mb >= stats.mem_used_mb);
     }
 
+    /// Résolution du répertoire de travail du terminal.
+    ///
+    /// Écrit sur des chemins et une variable d'environnement propres à Unix
+    /// (`/tmp`, `$HOME`) : sous Windows, `/tmp` n'existe pas et `HOME` n'est
+    /// pas la variable du profil — le test rendait `C:\Users\runneradmin` là
+    /// où il attendait `/tmp`. Plutôt que de le rendre acrobatique, on le
+    /// réserve à la plateforme dont il décrit le comportement. Le jour où le
+    /// terminal sera vraiment porté, ce test aura son jumeau Windows.
+    #[cfg(unix)]
     #[test]
     fn terminal_resolution_du_repertoire() {
         // Pas de spawn réel dans les tests (ouvrirait une fenêtre) : on ne

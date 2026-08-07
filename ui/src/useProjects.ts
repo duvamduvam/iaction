@@ -1,3 +1,4 @@
+import { toMessage } from "./base";
 /*
  * Hook d'état des projets déclarés pour toute l'app : charge la config au
  * montage et expose la liste + les actions d'édition pour la page
@@ -34,15 +35,6 @@ export interface UseProjectsResult {
   deleteProject: (id: string) => Promise<void>;
 }
 
-function toMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  try {
-    return JSON.stringify(err) ?? "erreur inconnue";
-  } catch {
-    return "erreur inconnue";
-  }
-}
 
 export function useProjects(): UseProjectsResult {
   const [projects, setProjects] = useState<ProjectConfig[]>([]);

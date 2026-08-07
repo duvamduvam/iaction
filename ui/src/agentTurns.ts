@@ -14,6 +14,7 @@
  * ce sont des mises à jour d'état React, jamais des mutations en place.
  */
 
+import { asRecord } from "./base";
 import type { SentAttachment } from "./Attachments";
 import type { ClaudeUsage, RouteTier } from "./sidecar";
 
@@ -265,16 +266,6 @@ export function prettyJson(value: unknown, maxLen = 800): string {
   return text.length > maxLen ? `${text.slice(0, maxLen)}\n…` : text;
 }
 
-export function asRecord(value: unknown): Record<string, unknown> {
-  // Les TABLEAUX sont exclus : un tableau n'est pas un enregistrement, et le
-  // type de retour le promettait pourtant. Sans conséquence connue (les
-  // appelants lisent des champs nommés, qui ressortaient `undefined`), mais
-  // c'est le genre d'écart qui rend un jour un message d'erreur incompréhensible
-  // — et le reste du dépôt utilise partout la même définition stricte.
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 // Noms d'outils Claude (Agent SDK) et neutre (palette maison, voir
 // docs/protocol.md Lot 6) désignent la même action avec des champs

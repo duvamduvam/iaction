@@ -18,6 +18,7 @@ import { promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { errMessage, isNonEmptyString } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import { handleTachesList, handleTachesRead, type TacheNormalized } from "./taches.js";
 
@@ -25,13 +26,6 @@ import { handleTachesList, handleTachesRead, type TacheNormalized } from "./tach
 // Utilitaires (dupliqués depuis taches.ts — non exportés là-bas)
 // ---------------------------------------------------------------------------
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /** Écriture atomique : fichier temporaire dans le même répertoire, puis rename. Crée les parents. */
 async function atomicWriteFile(absPath: string, content: string): Promise<void> {

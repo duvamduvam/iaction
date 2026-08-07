@@ -16,6 +16,7 @@
  *   `{ status, progress? }` pendant le téléchargement d'un modèle local).
  */
 import { invoke } from "@tauri-apps/api/core";
+import { asRecord } from "./base";
 import { readConfig, writeConfig } from "./appConfig";
 import { getProviderKey, readProviders, type ProviderConfig } from "./providerAdmin";
 import { DEFAULT_SEND_KEYWORD } from "./sendKeyword";
@@ -302,9 +303,6 @@ const DEAD_TTS_MODEL = "openai/gpt-4o-mini-tts-2025-12-15";
 
 /* ---------- Lecture / écriture de la config (fusion défensive) ---------- */
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
 
 function toMode(value: unknown, fallback: SpeechMode): SpeechMode {
   return value === "local" || value === "remote" ? value : fallback;

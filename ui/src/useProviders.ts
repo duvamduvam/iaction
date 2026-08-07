@@ -23,6 +23,7 @@ import {
   writeProviders,
   type ProviderConfig,
 } from "./providerAdmin";
+import { toMessage } from "./base";
 import { notifyProvidersPushed } from "./providersBus";
 import { subscribeReady } from "./sidecar";
 
@@ -46,15 +47,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function toMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  try {
-    return JSON.stringify(err) ?? "erreur inconnue";
-  } catch {
-    return "erreur inconnue";
-  }
-}
 
 export function useProviders(): UseProvidersResult {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);

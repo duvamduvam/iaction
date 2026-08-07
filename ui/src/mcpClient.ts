@@ -22,6 +22,7 @@
  * Une valeur de secret ne circule QUE dans le sens UI → sidecar (`secretSet`,
  * `add`) : rien de ce qui revient d'ici n'en contient jamais.
  */
+import { asRecord } from "./base";
 import { request } from "./sidecar";
 
 export type McpServerKind = "stdio" | "http" | "sse";
@@ -80,11 +81,6 @@ export interface McpCatalogEntry {
   fields: McpCatalogField[];
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function str(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;

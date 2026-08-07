@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { createReadStream, promises as fsp } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import { buildHeaders, getProvider, joinUrl, readBoundedBody, type EngineEmitter, type Provider } from "./engine.js";
 import { formatSearchResults, sanitizeTopK, searchKnowledge } from "./knowledge.js";
 import { recordUsageEvent, type UsageStatus } from "./usageStats.js";
@@ -27,13 +28,6 @@ import { recordUsageEvent, type UsageStatus } from "./usageStats.js";
 // Utilitaires
 // ---------------------------------------------------------------------------
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);

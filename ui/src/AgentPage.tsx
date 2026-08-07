@@ -151,10 +151,10 @@ import { useComposerLiveDraft } from "./useComposerLiveDraft";
 import { useComposerUndo } from "./useComposerUndo";
 import { useRovingFocus } from "./useRovingFocus";
 import { useStickToBottom } from "./useStickToBottom";
+import { asRecord } from "./base";
 import {
   addToolBlock,
   appendToLastBlock,
-  asRecord,
   contextTokens,
   hasVisibleContent,
   mcpServerFromToolName,

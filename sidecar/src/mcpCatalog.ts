@@ -20,18 +20,12 @@
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isNonEmptyString, isPlainObject } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import * as journal from "./journal.js";
 import { readMcpConfig, writeMcpConfig } from "./mcp.js";
 import { secretRef, setSecret } from "./mcpSecrets.js";
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 export interface McpCatalogField {
   /** Clé technique utilisée par le gabarit (`{{key}}`). */
