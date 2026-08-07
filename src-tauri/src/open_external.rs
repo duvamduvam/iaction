@@ -74,17 +74,26 @@ fn build_command(path: &str, program: &str) -> Command {
 /// Ouverture « avec l'application par défaut du système », quand l'appelant n'a pas
 /// nommé de programme.
 ///
-/// Windows n'a pas d'équivalent direct de `xdg-open` : c'est la commande interne
-/// `start` de `cmd`, d'où le passage par `cmd /C`. Le premier argument vide de
-/// `start` n'est pas une coquetterie — c'est le TITRE de fenêtre, et sans lui
-/// `start` prendrait un chemin entre guillemets pour un titre et n'ouvrirait
-/// rien.
+/// **Surtout pas `cmd /C start`.** C'était l'implémentation initiale, et c'était
+/// une faille : `cmd.exe` RE-PARSE sa ligne de commande, alors que le quoting de
+/// Rust n'ajoute des guillemets que si l'argument contient une espace. Un
+/// fichier nommé `notes&plan.md` produisait donc
+/// `start "" C:\proj\notes&plan.md` → `cmd` coupe sur `&` et exécute `plan.md`
+/// **comme une commande**. Même chose pour `%VAR%`, développé au passage. Et le
+/// chemin n'est pas maîtrisé : il vient d'un nom de fichier du projet, ou pire
+/// du `href` d'un lien Markdown affiché dans une réponse de LLM ou une
+/// transcription.
+///
+/// `rundll32 url.dll,FileProtocolHandler` fait le même travail — ouvrir avec
+/// l'application associée — mais reçoit son argument via `CreateProcess`, sans
+/// interpréteur de commandes au milieu : plus rien à échapper, donc plus rien à
+/// oublier d'échapper.
 #[cfg(target_os = "windows")]
 fn build_default_command(path: &str) -> (String, Command) {
-    let mut cmd = Command::new("cmd");
-    cmd.args(["/C", "start", "", path]);
+    let mut cmd = Command::new("rundll32.exe");
+    cmd.arg("url.dll,FileProtocolHandler").arg(path);
     prepare_detached(&mut cmd);
-    ("cmd /C start".to_string(), cmd)
+    ("rundll32 url.dll,FileProtocolHandler".to_string(), cmd)
 }
 
 #[cfg(target_os = "macos")]

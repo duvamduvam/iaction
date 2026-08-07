@@ -36,6 +36,7 @@ import {
   handleClaudeUsage,
   handleClaudeUsageInit,
 } from "./claude.js";
+import { migrerDepuisAncienNom } from "./appPaths.js";
 import { handleContextCompact } from "./context.js";
 import { flushWrites } from "./jsonlStore.js";
 import * as journal from "./journal.js";
@@ -438,6 +439,17 @@ function handleLine(line: string): void {
 }
 
 function main(): void {
+  // AVANT tout accès disque : rapatrier ce qui resterait sous l'ancien nommage
+  // du produit. Synchrone et à cet endroit précis — un handler qui lirait
+  // `taches/` ou `usage/` pendant la migration verrait un dossier à moitié
+  // déplacé. Sans rien à migrer, ne coûte que deux `stat`.
+  const migration = migrerDepuisAncienNom();
+  if (migration.deplaces.length > 0 || migration.conflits.length > 0) {
+    journal.info("sidecar", "données rapatriées depuis l'ancien nommage", {
+      fields: { deplaces: migration.deplaces, conflits: migration.conflits },
+    });
+  }
+
   emit({ event: "ready", data: { version: VERSION, pid: process.pid } });
 
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });

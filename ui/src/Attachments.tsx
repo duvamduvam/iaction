@@ -472,7 +472,7 @@ export function SentAttachments({ items }: Readonly<{ items: SentAttachment[] }>
       {items.map((item, i) =>
         item.previewUrl ? (
           <button
-            // eslint-disable-next-line react/no-array-index-key
+            // Clé = index assumée (voir commentaire) — règle react/no-array-index-key non chargée ici.
             key={i}
             type="button"
             className="attachment-chip attachment-chip--button"
@@ -482,7 +482,7 @@ export function SentAttachments({ items }: Readonly<{ items: SentAttachment[] }>
             <span className="attachment-chip__name" title={item.name}>{item.name}</span>
           </button>
         ) : (
-          // eslint-disable-next-line react/no-array-index-key
+          // Clé = index assumée (voir commentaire) — règle react/no-array-index-key non chargée ici.
           <span key={i} className="attachment-chip attachment-chip--ref" title={item.name}>
             <span className="attachment-chip__icon" aria-hidden="true">{item.kind === "image" ? "🖼" : "📄"}</span>
             <span className="attachment-chip__name">pièce jointe : {item.name}</span>

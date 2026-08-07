@@ -118,6 +118,20 @@ export function appLogPath(): string {
   return path.join(logsDir(), "app.jsonl");
 }
 
+/**
+ * Journal de SECOURS écrit directement par la coquille Rust
+ * (`journal_coquille`, src-tauri/src/sidecar.rs).
+ *
+ * Il existe parce que le chemin normal du journal traverse le sidecar : quand
+ * c'est LUI qui meurt, la panne la plus grave ne laisse aucune trace. Mais
+ * l'écrire ne suffisait pas — personne ne le lisait, donc la page Système
+ * restait muette précisément dans le cas qu'il devait couvrir. Il est donc
+ * fusionné à la lecture (voir logs.ts).
+ */
+export function coquilleLogPath(): string {
+  return path.join(logsDir(), "coquille.jsonl");
+}
+
 // ---------------------------------------------------------------------------
 // Forme d'une entrée
 // ---------------------------------------------------------------------------

@@ -97,8 +97,21 @@ export async function appendJsonlWithRotation(filePath: string, line: string): P
     }
     try {
       await fsp.rename(filePath, rotated);
-    } catch {
-      // best effort : si le rename échoue, on continue et on append au fichier existant.
+    } catch (err) {
+      // On continue d'appender (perdre une ligne serait pire), mais SANS se
+      // taire : un rename qui échoue durablement (fichier .1 verrouillé, ACL,
+      // système de fichiers réseau) rend le plafond inopérant, et le fichier
+      // grossit alors sans borne pendant des semaines — toutes les lectures
+      // intégrales ralentissant avec lui, sans que rien n'en désigne la cause.
+      // Un catch muet ici contredisait la règle « aucun échec muet » du projet.
+      //
+      // stderr et non le journal : ce module EST le journal, s'y appeler
+      // risquerait la récursion au pire moment.
+      process.stderr.write(
+        `[jsonlStore] rotation impossible pour ${filePath} — le plafond de taille est inopérant : ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
     }
   }
 

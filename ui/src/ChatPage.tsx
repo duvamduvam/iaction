@@ -279,7 +279,7 @@ function contextTokens(entries: ChatEntry[]): number | null {
     // modèle) : on continue de remonter plutôt que d'afficher une jauge à 0 %.
     if (typeof entry.contextTokens === "number" && entry.contextTokens > 0) return entry.contextTokens;
     if (entry.usage) {
-      const total = entry.usage.promptTokens + entry.usage.completionTokens;
+      const total = (entry.usage.promptTokens ?? 0) + (entry.usage.completionTokens ?? 0);
       if (total > 0) return total;
     }
   }
@@ -649,7 +649,7 @@ const ChatBubble = memo(function ChatBubble({ entry }: Readonly<{ entry: ChatEnt
       {entry.status === "aborted" && <div className="chat-bubble__note">Réponse interrompue.</div>}
       {entry.status === "done" && entry.usage && (
         <div className="chat-bubble__usage">
-          {entry.usage.promptTokens} + {entry.usage.completionTokens} tokens
+          {entry.usage.promptTokens ?? "?"} + {entry.usage.completionTokens ?? "?"} tokens
         </div>
       )}
       {/* R1 — badge des tours envoyés en « Auto » : tier → modèle, raisons en infobulle. */}
@@ -1082,6 +1082,9 @@ export const ChatPage = forwardRef<
     }
   }, [providers, providerId]);
 
+  /** Numéro du dernier chargement de modèles lancé — voir `loadModels`. */
+  const dernierChargementModeles = useRef(0);
+
   const loadModels = useCallback(async (pid: string) => {
     if (!pid) return;
     if (pid === CLAUDE_PROVIDER_ID) {
@@ -1094,13 +1097,24 @@ export const ChatPage = forwardRef<
     }
     setModelsState("loading");
     setModelsError("");
+    // Marque de fraîcheur : seule la DERNIÈRE demande a le droit d'écrire.
+    // Sans elle, deux chargements en vol se résolvaient dans l'ordre de leurs
+    // réseaux, pas dans celui des clics : choisir Ollama (lent) puis
+    // OpenRouter faisait arriver OpenRouter en premier, puis Ollama écrasait
+    // la liste ET le modèle sélectionné. L'envoi suivant partait alors avec un
+    // modèle inconnu du fournisseur choisi, et le sélecteur affichait la liste
+    // d'un autre.
+    const demande = ++dernierChargementModeles.current;
+    const estPerimee = () => demande !== dernierChargementModeles.current;
     try {
       const list = await modelsList(pid);
+      if (estPerimee()) return;
       setModels(list);
       setModelsState("idle");
       // R1 — même préservation de la sentinelle « Auto » que côté Claude.
       setModel((prev) => (prev === AUTO_MODEL || list.some((m) => m.id === prev) ? prev : (list[0]?.id ?? "")));
     } catch (err) {
+      if (estPerimee()) return;
       setModels([]);
       setModelsState("error");
       setModelsError(err instanceof Error ? err.message : String(err));
@@ -1685,10 +1699,13 @@ export const ChatPage = forwardRef<
     if (!pending) return;
     updateRuntime(activeSessionId, (r) => ({ ...r, queuedPrompts: r.queuedPrompts.slice(1) }));
     void handleSend(pending);
-    // On ne réagit qu'au passage de `streaming` à false ; handleSend lit le
-    // reste au moment de l'envoi.
+    // Voir le jumeau dans AgentPage.tsx pour le raisonnement complet :
+    // `streaming` seul perdait les files des onglets d'arrière-plan (un tour
+    // qui finit ailleurs ne change pas le streaming de la conversation active,
+    // et y revenir ne le change pas non plus). On réagit donc à toute écriture
+    // de runtime et au changement d'onglet.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streaming]);
+  }, [streaming, runtimeTick, activeSessionId]);
 
   /* ---------- Voix du composeur (voir useVoiceComposer.ts) ---------- */
 

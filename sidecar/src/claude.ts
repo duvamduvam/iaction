@@ -915,6 +915,35 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       }
     };
 
+    /**
+     * Libère TOUT ce qu'un tour laisse derrière lui : les deux watchdogs, le
+     * générateur d'entrée streamée, et le process CLI.
+     *
+     * Un seul endroit, appelé par CHAQUE sortie de la boucle — fin normale
+     * comme chemin d'erreur. C'est la leçon d'un défaut réel : le `catch` du
+     * flux SDK sortait par un `return` qui sautait ces trois nettoyages, et un
+     * process `claude` de 100-200 Mo restait suspendu sur une entrée jamais
+     * fermée, invisible, jusqu'au redémarrage du sidecar.
+     *
+     * Best effort de bout en bout : un tour déjà éteint rend `interrupt()`
+     * inopérant, et c'est très bien — on ne veut pas qu'un nettoyage puisse
+     * empêcher la fin d'un tour.
+     */
+    const nettoyerFinDeTour = (): void => {
+      clearEmptyResultWatchdog();
+      clearBackgroundWaitWatchdog();
+      // Fermer l'entrée AVANT l'interrupt : le générateur du prompt doit
+      // pouvoir se terminer, sinon le process reste bloqué en attente.
+      try {
+        turnPrompt.close();
+      } catch {
+        // déjà fermé : sans conséquence
+      }
+      void query.interrupt().catch(() => {
+        // process déjà éteint / interrupt non supporté : rien à faire.
+      });
+    };
+
     // La méthode d'usage du SDK est une requête de contrôle vers le processus
     // CLI : elle DOIT partir pendant que le tour est vivant. Après le message
     // `result`, le SDK ferme l'entrée du processus et l'appel échoue
@@ -1269,6 +1298,14 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
           errorMessage: message,
           meta: params.meta,
         });
+        // Nettoyage AVANT de sortir : ce chemin d'erreur sautait tout ce qui
+        // suit la boucle (fermeture de l'entrée streamée, interrupt du CLI,
+        // désarmement des watchdogs). Une exception du flux avec un process
+        // CLI encore vivant laissait donc un `claude` orphelin de 100-200 Mo,
+        // suspendu sur une entrée jamais fermée, jusqu'au redémarrage du
+        // sidecar — et un watchdog armé pouvait tirer 10 min plus tard sur une
+        // query morte.
+        nettoyerFinDeTour();
         emitter.error(id, decorateAuthError(message));
         return;
       }
@@ -1281,17 +1318,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     // ne sort PAS de la boucle, voir le case "result") — l'interrupt ne tue
     // donc que d'éventuels résidus. Best effort : un tour déjà terminé peut
     // rendre `interrupt()` inopérant, sans conséquence.
-    clearEmptyResultWatchdog();
-    clearBackgroundWaitWatchdog();
-    // Ferme l'entrée streamée AVANT l'interrupt : le générateur du prompt doit
-    // pouvoir se terminer, sinon le process reste bloqué en attente d'entrée.
-    turnPrompt.close();
-    try {
-      await query.interrupt();
-    } catch {
-      // process déjà éteint / interrupt non supporté : rien à faire.
-    }
-
+    nettoyerFinDeTour();
     denyAllPending(runState, "Tour interrompu");
     runs.delete(id);
 

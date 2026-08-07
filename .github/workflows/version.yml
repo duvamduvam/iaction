@@ -73,6 +73,19 @@ jobs:
       - name: Dépendances npm
         run: npm ci
 
+      # Les trois vérifications rapides d'abord — échouer en 30 s sur un hook
+      # conditionnel ou un test unitaire vaut mieux qu'en 15 min au bout de la
+      # compilation Rust.
+      - name: Lint (rules-of-hooks — la règle qui a trouvé le plantage du 2026-08-07)
+        run: npx eslint .
+
+      - name: Tests unitaires UI (vitest)
+        run: npm run test -w ui
+
+      - name: Tests Rust (cargo test)
+        working-directory: src-tauri
+        run: cargo test --quiet
+
       # Les journaux d'un run ne sont téléchargeables qu'avec des droits
       # d'administration sur le dépôt — inutilisables pour diagnostiquer depuis
       # l'extérieur. Les ANNOTATIONS, elles, sont exposées par l'API publique :

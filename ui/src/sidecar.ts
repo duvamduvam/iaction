@@ -82,6 +82,26 @@ const logSubscribers = new Set<(line: string) => void>();
 
 let requestCounter = 0;
 
+/**
+ * Rejette toutes les requêtes en vol, avec un message qui dit la vérité.
+ *
+ * Appelé quand le sidecar meurt ou redémarre. La Map est vidée AVANT de rejeter
+ * : un `catch` d'appelant peut relancer une requête, et il ne doit pas tomber
+ * sur une entrée fantôme de la vague précédente.
+ */
+function rejeterRequetesEnVol(etat: string): void {
+  if (pending.size === 0) return;
+  const enVol = [...pending.entries()];
+  pending.clear();
+  const cause =
+    etat === "dead"
+      ? "le moteur s'est arrêté définitivement — utilisez « Relancer le moteur »"
+      : "le moteur redémarre";
+  for (const [id, handlers] of enVol) {
+    handlers.reject(new Error(`${handlers.method} interrompu : ${cause} (requête ${id})`));
+  }
+}
+
 function handleSidecarEvent(payload: RawSidecarEvent): void {
   if (payload.event === "ready") {
     const info = payload.data as unknown as ReadyInfo;
@@ -143,6 +163,16 @@ async function setupListeners(): Promise<void> {
   await Promise.all([
     listen<RawSidecarEvent>("sidecar:event", (evt) => handleSidecarEvent(evt.payload)),
     listen<StatusPayload>("sidecar:status", (evt) => {
+      // Le sidecar est mort ou redémarre : les requêtes en vol n'auront JAMAIS
+      // leur événement terminal — le process qui devait l'émettre n'existe
+      // plus. Sans ce rejet, la promesse `done` reste suspendue à vie : le
+      // `finally` de handleSend ne s'exécute pas, `streaming` reste vrai, la
+      // conversation est verrouillée (« arrêtez le tour en cours » à la
+      // fermeture) et le bouton Arrêter envoie un abort au NOUVEAU sidecar,
+      // qui ne connaît pas cet id.
+      if (evt.payload.state === "restarting" || evt.payload.state === "dead") {
+        rejeterRequetesEnVol(evt.payload.state);
+      }
       for (const cb of statusSubscribers) cb(evt.payload);
     }),
     listen<string>("sidecar:log", (evt) => {
@@ -259,8 +289,10 @@ export interface ChatOptions {
 }
 
 export interface ChatUsage {
-  promptTokens: number;
-  completionTokens: number;
+  /** `null` si le fournisseur ne remonte pas ce compteur (le coût peut l'être sans lui). */
+  promptTokens: number | null;
+  /** Idem — voir `parseChatDone` : les champs sont optionnels INDÉPENDAMMENT. */
+  completionTokens: number | null;
   /** R0 — coût réel remonté par le fournisseur (comptabilité d'usage OpenRouter), null si absent. */
   costUsd?: number | null;
   /** R0 — tokens servis depuis le cache, null si absent. */
@@ -599,12 +631,23 @@ export function parseChatDone(data: Record<string, unknown>): ChatDoneData {
   const rawUsage = data.usage;
   if (rawUsage && typeof rawUsage === "object") {
     const u = rawUsage as Record<string, unknown>;
-    if (typeof u.promptTokens === "number" && typeof u.completionTokens === "number") {
+    // Chaque champ est optionnel INDÉPENDAMMENT : le sidecar émet un usage à
+    // champs nullables (voir engine.ts), parce que tous les fournisseurs ne
+    // remontent pas les mêmes chiffres. Exiger les deux compteurs de tokens
+    // faisait jeter l'objet ENTIER quand un fournisseur ne donnait que le
+    // coût : le prix réel du tour n'était jamais affiché, alors que le sidecar
+    // l'avait transmis et enregistré dans events.jsonl.
+    const nombreOuNull = (v: unknown): number | null => (typeof v === "number" ? v : null);
+    const aUneValeur =
+      typeof u.promptTokens === "number" ||
+      typeof u.completionTokens === "number" ||
+      typeof u.costUsd === "number";
+    if (aUneValeur) {
       usage = {
-        promptTokens: u.promptTokens,
-        completionTokens: u.completionTokens,
-        costUsd: typeof u.costUsd === "number" ? u.costUsd : null,
-        cachedTokens: typeof u.cachedTokens === "number" ? u.cachedTokens : null,
+        promptTokens: nombreOuNull(u.promptTokens),
+        completionTokens: nombreOuNull(u.completionTokens),
+        costUsd: nombreOuNull(u.costUsd),
+        cachedTokens: nombreOuNull(u.cachedTokens),
       };
     }
   }

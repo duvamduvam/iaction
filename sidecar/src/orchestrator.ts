@@ -1373,7 +1373,28 @@ export function createOrchestratorRuntime(deps: { stepRunner?: StepRunner } = {}
   /** Runs actifs, indexés par l'id de la requête `orch.run` correspondante (= runId pour permission/abort). */
   const activeRuns = new Map<string, RunContext>();
 
+  /**
+   * Enveloppe de `handleOrchRunInterne` dont le seul rôle est de GARANTIR le
+   * retrait du registre des runs actifs, quel que soit le chemin de sortie.
+   *
+   * Le `activeRuns.delete(id)` de la fonction interne est sur le chemin
+   * nominal : une exception de la boucle d'ordonnancement le sautait, et le
+   * RunContext — qui porte la sortie de toutes les étapes, parfois plusieurs
+   * Mo — survivait pour toute la vie du process, pendant qu'`orch.abort`
+   * visait un run fantôme. Un `finally` ici couvre les deux cas sans avoir à
+   * restructurer les trois cents lignes de l'ordonnanceur.
+   *
+   * `delete` sur une clé absente ne coûte rien : le double appel est voulu.
+   */
   async function handleOrchRun(id: string, params: Record<string, unknown>, emitter: EngineEmitter): Promise<void> {
+    try {
+      await handleOrchRunInterne(id, params, emitter);
+    } finally {
+      activeRuns.delete(id);
+    }
+  }
+
+  async function handleOrchRunInterne(id: string, params: Record<string, unknown>, emitter: EngineEmitter): Promise<void> {
     const cwdParam = params.cwd;
     const nameParam = params.name;
     if (!isNonEmptyString(cwdParam)) {
@@ -1682,6 +1703,12 @@ export function createOrchestratorRuntime(deps: { stepRunner?: StepRunner } = {}
       startReadySteps();
     }
 
+    // Retrait du registre AVANT toute autre chose, et surtout hors du chemin
+    // nominal seul : voir `finally` posé plus bas. Ce `delete` restait
+    // inatteignable si la boucle d'ordonnancement levait (assertions non-null
+    // sur ctx.steps, échec d'un abort), et le RunContext — qui porte la SORTIE
+    // de toutes les étapes, parfois plusieurs Mo de texte — survivait alors
+    // pour toute la vie du process, tandis qu'orch.abort visait un run fantôme.
     activeRuns.delete(id);
 
     // 4. Statut terminal (docs/protocol.md « orch.run ») : aborted prime sur success/partial/failed.

@@ -16,6 +16,7 @@ import type { EngineEmitter } from "./engine.js";
 import { readJsonlTailWithInfo } from "./jsonlStore.js";
 import {
   appLogPath,
+  coquilleLogPath,
   buildEntry,
   logEntry,
   normalizeLevel,
@@ -94,7 +95,18 @@ function emptyCounts(): Record<LogLevel, number> {
 
 /** Fenêtre lue : lignes du fichier (par la fin) filtrées par `sinceMs` seulement. */
 async function readWindow(sinceMs: number | null): Promise<{ entries: StoredEntry[]; truncated: boolean }> {
-  const { rows, truncated } = await readJsonlTailWithInfo(appLogPath(), LOG_READ_BYTES);
+  // DEUX fichiers fusionnés : le journal applicatif, et le journal de secours
+  // que la coquille Rust écrit elle-même quand le sidecar ne peut pas prendre
+  // le relais (spawn impossible, mort après backoff). Sans cette fusion, ces
+  // lignes-là — les seules disponibles au pire moment — n'apparaissaient nulle
+  // part dans l'application.
+  //
+  // Le tri chronologique final (plus bas) remet tout dans l'ordre : les deux
+  // fichiers portent le même format de ligne, précisément pour ça.
+  const principal = await readJsonlTailWithInfo(appLogPath(), LOG_READ_BYTES);
+  const secours = await readJsonlTailWithInfo(coquilleLogPath(), LOG_READ_BYTES);
+  const rows = [...principal.rows, ...secours.rows];
+  const truncated = principal.truncated || secours.truncated;
   const entries: StoredEntry[] = [];
   for (const row of rows) {
     const entry = rowToEntry(row);
@@ -106,6 +118,16 @@ async function readWindow(sinceMs: number | null): Promise<{ entries: StoredEntr
     }
     entries.push(entry);
   }
+
+  // Remise en ordre chronologique : les deux fichiers ont été concaténés, donc
+  // les lignes de la coquille arriveraient toutes en bloc après celles du
+  // sidecar. Tri STABLE (garanti par la spec depuis ES2019) : à horodatage
+  // égal, l'ordre d'origine de chaque fichier est préservé.
+  //
+  // Une entrée sans horodatage lisible est traitée comme la plus ancienne
+  // plutôt qu'écartée : mieux vaut une ligne mal placée qu'une ligne perdue.
+  entries.sort((a, b) => (entryTimeMs(a) ?? 0) - (entryTimeMs(b) ?? 0));
+
   return { entries, truncated };
 }
 

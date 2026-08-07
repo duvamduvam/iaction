@@ -378,8 +378,20 @@ Jamais en mode `chatOnly`.
 | `compact` | `{trigger, preTokens}` | compaction de contexte terminée (`trigger` = `manual` pour « /compact », `auto` pour la compaction automatique du CLI ; `preTokens` = contexte avant compaction, `null` si inconnu) — un tour « /compact » ne produit AUCUN texte : sans ce chunk, l'UI n'a aucun signal de fin de travail |
 
 Fin de tour : `done` avec
-`{sessionId, subtype:"success|error_…", result, usage:{inputTokens,outputTokens,cacheReadInputTokens?}, totalCostUsd}`
+`{sessionId, subtype:"success|error_…", result, usage:{inputTokens,outputTokens,cacheReadInputTokens?}, totalCostUsd, contextTokens}`
 (`totalCostUsd` = estimation locale SDK, non contractuelle).
+
+**`contextTokens`** — occupation de la fenêtre de contexte au DERNIER appel
+modèle du tour (`input + cache_read + cache_creation` de ce seul appel), `null`
+si le tour n'a fait aucun appel — cas d'un `/compact`. À ne surtout pas
+confondre avec `usage`, qui CUMULE tous les appels du tour agentique : son
+`cacheReadInputTokens` additionne N fois le même préfixe et dépasse largement
+la fenêtre, d'où des jauges à plusieurs centaines de pour cent.
+
+Ce champ n'était pas documenté alors que l'UI en dépend : c'est lui qui
+alimente la jauge « Contexte » de l'en-tête et le seuil absolu du bouton
+« Compacter ». Une réimplémentation fidèle à la doc l'aurait omis, et la jauge
+serait retombée à `null` sans que rien ne le signale.
 
 Un `claude.start` peut traverser PLUSIEURS messages `result` du SDK avant son
 `done` : (1) un `result` reçu alors que des tâches de fond vivent n'est PAS

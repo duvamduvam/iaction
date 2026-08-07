@@ -3,19 +3,20 @@
  * nom du produit sur le disque.
  *
  * Le produit s'appelait « IA Studio » (`net.duvam.ia-studio`, dossier projet
- * `.iadadou/`) jusqu'au renommage en IAction du 2026-08-07. Les données
- * DÉJÀ POSÉES sur les postes et dans les projets portent donc l'ancien nom :
- * on ne les déplace pas dans le dos de l'utilisateur, on les LIT là où elles
- * sont. Règle unique, appliquée partout :
+ * `.iadadou/`) jusqu'au renommage en IAction du 2026-08-07.
  *
- *   dossier au nouveau nom absent ET dossier à l'ancien nom présent
- *     ⇒ on travaille dans l'ancien
- *   sinon ⇒ nouveau nom (cas d'une installation neuve, et cas d'un poste migré)
+ * DEUX RÈGLES, et elles diffèrent à dessein :
  *
- * Conséquence voulue : un poste non migré continue de tourner sans rien perdre,
- * un poste migré (voir scripts/migrer-vers-iaction.sh) n'a plus jamais affaire à
- * l'ancien nom, et un projet neuf reçoit `.iaction/`. Le repli disparaîtra quand
- * plus aucun poste ne portera l'ancien nommage.
+ * 1. **Dossiers de l'application** (config, données) : une seule adresse, le
+ *    NOUVEAU nom. Ce qui reste sous l'ancien est déplacé une fois au démarrage
+ *    (`migrerDepuisAncienNom`). Ces dossiers sont partagés avec la coquille
+ *    Rust, qui n'a aucun repli : deux couches ne peuvent pas se permettre de
+ *    diverger sur l'endroit où vivent les mêmes fichiers.
+ *
+ * 2. **Dossier dans un PROJET** (`.iaction/` vs `.iadadou/`) : repli conservé.
+ *    Ces dossiers appartiennent aux projets de l'utilisateur, pas à nous — on
+ *    n'y déplace rien, on lit où c'est. Et seul le sidecar les lit, donc aucune
+ *    divergence possible entre couches.
  *
  * Jamais de cache : les tests redéfinissent XDG_CONFIG_HOME / XDG_DATA_HOME
  * entre deux appels et doivent être suivis (même convention que les modules qui
@@ -48,28 +49,6 @@ function isDir(candidate: string): boolean {
   }
 }
 
-/**
- * Applique la règle de repli — sur la présence d'un TÉMOIN, jamais sur celle du
- * dossier.
- *
- * L'existence du dossier ne prouve rien : la coquille Tauri crée
- * `~/.local/share/<identifiant>` (WebKit) et `~/.config/<identifiant>` d'elle-même
- * au premier lancement, sans y mettre la moindre donnée de l'application. Se
- * fier au dossier faisait donc basculer un poste non migré vers un dossier
- * VIDE, où l'application réécrivait aussitôt une configuration par défaut —
- * projets et fournisseurs apparemment perdus (incident du 2026-08-07, constaté
- * sur le poste de dev pendant le renommage lui-même).
- *
- * Le témoin est un fichier/dossier que SEULE l'application écrit : sa présence
- * du côté de l'ancien nom, et son absence du côté du nouveau, signent un poste
- * non migré dont les données vivent encore à l'ancienne adresse.
- */
-function preferByWitness(current: string, legacy: string, witness: string): string {
-  if (!fs.existsSync(path.join(current, witness)) && fs.existsSync(path.join(legacy, witness))) {
-    return legacy;
-  }
-  return current;
-}
 
 /**
  * Environnement dont dépend la résolution : injecté pour que les DEUX systèmes
@@ -113,36 +92,130 @@ function configBase(e: PathEnv): string {
 /**
  * Racine des DONNÉES, sans le nom de l'application.
  *
- * - Windows : `%LOCALAPPDATA%` (local — état volumineux, conversations, caches :
- *   ça n'a rien à faire dans un profil itinérant), repli `~/AppData/Local`.
+ * - Windows : `%APPDATA%` — le profil ITINÉRANT, repli `~/AppData/Roaming`.
  * - Ailleurs : `$XDG_DATA_HOME` sinon `~/.local/share`.
  *
- * Doit rester le miroir exact de ce que résout la coquille Tauri
- * (`app_data_dir`), sans quoi l'UI et le sidecar liraient deux endroits.
+ * Ce n'est pas un choix : c'est un MIROIR OBLIGÉ de ce que résout la coquille
+ * Tauri (`app_data_dir()`, src-tauri/src/state_store.rs), qui passe par
+ * `dirs::data_dir()` — et sur Windows, `data_dir` vaut `FOLDERID_RoamingAppData`,
+ * pas `LocalAppData`. C'est la coquille qui ÉCRIT `state/*.json` (conversations
+ * du Chat, conversations par projet) ; le sidecar ne fait que les relire.
+ *
+ * Ce fichier a un temps résolu `%LOCALAPPDATA%` ici, au motif défendable qu'un
+ * état volumineux n'a rien à faire dans un profil itinérant. C'était une erreur :
+ * le sidecar lisait un dossier que personne n'écrivait. `search_chat` répondait
+ * « aucun historique » et l'usage par projet restait vide, sans la moindre
+ * erreur — la panne parfaitement silencieuse. Le raisonnement était bon, mais
+ * il ne nous appartient pas : changer d'avis suppose de changer la coquille.
  */
 function dataBase(e: PathEnv): string {
   const xdg = e.env.XDG_DATA_HOME;
   if (isNonEmptyString(xdg)) return xdg;
   if (e.platform === "win32") {
-    const localAppData = e.env.LOCALAPPDATA;
-    return isNonEmptyString(localAppData) ? localAppData : path.join(e.home, "AppData", "Local");
+    const appData = e.env.APPDATA;
+    return isNonEmptyString(appData) ? appData : path.join(e.home, "AppData", "Roaming");
   }
   return path.join(e.home, ".local", "share");
 }
 
 /** Config globale (agents, tâches, logs, usage) — voir `configBase`. */
 export function globalConfigRoot(env: PathEnv = currentEnv()): string {
-  const base = configBase(env);
-  // Témoin : `config.json`, écrit par le sidecar seul (la coquille n'y touche pas).
-  return preferByWitness(path.join(base, APP_ID), path.join(base, LEGACY_APP_ID), "config.json");
+  return path.join(configBase(env), APP_ID);
 }
 
 /** État (conversations…), miroir de la coquille Rust — voir `dataBase`. */
 export function globalDataRoot(env: PathEnv = currentEnv()): string {
-  const base = dataBase(env);
-  // Témoin : `state/`, écrit par le sidecar — le reste (WebKitCache, storage…)
-  // appartient à la coquille et apparaît AVANT toute migration.
-  return preferByWitness(path.join(base, APP_ID), path.join(base, LEGACY_APP_ID), "state");
+  return path.join(dataBase(env), APP_ID);
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Migration depuis l'ancien nommage — UNE FOIS, au démarrage
+ * ---------------------------------------------------------------------------
+ *
+ * Ces deux fonctions ont d'abord appliqué un REPLI : si le dossier au nouveau
+ * nom n'avait pas son « témoin », on lisait l'ancien. L'intention était bonne
+ * (ne rien déplacer dans le dos de l'utilisateur), le résultat mauvais : la
+ * coquille Rust, elle, n'a aucun repli — `app_config_dir()`/`app_data_dir()`
+ * de Tauri désignent TOUJOURS le nouveau nom. Les deux couches pouvaient donc
+ * travailler dans deux dossiers différents en même temps.
+ *
+ * Pire, le témoin choisi (`config.json`) est écrit par la COQUILLE, pas par le
+ * sidecar : à la première sauvegarde de réglages sur un poste non migré, le
+ * témoin basculait et le sidecar perdait d'un coup ses `taches/`, `logs/`,
+ * `usage/` et `tickets.md` restés dans l'ancien dossier. Un repli censé
+ * protéger les données faisait exactement ce qu'il devait empêcher.
+ *
+ * On règle donc le problème une bonne fois : au démarrage, ce qui reste sous
+ * l'ancien nom est DÉPLACÉ sous le nouveau, puis plus personne n'a de double
+ * chemin à connaître. Une seule adresse, la même pour les deux couches.
+ */
+
+/** Résultat d'une migration, pour le journal (rien à faire → tableaux vides). */
+export interface MigrationAncienNom {
+  deplaces: string[];
+  /** Entrées présentes des DEUX côtés : l'ancienne est laissée en place, jamais écrasée. */
+  conflits: string[];
+}
+
+function migrerRacine(ancien: string, nouveau: string): MigrationAncienNom {
+  const bilan: MigrationAncienNom = { deplaces: [], conflits: [] };
+  if (!isDir(ancien)) return bilan;
+
+  let entrees: string[];
+  try {
+    entrees = fs.readdirSync(ancien);
+  } catch {
+    return bilan;
+  }
+
+  for (const nom of entrees) {
+    const source = path.join(ancien, nom);
+    const cible = path.join(nouveau, nom);
+    if (fs.existsSync(cible)) {
+      // Jamais d'écrasement : on préfère laisser une trace visible à l'ancienne
+      // adresse plutôt que de détruire l'une des deux versions.
+      bilan.conflits.push(nom);
+      continue;
+    }
+    try {
+      fs.mkdirSync(nouveau, { recursive: true });
+      fs.renameSync(source, cible);
+      bilan.deplaces.push(nom);
+    } catch {
+      bilan.conflits.push(nom);
+    }
+  }
+
+  // Dossier vidé de tout : on le retire pour que la migration ne se repose pas
+  // à chaque démarrage. S'il reste des conflits, il survit — c'est voulu.
+  try {
+    fs.rmdirSync(ancien);
+  } catch {
+    /* pas vide, ou déjà parti : sans conséquence */
+  }
+  return bilan;
+}
+
+/**
+ * Déplace config et données de l'ancien nommage vers le nouveau. Idempotent :
+ * sans rien à migrer, ne fait rien et ne coûte que deux `stat`.
+ *
+ * À appeler une fois au démarrage du sidecar, AVANT tout accès aux fichiers.
+ */
+export function migrerDepuisAncienNom(env: PathEnv = currentEnv()): MigrationAncienNom {
+  const config = migrerRacine(
+    path.join(configBase(env), LEGACY_APP_ID),
+    path.join(configBase(env), APP_ID),
+  );
+  const donnees = migrerRacine(
+    path.join(dataBase(env), LEGACY_APP_ID),
+    path.join(dataBase(env), APP_ID),
+  );
+  return {
+    deplaces: [...config.deplaces, ...donnees.deplaces],
+    conflits: [...config.conflits, ...donnees.conflits],
+  };
 }
 
 /**

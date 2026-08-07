@@ -1951,11 +1951,11 @@ function ShortcutKeys({ combos }: Readonly<{ combos: string[][] }>) {
     <span className="shortcut-keys">
       {combos.map((keys, c) => (
         // Combinaisons figées (pas de ré-ordonnancement) : l'index suffit comme clé.
-        // eslint-disable-next-line react/no-array-index-key
+        // Clé = index assumée (voir commentaire) — règle react/no-array-index-key non chargée ici.
         <span key={c} className="shortcut-keys__combo">
           {c > 0 && <span className="shortcut-keys__plus">/</span>}
           {keys.map((k, i) => (
-            // eslint-disable-next-line react/no-array-index-key
+            // Clé = index assumée (voir commentaire) — règle react/no-array-index-key non chargée ici.
             <span key={i} className="shortcut-keys__combo">
               {i > 0 && <span className="shortcut-keys__plus">+</span>}
               <kbd>{k}</kbd>

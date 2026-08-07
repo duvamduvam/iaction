@@ -319,10 +319,24 @@ export async function readLatestClaudeWindows(): Promise<{
  * serait alors sous-compté (ré-ouverture du débord déjà dépensé). L'ordre de
  * lecture est sans effet sur une somme.
  */
+/**
+ * Fenêtre lue pour le calcul du débord. Seuls comptent les événements du MOIS
+ * COURANT : remonter 8 Mo par fichier couvre très largement un mois de trafic
+ * (mesure réelle : 268 Ko pour ~680 tours), tout en bornant le coût.
+ *
+ * Lire les fichiers ENTIERS était l'inverse de l'optimisation déjà appliquée
+ * juste au-dessus pour les fenêtres d'abonnement — et ce calcul est sur le
+ * CHEMIN CHAUD du routeur : il tourne à chaque envoi dès que la fenêtre 5 h est
+ * saturée, c'est-à-dire pendant la période de plus fort trafic. Avec la
+ * rotation à 20 Mo (plus son `.1`), on paierait jusqu'à 40 Mo de parse par
+ * message envoyé, précisément au pire moment.
+ */
+const DEBORD_TAIL_BYTES = 8 * 1024 * 1024;
+
 export async function autoDebordCostUsdThisMonth(): Promise<number> {
   const events = [
-    ...(await readJsonlTolerant(`${eventsPath()}.1`)),
-    ...(await readJsonlTolerant(eventsPath())),
+    ...(await readJsonlTail(`${eventsPath()}.1`, DEBORD_TAIL_BYTES)),
+    ...(await readJsonlTail(eventsPath(), DEBORD_TAIL_BYTES)),
   ];
   const now = new Date();
   let sum = 0;

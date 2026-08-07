@@ -421,11 +421,51 @@ async function loadMeta(cwd: string): Promise<IndexMeta | null> {
   }
 }
 
+/**
+ * Index chargé, gardé en mémoire tant que le fichier n'a pas changé.
+ *
+ * Sans ce cache, CHAQUE recherche relisait et re-parsait l'index entier —
+ * texte ET vecteurs. Mesuré sur un projet réel : 13 Mo pour 747 chunks, soit
+ * 100-200 ms et 747 tableaux de doubles alloués puis jetés, à chaque appel.
+ * Un agent fait 2 à 5 recherches par tour : sur une session de plusieurs
+ * heures, cela représente des centaines de Mo de churn et une latence d'outil
+ * parfaitement inutile, pour un fichier qui ne change qu'à la réindexation.
+ *
+ * Clé de fraîcheur : (mtime, taille) du fichier. Une réindexation réécrit
+ * chunks.jsonl et invalide donc le cache d'elle-même — aucun couplage à
+ * maintenir entre l'indexation et la recherche.
+ *
+ * Un seul projet en cache : le cas d'usage est une session de travail sur un
+ * projet à la fois, et garder N index de 13 Mo en mémoire coûterait plus cher
+ * que la relecture qu'on évite.
+ */
+let indexCache: { chemin: string; mtimeMs: number; taille: number; chunks: IndexChunk[] } | null = null;
+
 /** Lecture défensive de chunks.jsonl : une ligne difforme est ignorée. */
 async function loadChunks(cwd: string): Promise<IndexChunk[]> {
+  const chemin = path.join(indexDir(cwd), "chunks.jsonl");
+
+  let signature: { mtimeMs: number; taille: number } | null = null;
+  try {
+    const stat = await fsp.stat(chemin);
+    signature = { mtimeMs: stat.mtimeMs, taille: stat.size };
+  } catch {
+    // Index absent : on laisse la lecture ci-dessous rendre [] comme avant.
+  }
+
+  if (
+    signature &&
+    indexCache &&
+    indexCache.chemin === chemin &&
+    indexCache.mtimeMs === signature.mtimeMs &&
+    indexCache.taille === signature.taille
+  ) {
+    return indexCache.chunks;
+  }
+
   let raw: string;
   try {
-    raw = await fsp.readFile(path.join(indexDir(cwd), "chunks.jsonl"), "utf8");
+    raw = await fsp.readFile(chemin, "utf8");
   } catch {
     return [];
   }
@@ -455,6 +495,13 @@ async function loadChunks(cwd: string): Promise<IndexChunk[]> {
         embedding: parsed.embedding as number[],
       });
     }
+  }
+
+  // Mise en cache seulement si le fichier a pu être daté : sans signature, on
+  // ne saurait pas détecter sa prochaine modification, et un cache qu'on ne
+  // sait pas invalider est pire que pas de cache du tout.
+  if (signature) {
+    indexCache = { chemin, mtimeMs: signature.mtimeMs, taille: signature.taille, chunks };
   }
   return chunks;
 }

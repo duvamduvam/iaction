@@ -392,6 +392,17 @@ function recordChatSendUsage(
   });
 }
 
+/**
+ * Silence maximal toléré au milieu d'un flux SSE avant de considérer la
+ * connexion morte. Généreux à dessein : un modèle local lent peut mettre une
+ * minute à produire son premier octet, et un faux positif coûterait un tour
+ * perdu. Ce qu'on veut couper, c'est le silence ÉTERNEL.
+ */
+const SSE_INACTIVITE_MS = 3 * 60 * 1000;
+
+const SSE_INACTIVITE_MESSAGE =
+  "flux interrompu : plus aucune donnée reçue depuis 3 minutes (connexion perdue ou service arrêté)";
+
 export async function handleChatSend(
   id: string,
   params: Record<string, unknown>,
@@ -561,7 +572,26 @@ export async function handleChatSend(
     }
 
     readLoop: while (!streamDone) {
-      const { done, value } = await reader.read();
+      // Garde-fou d'INACTIVITÉ. `reader.read()` n'a aucune échéance propre :
+      // une connexion à moitié morte (Wi-Fi qui bascule, conteneur Ollama
+      // arrêté en plein flux) la laisse suspendue indéfiniment. Le tour restait
+      // alors « en cours » pour toujours, son entrée `inFlight` retenue, et
+      // toute la file de la conversation bloquée — invisible si l'utilisateur
+      // a quitté l'écran. Le moteur Claude, lui, a ses garde-fous depuis
+      // toujours ; celui-ci met le moteur neutre au même niveau.
+      //
+      // C'est bien de l'INACTIVITÉ qu'on borne, pas la durée totale : une
+      // longue génération qui débite régulièrement n'est jamais interrompue.
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, rejeter) => {
+          const minuteur = setTimeout(() => {
+            rejeter(new Error(SSE_INACTIVITE_MESSAGE));
+          }, SSE_INACTIVITE_MS);
+          // `unref` : ce minuteur ne doit jamais retenir le process à lui seul.
+          minuteur.unref?.();
+        }),
+      ]);
       if (done) {
         break;
       }

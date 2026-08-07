@@ -17,6 +17,7 @@ import {
   LEGACY_APP_ID,
   globalConfigRoot,
   globalDataRoot,
+  migrerDepuisAncienNom,
   projectDir,
 } from "../dist/appPaths.js";
 
@@ -36,15 +37,19 @@ function env(platform, vars, home) {
 function testEmplacementsParPlateforme() {
   const home = tempDir("home");
 
-  // Windows : config itinérante (%APPDATA%), état local (%LOCALAPPDATA%).
+  // Windows : config ET données dans %APPDATA% (itinérant). Ce n'est pas un
+  // choix esthétique — c'est ce que résout app_data_dir() de Tauri, et la
+  // coquille Rust est celle qui ÉCRIT state/*.json. Un jour où ce test tombera
+  // parce que quelqu'un trouve LOCALAPPDATA plus logique : il l'est peut-être,
+  // mais il faudra alors changer la coquille D'ABORD.
   const win = env("win32", { APPDATA: "C:\\U\\AppData\\Roaming", LOCALAPPDATA: "C:\\U\\AppData\\Local" }, home);
   assert.equal(globalConfigRoot(win), path.join("C:\\U\\AppData\\Roaming", APP_ID));
-  assert.equal(globalDataRoot(win), path.join("C:\\U\\AppData\\Local", APP_ID));
+  assert.equal(globalDataRoot(win), path.join("C:\\U\\AppData\\Roaming", APP_ID));
 
   // Windows sans les variables : repli sur le profil, pas sur ~/.config.
   const winNu = env("win32", {}, home);
   assert.equal(globalConfigRoot(winNu), path.join(home, "AppData", "Roaming", APP_ID));
-  assert.equal(globalDataRoot(winNu), path.join(home, "AppData", "Local", APP_ID));
+  assert.equal(globalDataRoot(winNu), path.join(home, "AppData", "Roaming", APP_ID));
 
   // Linux : XDG, sinon les emplacements standards.
   const linux = env("linux", {}, home);
@@ -64,48 +69,76 @@ function testEmplacementsParPlateforme() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Repli sur l'ancien nommage — par TÉMOIN, pas par existence du dossier
+// 2. Migration depuis l'ancien nommage — une fois, au démarrage
 // ---------------------------------------------------------------------------
 
-function testRepliParTemoin() {
+function testMigrationDeplace() {
   const base = tempDir("config");
-  const e = env("linux", { XDG_CONFIG_HOME: base }, base);
+  const e = env("linux", { XDG_CONFIG_HOME: base, XDG_DATA_HOME: base }, base);
 
-  // Aucun des deux dossiers : on annonce le nouveau (installation neuve).
-  assert.equal(globalConfigRoot(e), path.join(base, APP_ID));
+  // Poste non migré : tout est sous l'ancien nom.
+  const ancien = path.join(base, LEGACY_APP_ID);
+  fs.mkdirSync(path.join(ancien, "taches", "menage-mails"), { recursive: true });
+  fs.writeFileSync(path.join(ancien, "config.json"), '{"projects":[1,2]}');
 
-  // Ancien dossier AVEC son témoin : c'est là que vivent les données.
-  fs.mkdirSync(path.join(base, LEGACY_APP_ID), { recursive: true });
-  fs.writeFileSync(path.join(base, LEGACY_APP_ID, "config.json"), "{}");
-  assert.equal(globalConfigRoot(e), path.join(base, LEGACY_APP_ID));
+  const bilan = migrerDepuisAncienNom(e);
 
-  // Nouveau dossier créé mais VIDE (cas réel : la coquille Tauri le crée seule)
-  // — le repli doit TENIR, sinon l'application réécrit une config par défaut
-  // dans le vide et l'utilisateur croit avoir tout perdu (incident 2026-08-07).
-  fs.mkdirSync(path.join(base, APP_ID), { recursive: true });
-  assert.equal(globalConfigRoot(e), path.join(base, LEGACY_APP_ID));
+  assert.deepEqual(bilan.conflits, [], "aucun conflit attendu sur un dossier neuf");
+  assert.ok(bilan.deplaces.includes("config.json"), "config.json doit etre deplace");
+  assert.ok(bilan.deplaces.includes("taches"), "taches/ doit etre deplace");
 
-  // Poste migré : le témoin est passé de l'autre côté.
-  fs.writeFileSync(path.join(base, APP_ID, "config.json"), "{}");
-  assert.equal(globalConfigRoot(e), path.join(base, APP_ID));
+  // Tout est arrivé à la nouvelle adresse, contenu compris.
+  const nouveau = path.join(base, APP_ID);
+  assert.equal(fs.readFileSync(path.join(nouveau, "config.json"), "utf8"), '{"projects":[1,2]}');
+  assert.ok(fs.existsSync(path.join(nouveau, "taches", "menage-mails")), "l'arborescence doit suivre");
+  assert.ok(!fs.existsSync(ancien), "l'ancien dossier vide doit disparaitre");
 
-  console.log("OK: repli config par témoin (dossier vide de la coquille ignoré)");
+  // Et les racines pointent bien là, sans détour.
+  assert.equal(globalConfigRoot(e), nouveau);
+
+  console.log("OK: migration deplace config et donnees vers le nouveau nommage");
 }
 
-function testRepliDonnees() {
-  const base = tempDir("data");
-  const e = env("linux", { XDG_DATA_HOME: base }, base);
+function testMigrationNeCraseJamais() {
+  const base = tempDir("config-conflit");
+  const e = env("linux", { XDG_CONFIG_HOME: base, XDG_DATA_HOME: base }, base);
 
-  // Le dossier de la coquille existe avec ses caches, mais SANS `state/` :
-  // les conversations vivent encore à l'ancienne adresse.
-  fs.mkdirSync(path.join(base, APP_ID, "WebKitCache"), { recursive: true });
-  fs.mkdirSync(path.join(base, LEGACY_APP_ID, "state"), { recursive: true });
-  assert.equal(globalDataRoot(e), path.join(base, LEGACY_APP_ID));
+  // Cas RÉEL : la coquille Rust a déjà écrit un config.json au nouveau nom
+  // (elle n'a aucun repli) alors que l'ancien dossier vit encore.
+  const ancien = path.join(base, LEGACY_APP_ID);
+  const nouveau = path.join(base, APP_ID);
+  fs.mkdirSync(ancien, { recursive: true });
+  fs.mkdirSync(nouveau, { recursive: true });
+  fs.writeFileSync(path.join(ancien, "config.json"), "ANCIEN");
+  fs.writeFileSync(path.join(nouveau, "config.json"), "NOUVEAU");
+  fs.mkdirSync(path.join(ancien, "usage"), { recursive: true });
 
-  fs.mkdirSync(path.join(base, APP_ID, "state"), { recursive: true });
-  assert.equal(globalDataRoot(e), path.join(base, APP_ID));
+  const bilan = migrerDepuisAncienNom(e);
 
-  console.log("OK: repli données par témoin `state/`");
+  assert.ok(bilan.conflits.includes("config.json"), "la collision doit etre signalee");
+  assert.equal(
+    fs.readFileSync(path.join(nouveau, "config.json"), "utf8"),
+    "NOUVEAU",
+    "jamais d'ecrasement : la version en place gagne",
+  );
+  assert.equal(
+    fs.readFileSync(path.join(ancien, "config.json"), "utf8"),
+    "ANCIEN",
+    "la version non migree reste consultable, elle n'est pas detruite",
+  );
+  assert.ok(bilan.deplaces.includes("usage"), "ce qui ne collisionne pas doit quand meme migrer");
+
+  console.log("OK: migration signale les collisions sans jamais ecraser ni detruire");
+}
+
+function testMigrationIdempotente() {
+  const base = tempDir("config-vide");
+  const e = env("linux", { XDG_CONFIG_HOME: base, XDG_DATA_HOME: base }, base);
+  const premier = migrerDepuisAncienNom(e);
+  const second = migrerDepuisAncienNom(e);
+  assert.deepEqual(premier, { deplaces: [], conflits: [] }, "rien a migrer = rien a faire");
+  assert.deepEqual(second, { deplaces: [], conflits: [] }, "et c'est rejouable sans effet");
+  console.log("OK: migration idempotente et silencieuse quand il n'y a rien a faire");
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +166,8 @@ function testDossierProjet() {
 }
 
 testEmplacementsParPlateforme();
-testRepliParTemoin();
-testRepliDonnees();
+testMigrationDeplace();
+testMigrationNeCraseJamais();
+testMigrationIdempotente();
 testDossierProjet();
 console.log("OK: tous les tests appPaths sont passés");

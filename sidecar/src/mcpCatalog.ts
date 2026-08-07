@@ -19,6 +19,7 @@
  */
 
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { EngineEmitter } from "./engine.js";
 import * as journal from "./journal.js";
 import { readMcpConfig, writeMcpConfig } from "./mcp.js";
@@ -129,7 +130,16 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
 /** Chemin du serveur IMAP livré avec l'app (`tools/mcp-imap/server.mjs`). */
 function bundledImapServerPath(): string {
   // dist/mcpCatalog.js → ../.. = racine du dépôt → tools/mcp-imap/server.mjs
-  const here = path.dirname(new URL(import.meta.url).pathname);
+  //
+  // `fileURLToPath` et non `new URL(...).pathname` : ce dernier rend un chemin
+  // de FORME URL, pas un chemin système. Sous Windows il garde le préfixe de
+  // lecteur (`/C:/…`) et laisse les séquences encodées telles quelles — un
+  // dossier « Jean Dupont » ressort en `Jean%20Dupont`. `path.resolve` en fait
+  // alors `\C:\Users\Jean%20Dupont\…`, un chemin qui n'existe pas : le
+  // connecteur IMAP écrivait cet argument dans `.mcp.json` et le serveur ne
+  // démarrait jamais (ENOENT). Le défaut vaut pour tout chemin contenant une
+  // espace, Linux compris.
+  const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "..", "..", "tools", "mcp-imap", "server.mjs");
 }
 
