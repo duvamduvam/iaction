@@ -26,4 +26,11 @@ case "${XDG_DATA_HOME:-}" in */snap/*) unset XDG_DATA_HOME ;; esac
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
 
 cd "$(dirname "$0")/.."
+
+# Le panneau « Tickets » lit `<config>/tickets.md` — le carnet de l'UTILISATEUR.
+# En développement, on veut voir le backlog VERSIONNÉ du dépôt : on le désigne
+# explicitement, plutôt que de le faire deviner à l'application (c'est
+# exactement la confusion qu'on vient de retirer du produit).
+export IACTION_TICKETS_MD="$PWD/docs/tickets.md"
+
 exec npm run dev "$@"

@@ -1,6 +1,6 @@
 [package]
 name = "iaction"
-version = "0.1.3"
+version = "0.1.4"
 description = "IAction — desktop multi-fournisseur pour le développement assisté par IA"
 authors = ["Dadou"]
 edition = "2021"

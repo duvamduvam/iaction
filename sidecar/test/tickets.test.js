@@ -278,31 +278,43 @@ async function main() {
     );
 
     // -----------------------------------------------------------------------
-    // 5. Fichier introuvable : réponse propre, pas une erreur de protocole.
+    // 5. Aucun backlog : il est CRÉÉ, pas signalé introuvable.
+    //    L'utilisateur n'a aucun moyen de deviner où poser le fichier ni sous
+    //    quelle forme — l'application le lui pose, une fois, puis n'y touche
+    //    plus jamais (voir deposerGabaritSiAbsent).
     // -----------------------------------------------------------------------
     const absent = path.join(tmp, "nulle-part", "tickets.md");
     const scAbsent = await demarrer({ XDG_CONFIG_HOME: xdgConfigHome, IACTION_TICKETS_MD: absent });
     sidecars.push(scAbsent);
-    const vide = await scAbsent.call("tickets.list", {}, "tickets.list (fichier absent)");
+    const vide = await scAbsent.call("tickets.list", {}, "tickets.list (aucun backlog)");
     assert(
-      vide.disponible === false && Array.isArray(vide.tickets) && vide.tickets.length === 0,
-      `fichier absent : {tickets:[], disponible:false} attendu, reçu ${JSON.stringify(vide)}`,
+      vide.disponible === true && Array.isArray(vide.tickets) && vide.tickets.length === 0,
+      `backlog absent : il doit être créé et lu vide, reçu ${JSON.stringify(vide)}`,
     );
-    assert(vide.chemin === absent, `fichier absent : chemin doit dire OÙ il a été cherché, reçu ${JSON.stringify(vide.chemin)}`);
+    assert(vide.chemin === absent, `chemin attendu ${absent}, reçu ${JSON.stringify(vide.chemin)}`);
+    const gabarit = await fsp.readFile(absent, "utf8");
+    assert(/^# Tickets/m.test(gabarit) && /## Ouverts/.test(gabarit), "le gabarit déposé doit être un backlog exploitable");
+
+    // Le fichier existant n'est JAMAIS réécrit : on le salit, on relit.
+    await fsp.writeFile(absent, gabarit + "\n| T-042 | feat | P2 | ouvert | Ajouté à la main |\n", "utf8");
+    const scRelu = await demarrer({ XDG_CONFIG_HOME: xdgConfigHome, IACTION_TICKETS_MD: absent });
+    sidecars.push(scRelu);
+    const relu = await scRelu.call("tickets.list", {}, "tickets.list (fichier existant)");
+    assert(
+      relu.tickets.some((t) => t.id === "T-042"),
+      `un backlog existant ne doit pas être écrasé, reçu ${JSON.stringify(relu.tickets)}`,
+    );
 
     // -----------------------------------------------------------------------
-    // 6. Résolution par défaut : docs/tickets.md du dépôt, relatif au dist.
+    // 6. Résolution par défaut : <config>/tickets.md, au même niveau que
+    //    config.json, logs/ et taches/ — jamais le dépôt.
     // -----------------------------------------------------------------------
     const scDefaut = await demarrer({ XDG_CONFIG_HOME: xdgConfigHome, IACTION_TICKETS_MD: "" });
     sidecars.push(scDefaut);
-    const depot = await scDefaut.call("tickets.list", {}, "tickets.list (résolution par défaut)");
-    const attendu = path.resolve(__dirname, "..", "..", "docs", "tickets.md");
-    assert(depot.chemin === attendu, `résolution par défaut attendue ${attendu}, reçue ${JSON.stringify(depot.chemin)}`);
-    assert(depot.disponible === true, "docs/tickets.md du dépôt doit être lisible depuis les tests");
-    assert(
-      depot.tickets.length > 0,
-      `le backlog réel doit remonter au moins un ticket, reçu ${JSON.stringify(depot.tickets)}`,
-    );
+    const parDefaut = await scDefaut.call("tickets.list", {}, "tickets.list (résolution par défaut)");
+    const attendu = path.join(xdgConfigHome, "net.duvam.iaction", "tickets.md");
+    assert(parDefaut.chemin === attendu, `résolution par défaut attendue ${attendu}, reçue ${JSON.stringify(parDefaut.chemin)}`);
+    assert(parDefaut.disponible === true, "le backlog par défaut doit être créé puis lisible");
 
     console.log("OK");
     process.exitCode = 0;

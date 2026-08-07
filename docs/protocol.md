@@ -1323,21 +1323,33 @@ chronologique.
 
 ## Méthode TK1 — backlog de tickets (lecture)
 
-Expose [docs/tickets.md](tickets.md), le backlog du projet, au panneau
-« Tickets » de la page Système. **Lecture seule assumée** : il n'y a pas de
-`tickets.write`, ni de création/édition depuis l'UI. Le fichier reste écrit à
-la main et versionné — c'est lui la source de vérité, relue en revue de code ;
+Expose un backlog Markdown au panneau « Tickets » de la page Système.
+**Lecture seule assumée** : il n'y a pas de `tickets.write`, ni d'édition
+depuis l'UI. Le fichier reste écrit à la main — c'est lui la source de vérité ;
 une méthode d'écriture aurait imposé de regénérer le Markdown, donc d'en figer
 la mise en forme. Implémentation : `sidecar/src/tickets.ts`.
 
 ### Résolution du fichier
 
-`docs/tickets.md` appartient au **dépôt iaction**, pas à un projet
-utilisateur, et la page Système n'est liée à aucun projet. Il est donc résolu
-relativement au `dist/` du sidecar (`../../docs/tickets.md`), exactement comme
-`scripts/orch-run-headless.mjs` en § T2 — l'app et le backlog viennent du même
-dépôt. La variable d'environnement **`IACTION_TICKETS_MD`**, si elle est
-posée, l'emporte (dépôt déplacé, build packagé, tests).
+**`<config>/tickets.md`** — au même niveau que `config.json`, `logs/`,
+`agents/` et `taches/`. Ce carnet n'appartient ni à un projet ni au dépôt : il
+suit l'utilisateur, comme le reste de sa configuration.
+
+**Créé au premier accès** à partir d'un gabarit (en-tête, convention, deux
+tableaux vides) : c'est la seule écriture du module, en création EXCLUSIVE
+(`wx`), et un fichier existant n'est jamais touché. Sans ce dépôt initial,
+l'utilisateur verrait « backlog introuvable » sans moyen de deviner où poser le
+fichier ni sous quelle forme.
+
+La variable **`IACTION_TICKETS_MD`** l'emporte si elle est posée — c'est ainsi
+que `scripts/dev.sh` fait pointer le panneau sur le `docs/tickets.md` VERSIONNÉ
+du dépôt pendant le développement.
+
+> Historique : ce chemin était résolu depuis le `dist/` du sidecar vers le
+> `docs/tickets.md` du dépôt. Une application installée allait donc chercher le
+> backlog du dépôt qui l'avait produite, à un chemin inexistant chez
+> l'utilisateur (`%LOCALAPPDATA%\docs\tickets.md`) — de la plomberie de
+> développement qui fuyait dans le produit. Corrigé le 2026-08-07.
 
 ### `tickets.list`
 

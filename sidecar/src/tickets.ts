@@ -2,20 +2,21 @@
  * Backlog de tickets — méthode TK1 (`tickets.list`), voir docs/protocol.md,
  * section « Méthode TK1 — backlog de tickets (lecture) ».
  *
- * POURQUOI : `docs/tickets.md` est le backlog du projet, écrit et versionné À
- * LA MAIN. Le panneau « Tickets » de la page Système ne fait que l'AFFICHER —
- * il n'y a volontairement aucune écriture ici : le fichier reste la source de
- * vérité, éditée dans l'éditeur, relue par git. Une méthode d'écriture aurait
- * imposé de regénérer le Markdown, donc de figer sa mise en forme ; on préfère
- * un parseur tolérant et un fichier libre.
+ * POURQUOI : le backlog est un fichier Markdown écrit À LA MAIN. Le panneau
+ * « Tickets » de la page Système ne fait que l'AFFICHER — aucune réécriture :
+ * le fichier reste la source de vérité, éditée dans l'éditeur. Une méthode
+ * d'écriture aurait imposé de regénérer le Markdown, donc de figer sa mise en
+ * forme ; on préfère un parseur tolérant et un fichier libre. Seule exception,
+ * le dépôt du gabarit initial quand aucun fichier n'existe (voir
+ * `deposerGabaritSiAbsent`).
  *
- * Résolution du chemin : `docs/tickets.md` appartient au DÉPÔT iaction, pas
- * à un projet utilisateur, et la page Système n'est liée à aucun projet — il
- * est donc résolu relativement au `dist/` du sidecar, exactement comme
- * `tachesTimers.ts` résout `scripts/orch-run-headless.mjs` : l'app et le
- * fichier viennent du même dépôt. Introuvable (build packagé, dépôt déplacé),
- * la méthode répond `disponible: false` plutôt qu'une erreur — l'UI affiche
- * « backlog introuvable » sans rien casser.
+ * OÙ : `<config>/tickets.md`, au même niveau que `config.json`, `logs/`,
+ * `agents/` et `taches/`. Ce carnet n'appartient ni à un projet ni au dépôt
+ * iaction — il suit l'utilisateur, comme le reste de sa configuration.
+ * (Historique : il pointait vers le `docs/tickets.md` du dépôt, résolu depuis
+ * le `dist/` du sidecar. Une application installée allait donc chercher le
+ * backlog du dépôt qui l'avait produite, à un chemin inexistant chez
+ * l'utilisateur — de la plomberie de développement qui fuyait dans le produit.)
  *
  * Le parseur est TOLÉRANT par construction : le fichier dérivera (c'est un
  * humain qui l'écrit). Une ligne difforme est ignorée, jamais une erreur ; une
@@ -25,8 +26,8 @@
 
 import { promises as fsp } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { EngineEmitter } from "./engine.js";
+import { globalConfigRoot } from "./appPaths.js";
 import * as journal from "./journal.js";
 
 /** Un ticket du backlog, tel qu'il part vers l'UI (voir docs/protocol.md § TK1). */
@@ -53,17 +54,78 @@ export interface Ticket {
 // ---------------------------------------------------------------------------
 
 /**
- * Chemin du backlog : `IACTION_TICKETS_MD` s'il est posé (dépôt déplacé,
- * tests), sinon `docs/tickets.md` relativement au `dist/` du sidecar — même
- * mode de résolution que le runner headless dans tachesTimers.ts.
+ * Chemin du backlog : `IACTION_TICKETS_MD` s'il est posé, sinon
+ * `<config>/tickets.md` — **au même niveau que `config.json`, `logs/`,
+ * `agents/` et `taches/`**.
+ *
+ * Il a longtemps été résolu vers le `docs/tickets.md` du DÉPÔT iaction, à
+ * partir du `dist/` du sidecar. C'était de la plomberie de développement qui
+ * fuyait dans le produit : une application installée allait chercher le
+ * backlog du dépôt qui l'avait produite, à un chemin qui n'existe pas chez
+ * l'utilisateur (`%LOCALAPPDATA%\docs\tickets.md`). Le panneau « Tickets »
+ * n'appartient à aucun projet et n'est pas propre au dépôt : c'est un carnet
+ * de bord de l'utilisateur, il vit donc avec sa configuration.
+ *
+ * Le développement du projet garde son backlog versionné en pointant la
+ * variable d'environnement dessus (voir `scripts/dev.sh`).
  */
 export function resolveTicketsPath(): string {
   const override = process.env.IACTION_TICKETS_MD;
   if (typeof override === "string" && override.length > 0) {
     return path.resolve(override);
   }
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(currentDir, "..", "..", "docs", "tickets.md");
+  return path.join(globalConfigRoot(), "tickets.md");
+}
+
+/**
+ * Gabarit déposé au premier accès, quand aucun backlog n'existe encore.
+ *
+ * Écrire ici est la SEULE écriture du module, et elle n'a lieu qu'une fois :
+ * le fichier reste ensuite la propriété de celui qui l'édite (voir l'en-tête —
+ * pas de réécriture, pas de mise en forme imposée). Sans ce dépôt initial, le
+ * panneau afficherait « backlog introuvable » à un utilisateur qui n'a aucun
+ * moyen de deviner où poser le fichier ni sous quelle forme.
+ */
+const GABARIT_BACKLOG = `# Tickets
+
+> Votre carnet de bord : corrections à venir et idées à ne pas perdre.
+> Fichier libre, édité à la main. Un ticket = une ligne du tableau, et si
+> besoin une section détaillée plus bas.
+
+## Convention
+
+- **ID** : \`T-001\`, incrémental, jamais réutilisé.
+- **Type** : \`bug\` · \`feat\` · \`tech\` · \`doc\`.
+- **Prio** : \`P1\` (à faire ensuite) · \`P2\` (important) · \`P3\` (un jour).
+- **Statut** : \`ouvert\` → \`en cours\` → \`fait\`, ou \`abandonné\`.
+
+## Ouverts
+
+| ID    | Type | Prio | Statut | Titre |
+|-------|------|------|--------|-------|
+
+## Archivés
+
+| ID    | Type | Prio | Statut | Titre |
+|-------|------|------|--------|-------|
+`;
+
+/**
+ * Crée le backlog s'il n'existe pas. Best-effort : un échec (droits, disque
+ * plein) laisse simplement la lecture échouer ensuite, avec son message.
+ */
+async function deposerGabaritSiAbsent(chemin: string): Promise<void> {
+  try {
+    await fsp.mkdir(path.dirname(chemin), { recursive: true });
+    // `wx` : création EXCLUSIVE — deux sidecars lancés en même temps ne
+    // peuvent pas s'écraser l'un l'autre, et un fichier existant n'est jamais
+    // touché.
+    await fsp.writeFile(chemin, GABARIT_BACKLOG, { encoding: "utf8", flag: "wx" });
+    journal.info("sidecar", "backlog de tickets créé", { fields: { chemin } });
+  } catch {
+    // Existe déjà, ou impossible à créer : les deux cas sont traités par la
+    // lecture qui suit.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +304,7 @@ export async function handleTicketsList(
   emitter: EngineEmitter,
 ): Promise<void> {
   const chemin = resolveTicketsPath();
+  await deposerGabaritSiAbsent(chemin);
 
   let markdown: string;
   try {
