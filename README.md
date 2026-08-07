@@ -67,6 +67,7 @@ All of it wrapped in an unapologetic **neon synthwave UI** — because a tool yo
 
 ### 🎙️ Voice, both ways
 - Dictation into the composer, and **local text-to-speech** (Kokoro) for replies — including a hands-free voice conversation mode. No cloud speech APIs involved.
+- The local inference stack is a [one-command optional install](#optional-local-voice) in released builds (it weighs 1.2 GB); remote speech endpoints work out of the box.
 
 ### ⏰ Scheduled autonomous tasks
 - Package an orchestration as a **recurring task** (systemd timers): daily mailbox triage, weekly quality reviews, doc-site audits… delivered disarmed, with a "report-only" rehearsal mode before you arm anything.
@@ -98,15 +99,59 @@ React UI (ui/)  ⇄  Tauri IPC  ⇄  thin Rust core (src-tauri/)  ⇄  JSON-Line
 - **sidecar/** — Node process hosting the AI engines (Claude Agent SDK + neutral OpenAI-compatible engine), knowledge index, router, tasks, journal.
 - The full UI⇄Rust⇄sidecar protocol is specified in [docs/protocol.md](docs/protocol.md) and covered by tests.
 
+## 📥 Install
+
+**[⬇️ Download the latest release](https://github.com/duvamduvam/iaction/releases/latest)** — no build step, no Node or Rust to install.
+
+| Platform | File | Notes |
+|---|---|---|
+| **Linux** | `IAction_<version>_amd64.AppImage` | `chmod +x` then run. Self-contained. |
+| **Windows** | `IAction_<version>_x64-setup.exe` | Installs **for the current user only** (`%LOCALAPPDATA%`) — **no administrator rights needed**. |
+
+<details>
+<summary><b>Windows: the SmartScreen warning</b></summary>
+
+The installer is not code-signed, so Windows shows *"Windows protected your PC"* on first run. Choose **More info → Run anyway**. Signing is planned; until a certificate builds reputation, the warning would appear anyway.
+
+</details>
+
+### Before your first agent run
+
+The app starts fine without any of this — but each engine has its own requirement:
+
+| To use… | You need |
+|---|---|
+| **Claude (subscription)** | [Claude Code](https://code.claude.com/docs/en/setup) installed and logged in (`claude login`) — the app drives your own subscription. |
+| **Agents that run shell commands** | On Windows: [Git for Windows](https://git-scm.com/download/win). Claude Code takes its `Bash` tool shell from it, and the neutral engine runs commands through `sh`. |
+| **OpenRouter / Ollama / any OpenAI-compatible endpoint** | Just an API key (or a running Ollama) — configure it in **Configuration → Providers**. |
+
+### Optional: local voice
+
+Local speech-to-text and text-to-speech are **not bundled** — the inference stack weighs 1.2 GB, more than everything else combined. Install it once, next to the app's data:
+
+```bash
+# Linux — the exact path is shown in Configuration → Voice
+mkdir -p ~/.local/share/net.duvam.iaction/voix-locale && cd $_
+npm init -y && npm install kokoro-js @huggingface/transformers
+```
+
+```powershell
+# Windows
+mkdir "$env:LOCALAPPDATA\net.duvam.iaction\voix-locale"; cd "$env:LOCALAPPDATA\net.duvam.iaction\voix-locale"
+npm init -y; npm install kokoro-js @huggingface/transformers
+```
+
+Restart the app — the microphone and conversation buttons appear. Until then they stay hidden rather than failing, and remote speech engines work regardless. Models download on first use into `~/.cache/iaction/models`.
+
 ## 💻 Platform support
 
 | Platform | Status |
 |---|---|
-| **Linux** | ✅ Development platform — used daily, tested |
-| **Windows** | 🔶 Untested. Tauri 2 (WebView2), the React UI and the Node sidecar are portable in principle, and the Rust core guards its unix-specific paths — but nobody has tried yet, and **scheduled tasks rely on systemd user timers (Linux-only)**. WSL2 + WSLg should work. Reports & PRs very welcome. |
-| **macOS** | 🔶 Untested — same story minus WebView2 (WKWebView), scheduled tasks would need a `launchd` port. |
+| **Linux** | ✅ Development platform — used daily, tested. AppImage built by CI. |
+| **Windows** | 🔶 **Installer built by CI, runtime not yet validated by a human.** The whole test suite passes on a Windows runner, paths use `%APPDATA%`/`%LOCALAPPDATA%`, and the installer needs no admin rights — but nobody has clicked through a real session yet. **Scheduled tasks are Linux-only** (systemd user timers); the app says so explicitly instead of failing. Reports & PRs very welcome. |
+| **macOS** | 🔶 Untested and not built — same story minus WebView2 (WKWebView), scheduled tasks would need a `launchd` port. |
 
-## 🚀 Quick start (Linux)
+## 🚀 Build from source (Linux)
 
 Prerequisites: Node ≥ 22, stable Rust, and Tauri's system dependencies:
 
@@ -123,6 +168,8 @@ npm run dev            # tauri dev: compiles Rust, starts Vite + the window
 ```
 
 Sidecar tests (no Tauri needed): `npm run sidecar:test`.
+
+To produce the installers yourself: `npm run build:linux` / `npm run build:windows` (the latter must run on Windows — Tauri does not cross-compile). Everything is detailed in [docs/empaquetage.md](docs/empaquetage.md).
 
 <details>
 <summary><b>Known environment pitfalls (Linux)</b></summary>

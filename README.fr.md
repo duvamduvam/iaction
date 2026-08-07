@@ -8,6 +8,62 @@ OpenAI-compatibles), organisée par projets liés à un répertoire.
 > Plan produit complet : [docs/plan.md](docs/plan.md).
 > Backlog (corrections et fonctionnalités à venir) : [docs/tickets.md](docs/tickets.md).
 
+## Installation
+
+**[⬇️ Télécharger la dernière version](https://github.com/duvamduvam/iaction/releases/latest)** — rien à compiler, ni Node ni Rust à installer.
+
+| Plateforme | Fichier | À savoir |
+|---|---|---|
+| **Linux** | `IAction_<version>_amd64.AppImage` | `chmod +x` puis lancer. Autonome. |
+| **Windows** | `IAction_<version>_x64-setup.exe` | Installation **pour l'utilisateur courant** (`%LOCALAPPDATA%`) — **aucun droit d'administration**. |
+
+L'installeur Windows n'est pas signé : Windows affiche « Windows a protégé votre
+ordinateur » au premier lancement. Choisir **Informations complémentaires →
+Exécuter quand même**.
+
+### Avant le premier tour d'agent
+
+L'application démarre sans rien de tout cela ; c'est chaque moteur qui a ses exigences.
+
+| Pour utiliser… | Il faut |
+|---|---|
+| **Claude (abonnement)** | [Claude Code](https://code.claude.com/docs/en/setup) installé et connecté (`claude login`) — c'est votre propre abonnement qui travaille. |
+| **Des agents qui lancent des commandes** | Sous Windows : [Git for Windows](https://git-scm.com/download/win). Claude Code y prend le shell de son outil `Bash`, et le moteur neutre lance ses commandes par `sh`. |
+| **OpenRouter / Ollama / endpoint OpenAI-compatible** | Une clé API (ou un Ollama qui tourne), à renseigner dans **Configuration → Fournisseurs**. |
+
+### Facultatif : la voix locale
+
+La dictée et la synthèse LOCALES ne sont **pas embarquées** — la pile
+d'inférence pèse 1,2 Go, plus que tout le reste réuni. Elle s'installe une fois,
+à côté des données de l'application :
+
+```bash
+# Linux — le chemin exact est rappelé dans Configuration → Voix
+mkdir -p ~/.local/share/net.duvam.iaction/voix-locale && cd $_
+npm init -y && npm install kokoro-js @huggingface/transformers
+```
+
+```powershell
+# Windows
+mkdir "$env:LOCALAPPDATA\net.duvam.iaction\voix-locale"; cd "$env:LOCALAPPDATA\net.duvam.iaction\voix-locale"
+npm init -y; npm install kokoro-js @huggingface/transformers
+```
+
+Redémarrer l'application : les boutons micro et conversation apparaissent. Tant
+qu'elle manque, ils restent **masqués** plutôt que de tomber en panne, et les
+moteurs de voix distants fonctionnent quoi qu'il arrive. Les modèles se
+téléchargent au premier usage dans `~/.cache/iaction/models`.
+
+### État par plateforme
+
+- **Linux** : plateforme de développement, utilisée quotidiennement.
+- **Windows** : installeur construit par la CI, **exécution pas encore validée
+  par un humain**. Toute la suite de tests passe sur un runner Windows et les
+  chemins suivent `%APPDATA%`/`%LOCALAPPDATA%`. Les **tâches planifiées restent
+  Linux** (timers systemd) — l'application le dit explicitement au lieu
+  d'échouer.
+- **macOS** : ni testé ni construit.
+
 ## Architecture
 
 ```
@@ -29,6 +85,9 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
 
 ## Développement
 
+Pour seulement UTILISER l'application, voir « Installation » ci-dessus — rien de
+ce qui suit n'est nécessaire.
+
 ```bash
 npm install            # workspaces ui + sidecar
 npm run sidecar:build  # compile le sidecar (obligatoire avant le premier run)
@@ -36,6 +95,11 @@ npm run dev            # tauri dev (compile Rust, lance Vite + la fenêtre)
 ```
 
 Tests du sidecar (sans Tauri) : `npm run sidecar:test`.
+
+Produire les installeurs soi-même : `npm run build:linux` /
+`npm run build:windows` (ce dernier doit tourner SUR Windows — Tauri ne compile
+pas d'une plateforme à l'autre). Tout est détaillé dans
+[docs/empaquetage.md](docs/empaquetage.md).
 
 ### Pièges d'environnement connus (Linux)
 
