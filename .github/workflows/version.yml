@@ -73,8 +73,24 @@ jobs:
       - name: Dépendances npm
         run: npm ci
 
+      # Les journaux d'un run ne sont téléchargeables qu'avec des droits
+      # d'administration sur le dépôt — inutilisables pour diagnostiquer depuis
+      # l'extérieur. Les ANNOTATIONS, elles, sont exposées par l'API publique :
+      # on y recopie donc les lignes d'échec, pour qu'un échec propre à une
+      # plateforme soit lisible sans accès privilégié.
       - name: Tests du sidecar
-        run: npm run sidecar:test
+        shell: bash
+        run: |
+          set +e
+          npm run sidecar:test > sortie-tests.txt 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            resume=$(grep -aE "ECHEC|AssertionError|Error:" sortie-tests.txt | head -4 | tr '\n' '¦')
+            echo "::error title=Tests du sidecar (${{ matrix.os }})::${resume:-échec sans ligne reconnaissable}"
+            echo "----- 60 dernières lignes -----"
+            tail -60 sortie-tests.txt
+          fi
+          exit $code
 
       # `beforeBuildCommand` déclenche scripts/preparer-bundle.sh : interface,
       # sidecar, bundle de ses dépendances d'exécution et runtime Node.

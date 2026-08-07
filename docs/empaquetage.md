@@ -142,6 +142,15 @@ ressource, et les deux échouent de façon explicite (journal `fatal`).
 - **Chemins** : la configuration va dans `%APPDATA%`, l'état dans
   `%LOCALAPPDATA%` (voir `sidecar/src/appPaths.ts`, testé pour les deux
   systèmes dans `sidecar/test/appPaths.test.js`).
+- **Git for Windows est nécessaire à l'exécution des agents**, pas à
+  l'installation :
+  - Claude Code y prend le shell de son outil `Bash` (variable
+    `CLAUDE_CODE_GIT_BASH_PATH` si le PATH ne suffit pas) ;
+  - le moteur NEUTRE lance ses commandes par `sh -c`
+    (`sidecar/src/neutralAgent.ts`), et `sh` vient de là.
+
+  Sans lui, l'application s'installe et démarre, mais toute étape d'agent qui
+  passe par le shell échoue.
 - **Avertissement SmartScreen** : l'installeur n'est pas signé — l'écran
   apparaîtra tant qu'un certificat n'aura pas acquis de réputation. Il est
   contournable (« Informations complémentaires → Exécuter quand même »), et
