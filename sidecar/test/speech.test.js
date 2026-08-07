@@ -388,9 +388,20 @@ try {
   });
   const sc4 = await terminal("sc-4");
   assert(sc4.event === "done", `sc-4: 'done' attendu, reçu '${sc4.event}': ${JSON.stringify(sc4.data)}`);
+  // La réponse porte la disponibilité de la pile de voix LOCALE : c'est elle
+  // qui décide si l'interface affiche les boutons micro et conversation (voir
+  // sidecar/src/speech.ts et ui/src/VoiceControls.tsx). On vérifie sa FORME,
+  // pas sa valeur — celle-ci dépend légitimement de la machine : présente dans
+  // le dépôt de développement, absente d'une application livrée.
   assert(
-    sc4.data && Object.keys(sc4.data).length === 0,
-    `sc-4: data doit être {}, reçu ${JSON.stringify(sc4.data)}`,
+    sc4.data && typeof sc4.data.voixLocale === "object" && sc4.data.voixLocale !== null,
+    `sc-4: data.voixLocale attendu, reçu ${JSON.stringify(sc4.data)}`,
+  );
+  assert(
+    typeof sc4.data.voixLocale.disponible === "boolean" &&
+      typeof sc4.data.voixLocale.dossier === "string" &&
+      sc4.data.voixLocale.dossier.length > 0,
+    `sc-4: voixLocale mal formée, reçu ${JSON.stringify(sc4.data.voixLocale)}`,
   );
 
   // speech.transcribe sans audio → erreur de validation.

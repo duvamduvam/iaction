@@ -3,6 +3,23 @@
 > Mis en place le 2026-08-07. Objectif : une application **autonome** (ni Node
 > ni dépendance à installer) et, sous Windows, **sans droits d'administration**.
 
+## 0. En pratique : ne construisez rien à la main
+
+`.github/workflows/version.yml` construit les DEUX installeurs à chaque
+étiquette de version et les attache à une release :
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Un runner Ubuntu produit l'AppImage, un runner `windows-latest` l'installeur
+NSIS. C'est ce qui répond au vrai problème — Tauri ne compilant pas Windows
+depuis Linux, chaque version réclamerait sinon d'allumer un PC Windows. Gratuit
+sur un dépôt public.
+
+Le reste de ce document décrit la construction LOCALE, utile pour mettre au
+point ou dépanner. La CI ne fait rien d'autre : mêmes commandes, même script.
+
 ## 1. Une commande par plateforme
 
 ```bash
