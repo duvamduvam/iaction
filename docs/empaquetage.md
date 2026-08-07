@@ -131,6 +131,18 @@ Chaque candidat est vérifié sur le disque avant d'être retenu : une applicati
 installée ne cherche jamais le dépôt, un dépôt en développement n'a pas de
 ressource, et les deux échouent de façon explicite (journal `fatal`).
 
+> **Piège Windows — le chemin « verbatim ».** Tauri résout ses ressources sous
+> la forme `\\?\C:\…`, qui lève la limite de 260 caractères et que les API
+> Windows acceptent. **Node ne la comprend pas** : son résolveur de module
+> remonte les composants, prend `C:` pour la racine et meurt sur
+> `EISDIR: illegal operation on a directory, lstat 'C:'`. Le sidecar était donc
+> mort-né dans la v0.1.0 Windows — alors que le même `index.js`, lancé à la
+> main avec le `node.exe` livré, fonctionnait parfaitement. `sans_prefixe_verbatim`
+> retire ce préfixe avant tout passage à un programme tiers.
+>
+> Symptôme trompeur : l'installeur, l'application et le sidecar sont TOUS
+> corrects — seule la forme du chemin qui les relie ne l'était pas.
+
 ## 4. Windows : sans droits d'administration
 
 - **NSIS en `installMode: "currentUser"`** : installation dans `%LOCALAPPDATA%`,

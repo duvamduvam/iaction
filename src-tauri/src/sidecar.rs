@@ -138,10 +138,36 @@ fn sidecar_entry(app: &AppHandle) -> String {
     }
     if let Ok(resource) = app.path().resolve("sidecar/index.js", BaseDirectory::Resource) {
         if resource.exists() {
-            return resource.to_string_lossy().into_owned();
+            return sans_prefixe_verbatim(&resource);
         }
     }
     concat!(env!("CARGO_MANIFEST_DIR"), "/../sidecar/dist/index.js").to_string()
+}
+
+/// Rend un chemin Windows consommable par un programme TIERS, en retirant le
+/// préfixe « verbatim » `\\?\`.
+///
+/// Tauri résout ses ressources sous cette forme (`\\?\C:\…`), qui lève la
+/// limite de 260 caractères et que les API Windows acceptent parfaitement.
+/// Node, lui, ne la comprend pas : son résolveur de module remonte les
+/// composants du chemin, prend `C:` pour la racine et échoue sur
+/// `EISDIR: illegal operation on a directory, lstat 'C:'`. L'application
+/// démarrait donc avec un sidecar mort-né sous Windows — diagnostiqué sur un
+/// vrai poste le 2026-08-07, l'erreur étant reproductible à l'identique en
+/// passant un chemin verbatim à `node` à la main.
+///
+/// Sans effet ailleurs qu'une conversion en `String` : aucun chemin Unix ne
+/// commence par ce préfixe.
+fn sans_prefixe_verbatim(chemin: &std::path::Path) -> String {
+    let brut = chemin.to_string_lossy();
+    // Partage réseau : `\\?\UNC\serveur\partage` désigne `\\serveur\partage`.
+    if let Some(reste) = brut.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{reste}");
+    }
+    if let Some(reste) = brut.strip_prefix(r"\\?\") {
+        return reste.to_string();
+    }
+    brut.into_owned()
 }
 
 /// Détermine le runtime Node qui exécutera le sidecar, par ordre de priorité :
@@ -161,7 +187,9 @@ fn node_program(_app: &AppHandle) -> String {
         if let Some(dossier) = exe.parent() {
             let livre = dossier.join(nom);
             if livre.exists() {
-                return livre.to_string_lossy().into_owned();
+                // Même précaution que pour l'entrypoint : on ne sait pas sous
+                // quelle forme l'OS a rendu `current_exe`.
+                return sans_prefixe_verbatim(&livre);
             }
         }
     }
@@ -652,4 +680,32 @@ pub fn sidecar_request(request: Value, sidecar: State<'_, SharedState>) -> Resul
 pub fn sidecar_status(sidecar: State<'_, SharedState>) -> StatusPayload {
     let guard = lock_state(&sidecar);
     guard.status_payload()
+}
+
+#[cfg(test)]
+mod tests_chemins {
+    use super::sans_prefixe_verbatim;
+    use std::path::Path;
+
+    #[test]
+    fn retire_le_prefixe_verbatim_dun_disque() {
+        assert_eq!(
+            sans_prefixe_verbatim(Path::new(r"\\?\C:\Users\x\IAction\sidecar\index.js")),
+            r"C:\Users\x\IAction\sidecar\index.js",
+        );
+    }
+
+    #[test]
+    fn retablit_la_forme_unc_dun_partage() {
+        assert_eq!(
+            sans_prefixe_verbatim(Path::new(r"\\?\UNC\serveur\partage\app\index.js")),
+            r"\\serveur\partage\app\index.js",
+        );
+    }
+
+    #[test]
+    fn laisse_intact_un_chemin_ordinaire() {
+        assert_eq!(sans_prefixe_verbatim(Path::new("/usr/lib/IAction/sidecar/index.js")), "/usr/lib/IAction/sidecar/index.js");
+        assert_eq!(sans_prefixe_verbatim(Path::new(r"C:\deja\simple.js")), r"C:\deja\simple.js");
+    }
 }
