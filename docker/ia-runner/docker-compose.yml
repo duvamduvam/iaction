@@ -43,8 +43,9 @@ services:
       # README : il faut chowner soi-même.
       - ia-runner-data:/data
 
-    # Garde-fous de ressources. 7,6 Go de RAM sur la machine, partagés avec
-    # Gitea et orgaia : le runner ne doit jamais devenir le voisin bruyant.
+    # Garde-fous de ressources. La RAM de la machine est partagée avec les
+    # autres services qu'elle héberge : le runner ne doit jamais devenir le
+    # voisin bruyant.
     # L'exécution est de toute façon séquentielle (une tâche à la fois).
     mem_limit: 3g
     memswap_limit: 3g
