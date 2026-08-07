@@ -5852,8 +5852,14 @@ async function main() {
       `kq1 : 2 résultats attendus (topK), reçu ${JSON.stringify(doneKq1.data)}`,
     );
     const topKq1 = doneKq1.data.results[0];
+    // Séparateur « / » ATTENDU, y compris sous Windows : c'est le contrat de
+    // l'index (voir sidecar/src/knowledge.ts). L'index vit dans `.iaction/`,
+    // donc dans le dossier synchronisé entre postes — sans cette normalisation,
+    // le même fichier aurait deux clefs selon la machine et chaque bascule
+    // relancerait une indexation complète. Reconstruire le chemin avec
+    // `path.join` ici reviendrait à tester l'inverse du contrat.
     assert(
-      topKq1.file === path.join(".iaction", "connaissances", "note-alpha.md") &&
+      topKq1.file === ".iaction/connaissances/note-alpha.md" &&
         topKq1.excerpt.includes("alpha") &&
         typeof topKq1.score === "number" &&
         topKq1.score > doneKq1.data.results[1].score,
