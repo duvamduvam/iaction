@@ -82,6 +82,36 @@ jobs:
       - name: Tests unitaires UI (vitest)
         run: npm run test -w ui
 
+      # Les journaux d'un run ne sont téléchargeables qu'avec des droits
+      # d'administration sur le dépôt — inutilisables pour diagnostiquer depuis
+      # l'extérieur. Les ANNOTATIONS, elles, sont exposées par l'API publique :
+      # on y recopie donc les lignes d'échec, pour qu'un échec propre à une
+      # plateforme soit lisible sans accès privilégié.
+      - name: Tests du sidecar
+        shell: bash
+        run: |
+          set +e
+          npm run sidecar:test > sortie-tests.txt 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            resume=$(grep -aE "ECHEC|AssertionError|Error:" sortie-tests.txt | head -4 | tr '\n' '¦')
+            echo "::error title=Tests du sidecar (${{ matrix.os }})::${resume:-échec sans ligne reconnaissable}"
+            echo "----- 60 dernières lignes -----"
+            tail -60 sortie-tests.txt
+          fi
+          exit $code
+
+      # OBLIGATOIRE AVANT `cargo test` : le script de build de Tauri vérifie
+      # l'existence des ressources et du binaire externe déclarés dans
+      # tauri.conf.json. Sans cette étape, cargo échoue avant même de compiler,
+      # sur « resource path `binaries/node-…` doesn't exist » — ce qui passait
+      # inaperçu en local, où le binaire traîne depuis le premier empaquetage.
+      #
+      # `tauri build` relancera ce même script (beforeBuildCommand) : le second
+      # passage est idempotent et court (Node déjà téléchargé, npm en cache).
+      - name: Préparer le bundle (requis par le script de build Tauri)
+        run: npm run preparer-bundle
+
       # Même traitement que les tests du sidecar : les journaux de run étant
       # réservés aux administrateurs du dépôt, l'échec doit voyager par une
       # ANNOTATION, seule sortie lisible publiquement.
@@ -101,25 +131,6 @@ jobs:
             # annotation ; `%25` protège les pourcents déjà présents.
             resume=$(tail -30 sortie-cargo.txt | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')
             echo "::error title=Tests Rust (${{ matrix.os }})::${resume:-sortie vide}"
-          fi
-          exit $code
-
-      # Les journaux d'un run ne sont téléchargeables qu'avec des droits
-      # d'administration sur le dépôt — inutilisables pour diagnostiquer depuis
-      # l'extérieur. Les ANNOTATIONS, elles, sont exposées par l'API publique :
-      # on y recopie donc les lignes d'échec, pour qu'un échec propre à une
-      # plateforme soit lisible sans accès privilégié.
-      - name: Tests du sidecar
-        shell: bash
-        run: |
-          set +e
-          npm run sidecar:test > sortie-tests.txt 2>&1
-          code=$?
-          if [ "$code" -ne 0 ]; then
-            resume=$(grep -aE "ECHEC|AssertionError|Error:" sortie-tests.txt | head -4 | tr '\n' '¦')
-            echo "::error title=Tests du sidecar (${{ matrix.os }})::${resume:-échec sans ligne reconnaissable}"
-            echo "----- 60 dernières lignes -----"
-            tail -60 sortie-tests.txt
           fi
           exit $code
 

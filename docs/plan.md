@@ -335,6 +335,17 @@ solo = énorme. À réconcilier à l'axe 8 (build vs réutiliser un agent exista
   « aucun envoi hors de l'infra personnelle ». L'app Android reste hors
   périmètre (regrill dédié le jour venu).
 
+- **Dette de structure** (relevée après la revue complète du 2026-08-07)
+  → **Étude rédigée le 2026-08-07 : `docs/etude-structure.md`** (quatre
+  fichiers-dieux concentrant la moitié de l'interface, 36 copies des mêmes
+  helpers défensifs, contrat inter-couches tenu par des commentaires, 563
+  lignes de test pour 31 000 lignes d'interface). Diagnostic : le code n'a pas
+  de frontières internes, et seulement dans l'UI — les couches sont justes, la
+  coquille Rust est exemplaire. Remède en 8 étapes MÉCANIQUES (déplacement, pas
+  réécriture), par valeur décroissante, chacune livrable seule. Étape 0 déjà
+  faite (`agentTurns.ts`). **Ni réécriture, ni framework d'état** : le problème
+  n'est pas le mécanisme mais l'absence de frontière.
+
 **Pistes flexibilité (proposées 2026-07-19, à valider au grill)**
 
 1. ✅ **Connaissances niveau 2 — dossier auto** (livré 2026-07-19) :
