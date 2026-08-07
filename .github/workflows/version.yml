@@ -98,6 +98,22 @@ jobs:
         shell: bash
         run: npx tauri build --bundles ${{ matrix.bundles }}
 
+      # Dire ce qui a été empaqueté, pas seulement que ça a réussi. Un
+      # installeur peut se construire sans erreur en ayant SILENCIEUSEMENT
+      # omis le CLI Claude : npm ne pose ses paquets par plateforme qu'en
+      # dépendances optionnelles, et une omission ne casse rien au build —
+      # elle ne se verrait qu'au premier tour d'agent, chez l'utilisateur.
+      # `::notice::` est une annotation, donc lisible par l'API publique.
+      - name: Inventaire de ce qui est embarqué
+        shell: bash
+        run: |
+          bundle=$(du -sm build/sidecar-bundle | cut -f1)
+          cli=$(ls build/sidecar-bundle/node_modules/@anthropic-ai/ 2>/dev/null | tr '\n' ' ')
+          binaire=$(find build/sidecar-bundle/node_modules/@anthropic-ai -maxdepth 2 -name 'claude*' -type f -printf '%f=%sB ' 2>/dev/null || true)
+          runtime=$(ls -l src-tauri/binaries/ | awk 'NR>1 {printf "%s=%sB ", $9, $5}')
+          installeur=$(find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*-setup.exe' \) -printf '%f=%sB ' 2>/dev/null || true)
+          echo "::notice title=Contenu embarqué (${{ matrix.os }})::bundle=${bundle}Mo | @anthropic-ai: ${cli:-AUCUN} | CLI: ${binaire:-ABSENT} | runtime: ${runtime:-ABSENT} | installeur: ${installeur:-ABSENT}"
+
       - name: Déposer l'installeur en artefact
         uses: actions/upload-artifact@v4
         with:
