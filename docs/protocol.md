@@ -1408,6 +1408,25 @@ Le sidecar est le **seul écrivain** du fichier. Trois portes d'entrée :
    brut du stderr sidecar) : confondre les deux créerait une boucle
    sidecar → stderr → `sidecar:log` → `log.append` → sidecar.
 
+#### Journal de secours de la coquille — `logs/coquille.jsonl`
+
+La porte n°3 traverse le sidecar : **quand c'est lui qui est mort, la panne la
+plus grave est la seule à ne laisser aucune trace**. C'est arrivé le 2026-08-07
+(sidecar mort-né sous Windows, journal inexistant) ; il a fallu capturer le
+stderr du process à distance pour voir l'erreur.
+
+La coquille Rust écrit donc AUSSI, directement sur le disque, dans un fichier
+**distinct** — le contrat d'écrivain unique d'`app.jsonl` reste intact :
+
+- `<config>/logs/coquille.jsonl`, même forme de ligne, rotation en `.1` au-delà
+  de 1 Mo ;
+- y sont écrits : les niveaux `fatal` et `error` de `log_app`, **et** une ligne
+  `info` au démarrage de la supervision portant les chemins résolus du runtime
+  Node et de l'entrypoint. Cette ligne de démarrage exerce le mécanisme à
+  chaque lancement : un journal de secours qui ne servirait qu'aux
+  catastrophes serait un journal dont personne ne sait s'il fonctionne encore
+  le jour de la catastrophe.
+
 ### Forme d'une entrée
 
 ```json

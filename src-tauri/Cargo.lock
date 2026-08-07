@@ -1428,6 +1428,7 @@ name = "iaction"
 version = "0.1.2"
 dependencies = [
  "arboard",
+ "chrono",
  "image",
  "keyring",
  "serde",

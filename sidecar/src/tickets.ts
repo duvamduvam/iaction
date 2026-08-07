@@ -247,7 +247,16 @@ export async function handleTicketsList(
   try {
     markdown = await fsp.readFile(chemin, "utf8");
   } catch (err) {
-    journal.warn("sidecar", "backlog de tickets introuvable", {
+    // ABSENCE ≠ ANOMALIE. Ce backlog appartient au dépôt iaction : dans une
+    // application INSTALLÉE il n'existe pas, et n'a aucune raison d'exister —
+    // le chemin résolu y pointe hors de tout dépôt. Un `warn` à chaque
+    // démarrage donnait donc l'alerte pour un cas parfaitement nominal
+    // (constaté sur le poste Windows, 2026-08-07).
+    //
+    // On garde en revanche le `warn` pour un fichier PRÉSENT mais illisible
+    // (droits, encodage) : là, quelque chose est réellement cassé.
+    const absent = (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+    journal[absent ? "debug" : "warn"]("sidecar", "backlog de tickets introuvable", {
       reqId: id,
       fields: { chemin, erreur: err instanceof Error ? err.message : String(err) },
     });

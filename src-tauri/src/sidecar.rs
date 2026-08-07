@@ -196,6 +196,52 @@ fn node_program(_app: &AppHandle) -> String {
     "node".to_string()
 }
 
+/// Taille au-delà de laquelle le journal de la coquille est archivé en `.1`.
+/// Ces lignes sont rares par nature ; le plafond ne protège que du cas
+/// pathologique — une boucle d'échec qui journalise sans fin.
+const COQUILLE_MAX_OCTETS: u64 = 1_000_000;
+
+/// Écrit une ligne de journal DIRECTEMENT sur le disque, sans passer par le
+/// sidecar.
+///
+/// Fichier séparé (`logs/coquille.jsonl`) et non `app.jsonl` : le contrat du
+/// protocole réserve ce dernier à un écrivain unique (le sidecar, via
+/// `log.append`), et deux processus qui ajoutent au même fichier finiraient par
+/// s'entrelacer. Même format de ligne, pour qu'un seul lecteur suffise.
+///
+/// Best-effort d'un bout à l'autre : si l'écriture échoue, on se tait. On ne
+/// journalise pas l'échec du journal, et surtout on n'empêche pas
+/// l'application de démarrer pour si peu.
+fn journal_coquille(app: &AppHandle, level: &str, msg: &str, fields: &Value) {
+    let Ok(base) = app.path().app_config_dir() else {
+        return;
+    };
+    let dossier = base.join("logs");
+    if std::fs::create_dir_all(&dossier).is_err() {
+        return;
+    }
+    let fichier = dossier.join("coquille.jsonl");
+
+    if let Ok(meta) = std::fs::metadata(&fichier) {
+        if meta.len() > COQUILLE_MAX_OCTETS {
+            let _ = std::fs::rename(&fichier, dossier.join("coquille.jsonl.1"));
+        }
+    }
+
+    let ligne = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "level": level,
+        "scope": "rust",
+        "msg": msg,
+        "fields": fields,
+    });
+
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&fichier) {
+        let _ = writeln!(f, "{ligne}");
+    }
+}
+
 /// Construit la commande de lancement du sidecar : les trois flux en tuyaux
 /// (c'est par eux que passe tout le protocole), et **aucune fenêtre** sous
 /// Windows.
@@ -245,6 +291,17 @@ fn commande_sidecar(node: &str, entry: &str) -> Command {
 /// boucle sidecar → stderr → `sidecar:log` → `log.append` → sidecar que le
 /// contrat interdit explicitement.
 pub fn log_app(app: &AppHandle, level: &str, msg: String, fields: Value) {
+    // Les niveaux GRAVES vont AUSSI sur le disque, directement.
+    //
+    // Le chemin normal (`app:log` → UI → `log.append` → sidecar) a un défaut
+    // fatal, au sens propre : il traverse le sidecar. Quand c'est LUI qui est
+    // mort, la panne la plus grave devient la seule à ne laisser aucune trace.
+    // Le 2026-08-07, un sidecar mort-né sous Windows n'a rien écrit du tout —
+    // il a fallu capturer le stderr du process sur le poste distant pour voir
+    // l'erreur, après une heure de tâtonnements.
+    if level == "fatal" || level == "error" {
+        journal_coquille(app, level, &msg, &fields);
+    }
     let payload = serde_json::json!({
         "level": level,
         "scope": "rust",
@@ -358,6 +415,22 @@ fn supervise(app: AppHandle) {
     let _fin = FinDeSupervision { app: app.clone() };
     let entry = sidecar_entry(&app);
     let node = node_program(&app);
+
+    // Trace de démarrage écrite DIRECTEMENT sur le disque, avec les deux
+    // chemins résolus. Deux raisons :
+    //
+    // 1. ce sont exactement les informations qui manquaient pour diagnostiquer
+    //    le sidecar mort-né sous Windows — il a fallu capturer le stderr du
+    //    process à distance pour les obtenir ;
+    // 2. elle EXERCE le mécanisme à chaque lancement. Un journal de secours
+    //    qui ne servirait qu'aux catastrophes serait un journal dont personne
+    //    ne sait s'il fonctionne encore le jour de la catastrophe.
+    journal_coquille(
+        &app,
+        "info",
+        "démarrage de la supervision du sidecar",
+        &serde_json::json!({ "node": &node, "entry": &entry }),
+    );
 
     // Publie l'état initial "starting" avant la première tentative de spawn.
     {
