@@ -1,0 +1,12 @@
+{
+  "quoi": "événement error : la seule forme d'échec du protocole. data.message est tout ce que l'UI peut afficher — s'il disparaît, l'utilisateur voit une panne muette.",
+  "parseur": null,
+  "evenement": {
+    "id": "temoin-erreur-1",
+    "event": "error",
+    "data": {
+      "message": "méthode inconnue: methode.inconnue"
+    }
+  },
+  "attendu": null
+}

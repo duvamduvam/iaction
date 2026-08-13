@@ -15,9 +15,9 @@ import { fileURLToPath } from "node:url";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { entry } from "./harness.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const entry = path.join(__dirname, "..", "dist", "index.js");
 
 function fail(message) {
   console.error(`ECHEC: ${message}`);
@@ -173,8 +173,18 @@ async function main() {
       `log.append avec des params pourris doit répondre done {}, reçu ${JSON.stringify(pourri)}`,
     );
 
-    const total = appends.length + 1;
-    const lu = await readUntil({}, (d) => Array.isArray(d.entries) && d.entries.length === total, "6 entrées écrites");
+    // Le sidecar journalise à son démarrage l'identité du code qu'il exécute
+    // (T-020 : « sidecar à jour » / « sidecar PÉRIMÉ » / « sans empreinte »).
+    // Cette ligne `info sidecar` précède donc TOUT ce que ce test écrit. On la
+    // compte explicitement plutôt que de l'ignorer : c'est un contrat, et le
+    // jour où elle disparaîtrait, ce test doit le dire.
+    const ENTREES_DEMARRAGE = 1;
+    const total = appends.length + 1 + ENTREES_DEMARRAGE;
+    const lu = await readUntil({}, (d) => Array.isArray(d.entries) && d.entries.length === total, "7 entrées écrites");
+    assert(
+      lu.entries[0].level === "info" && lu.entries[0].scope === "sidecar",
+      `la première entrée doit être la ligne de démarrage du sidecar, reçu ${JSON.stringify(lu.entries[0])}`,
+    );
 
     // Ordre chronologique (plus ancien d'abord).
     const timestamps = lu.entries.map((e) => Date.parse(e.ts));
@@ -185,7 +195,7 @@ async function main() {
       );
     }
 
-    const premiere = lu.entries[0];
+    const premiere = lu.entries[ENTREES_DEMARRAGE];
     assert(premiere.level === "error" && premiere.scope === "claude", `première entrée mal relue: ${JSON.stringify(premiere)}`);
     assert(premiere.msg === "tour interrompu par le fournisseur (429)", `msg mal relu: ${premiere.msg}`);
     assert(premiere.fields.httpStatus === 429, `fields.httpStatus attendu 429, reçu ${JSON.stringify(premiere.fields)}`);
@@ -206,7 +216,9 @@ async function main() {
     );
     assert(derniere.stack === null, `stack non-chaîne doit devenir null, reçu ${JSON.stringify(derniere.stack)}`);
 
-    const countsAttendus = { fatal: 1, error: 3, warn: 1, info: 1, debug: 0 };
+    // info : celle de la page Système écrite ci-dessus, PLUS la ligne de
+    // démarrage du sidecar (T-020).
+    const countsAttendus = { fatal: 1, error: 3, warn: 1, info: 1 + ENTREES_DEMARRAGE, debug: 0 };
     assert(
       JSON.stringify(lu.counts) === JSON.stringify(countsAttendus),
       `counts attendus ${JSON.stringify(countsAttendus)}, reçus ${JSON.stringify(lu.counts)}`,

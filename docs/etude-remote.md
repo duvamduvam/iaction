@@ -80,6 +80,52 @@ Conséquences pour D1 :
 - **Reste à faire (D3)** : côté UI, savoir lire/écrire les deux racines et
   afficher le lieu d'exécution. En D1 la racine serveur se peuple à la main.
 
+### 3 ter. Deux canaux, pas un (amendement du 2026-08-13)
+
+Le grill de 2026-08-05 avait retenu Nextcloud comme **unique** bus, pour quatre
+raisons toutes valables : c'est le canal qui existait déjà, il n'exige aucune
+surface réseau applicative, il fait remonter les rapports jusqu'à l'app sans que
+l'app apprenne quoi que ce soit, et il transporte ce qui n'est pas versionné
+(les manifestes de tâches, les index RAG).
+
+Le déploiement a montré que ce choix, appliqué **au code**, est un détour :
+
+- la forge privée tourne **sur la machine même** qui héberge `ia-runner` ; le
+  code d'un projet versionné y est donc déjà, sur le disque local. Aller le
+  rechercher en WebDAV sur l'autre serveur revient à recopier par le réseau ce
+  qui est à portée de main ;
+- `sync-down.sh` descend le dossier projet **complet** (`.git` inclus) en
+  `rclone copy`, donc sans propager les suppressions : le dossier serveur
+  dérive, et le disque avec ;
+- un `git fetch` est incrémental, atomique, sans conflit possible.
+
+**Règle retenue** : **git pour le code, dans les deux sens ; Nextcloud pour ce
+que git ne transporte pas.**
+
+| Ce qui circule | Canal | Pourquoi |
+|---|---|---|
+| Sources d'un projet versionné (descente) | `git clone` / `fetch` depuis la forge | incrémental, local à la machine, pas de conflit |
+| Corrections produites par le serveur (remontée) | branche poussée sur la forge, relue par l'humain | préserve la règle d'or : la zone d'écriture du serveur reste disjointe de la zone synchronisée |
+| Manifestes de tâches, rapports, état, index RAG | Nextcloud | non versionnés, et le retour vers l'app est gratuit |
+| Projet **non** versionné en liste blanche | Nextcloud | git n'a rien à offrir ici |
+
+Cet amendement **ne relâche pas** la règle d'or du § 3 — il la sert. Une tâche
+serveur ne modifie toujours jamais le dossier synchronisé ; quand elle doit
+produire du code, elle le fait dans un clone git dédié, hors zone Nextcloud, et
+le résultat arrive sous forme de branche à relire. Ce qui change n'est pas la
+règle, c'est qu'il existe désormais un second endroit où écrire.
+
+**Conséquence pratique** : pour une tâche qui n'a besoin que de son manifeste
+(le témoin, un rapport), la descente des projets peut rester coupée — ce qui
+retire du chemin critique la latence WebDAV et le risque de disque plein.
+
+> **Ce que cet amendement rend possible** : faire résoudre des tickets par le
+> serveur. C'était structurellement impossible tant que le seul canal de retour
+> était un dossier synchronisé. Les garde-fous à poser le jour venu : jamais de
+> push sur la branche principale, `npm run verif` obligatoire avant commit
+> (verdict par **code de sortie**), et échec de vérification = aucune branche
+> poussée, seulement un rapport de diagnostic. À cadrer dans son propre grill.
+
 ## 4. Serveur & exécuteur (axe 3, tranché 2026-08-05)
 
 - Machines candidates (relevé du 2026-08-05, deux serveurs déjà en service) :
@@ -221,6 +267,37 @@ Application du principe « aucun échec muet » (cf. `etude-logs.md`) :
   - la racine serveur des tâches se peuple **à la main** (l'UI ne connaît
     qu'une racine : D3).
 
+  ✅ **DÉPLOYÉ ET VALIDÉ le 2026-08-13** — le jalon est atteint : le rapport du
+  témoin, produit sur le serveur, est redescendu jusqu'au poste en boucle
+  fermée. Chaîne vérifiée maillon par maillon : liaison WebDAV, descente du
+  manifeste avec son `.iaction/`, génération du crontab, heartbeat actif,
+  **jeton d'abonnement fonctionnel en headless** (verdict `OK` de l'agent
+  Haiku), rapport écrit puis remonté. Le témoin est laissé **désarmé** : son
+  `schedule` horaire coûterait 24 runs par jour d'abonnement, et il a fait ses
+  preuves.
+
+  **Quatre enseignements du déploiement** (aucun n'était prévisible sur le
+  papier) :
+
+  1. **Le disque n'avait pas 24 Go de libre, mais 5,8** (relevé du 2026-08-05
+     périmé en huit jours). Ramené à 17 Go en purgeant une image Docker
+     orpheline de 9,5 Go, 7,9 Go de cache de build et 3,5 Go de journal
+     systemd — sans toucher aux services en place.
+  2. **L'image ne se construisait plus** : le Dockerfile ne copiait pas
+     `sidecar/scripts/`, devenu nécessaire quand le script de build du sidecar
+     a gagné son étape d'empreinte. Cassée en silence depuis plusieurs jours,
+     parce qu'aucune CI ne la construit (T-040 — troisième panne de build muette
+     de la semaine, après T-038 et T-039).
+  3. **`target/` n'était pas exclu de la descente des projets.** Sur ce dépôt,
+     `src-tauri/target` pèse 22 Go pour 25 Go de projet : mettre ia-studio en
+     liste blanche aurait rempli le disque et emporté les autres services de la
+     machine. `RCLONE_EXCLUSIONS_PROJETS` est désormais renseigné
+     (`target/`, `.git/`, `dist/`, `build/`).
+  4. **La forge n'hébergeait pas le dépôt.** Le remote était configuré, le
+     dépôt n'avait jamais été créé — d'où un déploiement par `rsync` en D1. Le
+     dépôt existe depuis le 2026-08-13 ; les mises à jour ultérieures passeront
+     par `git clone/pull`, conformément au § 3 ter.
+
   **Avant le premier lancement** (actions utilisateur) : créer
   `iaction/serveur/{taches,projets}` dans Nextcloud ; `claude setup-token`
   sur le poste → `CLAUDE_CODE_OAUTH_TOKEN` ; mot de passe d'application
@@ -248,10 +325,10 @@ Application du principe « aucun échec muet » (cf. `etude-logs.md`) :
 | Sujet | Quand |
 |---|---|
 | ~~OS, Docker, reverse proxy, répartition des machines~~ **levé le 2026-08-05** (relevé SSH, voir §4) : deux machines, `ia-runner` sur le VPS `automatisation`, nginx hôte en reverse proxy | — |
-| Latence/robustesse de la synchro WebDAV inter-serveurs (VPS ↔ serveur de stockage) | D1 |
-| Espace disque du VPS (24 Go libres) vs taille des projets en liste blanche | D1 |
+| ~~Latence/robustesse de la synchro WebDAV inter-serveurs~~ **levée le 2026-08-13** : descente et remontée éprouvées dans les deux sens, de l'ordre de la dizaine de secondes pour un manifeste. Reste à mesurer sur un projet volumineux — mais le § 3 ter retire les projets versionnés de ce chemin | — |
+| ~~Espace disque du VPS~~ **levée le 2026-08-13, défavorablement** : 5,8 Go libres et non 24, ramenés à 17 Go par purge. Le vrai danger n'était pas la taille des projets mais les **artefacts de build** qu'ils contiennent (22 Go de `target/` pour ce dépôt) — d'où les exclusions désormais posées. À re-vérifier avant tout ajout à la liste blanche | — |
 | Vhost + certificat Let's Encrypt pour `automatisation.example.net` (nginx répond aujourd'hui avec le certificat de `git.example.net`) | avant D5 (webhooks) |
 | Latence et robustesse réelles de `nextcloudcmd`/`rclone bisync` en boucle | D1 |
-| Durée de vie / renouvellement du jeton `claude setup-token` | D1 |
+| Durée de vie / renouvellement du jeton `claude setup-token` — **le jeton fonctionne en headless** (validé 2026-08-13), sa longévité reste inconnue | à l'usage |
 | CGU Anthropic : usage perso du jeton d'abonnement en headless (même question déjà tranchée « OK perso » pour le poste, à confirmer pour le serveur) | avant D3 |
 | Consommation abo réelle des tâches nocturnes (relevés D2) | fin D3 |

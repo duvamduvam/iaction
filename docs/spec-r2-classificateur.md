@@ -1,6 +1,7 @@
 # Spec R2 — Classificateur local + `auto` partout + surcharge projet (Lot 14, phase R2)
 
-Statut : **spec fermée, prête à déléguer** (2026-07-27). Dépend de R1.
+Statut : **RÉALISÉE — spec de référence, ne plus déléguer** (2026-07-27). Dépend de R1.
+Mise à jour du statut le 2026-08-10 : présence des artefacts vérifiée dans le code, la ligne précédente annonçait encore un travail à faire.
 Cadre : `docs/etude-routage-llm.md` §6. Taille : ½ lot.
 
 ## Objectif

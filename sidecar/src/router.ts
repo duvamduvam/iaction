@@ -32,8 +32,9 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { isNonEmptyString, isPlainObject } from "./base.js";
 import { buildHeaders, getProvider, joinUrl, type EngineEmitter } from "./engine.js";
-import { autoDebordCostUsdThisMonth, isLocalProviderId, readLatestClaudeWindows } from "./usageStats.js";
+import { applyDebord, DEFAULT_DEBORD, raisonDebordActif, type DebordConfig, type DebordDecision } from "./debord.js";
 import { projectDir } from "./appPaths.js";
+import { setWebSearchConfig } from "./webSearch.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,26 +91,6 @@ export interface ClassifierConfig {
 export const DEFAULT_CLASSIFIER: ClassifierConfig = { providerId: "ollama", model: "qwen3.5:4b" };
 
 /**
- * R3 — débord d'abonnement (docs/spec-r3-debord.md §1) : quand la cible du
- * tier est le moteur claude et que la fenêtre 5 h dépasse `seuilPct`, le
- * tour part vers `target` (cible payante déclarée), tant que la dépense
- * mensuelle de débord reste sous `plafondUsdMois` (USD — devise
- * d'OpenRouter ; `null` = pas de plafond).
- */
-export interface DebordConfig {
-  target: RouteTarget;
-  seuilPct: number;
-  plafondUsdMois: number | null;
-}
-
-/** Défauts du débord (spec R3 §1) — remplacés par `router.set` (champ `debord`). */
-export const DEFAULT_DEBORD: DebordConfig = {
-  target: { engine: "neutral", providerId: "openrouter", model: "deepseek/deepseek-chat" },
-  seuilPct: 90,
-  plafondUsdMois: 10,
-};
-
-/**
  * R5 — modèle d'embeddings du RAG local (docs/spec-r5-rag.md §1) : provider
  * (résolu via engine.ts, API native `/api/embed`) + modèle. Même forme que le
  * classificateur ; consommé par knowledge.ts via `getEmbeddingsConfig()`.
@@ -121,6 +102,15 @@ export interface EmbeddingsConfig {
 
 /** Défaut des embeddings (spec R5 §1) — remplacé par `router.set` (champ `embeddings`). */
 export const DEFAULT_EMBEDDINGS: EmbeddingsConfig = { providerId: "ollama", model: "nomic-embed-text" };
+
+/*
+ * R9 — le moteur de recherche web se règle par `router.set` (champ
+ * `webSearch`), comme le classificateur et les embeddings. Mais sa config
+ * VIT dans webSearch.ts, pas ici : `router.ts` importe déjà `engine.ts`, et
+ * `engine.ts` doit lire cette config au moment du tour. La loger ici créerait
+ * le cycle engine ↔ router. webSearch.ts ne dépend de rien, tout le monde
+ * peut donc en dépendre — le graphe reste acyclique (architecture.md §6).
+ */
 
 // ---------------------------------------------------------------------------
 // État en mémoire
@@ -495,6 +485,11 @@ export function handleRouterSet(
   // sur action explicite de l'utilisateur (knowledge.index).
   embeddingsConfig = sanitizeClassifier(params.embeddings) ?? { ...DEFAULT_EMBEDDINGS };
 
+  // R9 — moteur de recherche web : même sémantique « absent ou invalide =
+  // défaut ». La config vit dans webSearch.ts (voir le commentaire près de
+  // DEFAULT_EMBEDDINGS : y toucher ici refermerait le graphe des modules).
+  setWebSearchConfig(params.webSearch);
+
   emitter.done(id, { count });
 }
 
@@ -640,70 +635,6 @@ async function classifyWithLlm(text: string, config: ClassifierConfig): Promise<
 // R3 — décision de débord (docs/spec-r3-debord.md §2.3)
 // ---------------------------------------------------------------------------
 
-/**
- * État de débord d'une résolution : `{active: true}` = tour envoyé vers la
- * cible de débord ; `{active: false, blocked: true}` = plafond mensuel
- * atteint, repli sur la cible du tier trivial SI elle est locale (voir la
- * garde dans applyDebord), sinon cible claude d'origine conservée.
- */
-export interface DebordDecision {
-  active: boolean;
-  blocked?: true;
-  fiveHourPct: number;
-}
-
-/**
- * R6-A — âge maximal d'un instantané de fenêtres pour décider un débord :
- * un instantané est un relevé PONCTUEL de la fenêtre 5 h ; au-delà de 30 min
- * il ne dit plus rien de la saturation réelle (la fenêtre a pu se vider).
- * Plus vieux → comportement « pas d'instantané » (pas de débord).
- */
-export const DEBORD_SNAPSHOT_MAX_AGE_MS = 30 * 60 * 1000;
-
-/**
- * Applique la règle de débord à une cible résolue : ne concerne QUE les
- * cibles `engine: "claude"` (l'abonnement), et seulement si le débord n'est
- * pas désactivé (`debord: null` de `router.set`). Sans instantané de
- * fenêtres (ou sans pourcentage 5 h, ou instantané plus vieux que
- * DEBORD_SNAPSHOT_MAX_AGE_MS) → comportement R1 inchangé (`debord: null`).
- * Lecture best effort : toute erreur laisse la cible telle quelle.
- */
-async function applyDebord(
-  target: RouteTarget,
-  table: RoutingTable,
-): Promise<{ target: RouteTarget; debord: DebordDecision | null }> {
-  if (!debordConfig || target.engine !== "claude") {
-    return { target, debord: null };
-  }
-  const windows = await readLatestClaudeWindows();
-  if (!windows || windows.fiveHourPct === null || windows.fiveHourPct < debordConfig.seuilPct) {
-    return { target, debord: null };
-  }
-  // R6-A — fraîcheur : instantané trop vieux (ou ts illisible) = ignoré.
-  const snapshotTime = windows.ts !== null ? Date.parse(windows.ts) : Number.NaN;
-  if (Number.isNaN(snapshotTime) || Date.now() - snapshotTime > DEBORD_SNAPSHOT_MAX_AGE_MS) {
-    return { target, debord: null };
-  }
-  const fiveHourPct = windows.fiveHourPct;
-  if (debordConfig.plafondUsdMois !== null) {
-    const depenseMois = await autoDebordCostUsdThisMonth();
-    if (depenseMois >= debordConfig.plafondUsdMois) {
-      // Plafond atteint : repli LOCAL (cible du tier trivial), jamais de
-      // payant auto. R6-A — garde : si le tier trivial a été reconfiguré vers
-      // autre chose qu'un moteur neutre sur provider LOCAL (coût nul), ce
-      // « repli local » routerait vers du payant ou vers l'abo saturé — on
-      // conserve alors la cible claude d'origine.
-      const trivial = table.trivial;
-      const repliLocal = trivial.engine === "neutral" && isLocalProviderId(trivial.providerId);
-      return {
-        target: repliLocal ? trivial : target,
-        debord: { active: false, blocked: true, fiveHourPct },
-      };
-    }
-  }
-  return { target: debordConfig.target, debord: { active: true, fiveHourPct } };
-}
-
 // ---------------------------------------------------------------------------
 // R2 — résolution interne (réutilisée par router.route ET orchestrator.ts)
 // ---------------------------------------------------------------------------
@@ -793,11 +724,11 @@ export async function resolveRoute(req: RouteRequest): Promise<RouteResolution> 
 
   // R3 — débord d'abonnement : la cible claude d'un tier saturé part vers la
   // cible de débord (ou replie en local si le plafond mensuel est atteint).
-  const { target, debord } = await applyDebord(table[tier], table);
+  const { target, debord } = await applyDebord(debordConfig, table[tier], table);
   if (debord) {
     let debordReason: string;
     if (debord.active) {
-      debordReason = `débord : fenêtre 5 h à ${Math.round(debord.fiveHourPct)} %`;
+      debordReason = raisonDebordActif(debord, debordConfig?.seuilPct ?? DEFAULT_DEBORD.seuilPct);
     } else if (target.engine === "claude") {
       // R6-A — plafond atteint mais tier trivial non local : cible conservée.
       debordReason = "plafond débord atteint : cible abonnement conservée (tier trivial non local)";

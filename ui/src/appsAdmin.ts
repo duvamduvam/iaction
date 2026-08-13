@@ -45,6 +45,18 @@ export const DEFAULT_APPS: AppEntry[] = [
     extensions: ["kicad_pro", "kicad_pcb", "kicad_sch", "kicad_sym", "kicad_mod"],
   },
   {
+    id: "freecad",
+    label: "FreeCAD",
+    command: "freecad",
+    extensions: ["fcstd", "fcstd1", "fcmacro", "step", "stp", "iges", "igs", "brep"],
+  },
+  {
+    id: "cura",
+    label: "Cura",
+    command: "cura",
+    extensions: ["stl", "3mf", "obj", "amf", "gcode", "gco", "ufp"],
+  },
+  {
     id: "libreoffice",
     label: "LibreOffice",
     command: "libreoffice",

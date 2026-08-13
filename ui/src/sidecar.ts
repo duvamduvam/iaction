@@ -21,6 +21,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LOG_APPEND_METHOD, isLogLevel, isLogScope, logUi } from "./journal";
+import { toModelDetail, type ModelDetail } from "./modelDetail";
+import type { ProviderTraits } from "./providerTraits";
+
+export type { ModelDetail, ModelPricing } from "./modelDetail";
 
 export type SidecarState = "starting" | "running" | "restarting" | "dead";
 
@@ -270,6 +274,8 @@ export interface ProviderPayload {
   priceSort?: boolean;
   /** R0 — demander coût réel + tokens cachés dans l'usage (OpenRouter `usage.include`). */
   usageAccounting?: boolean;
+  /** R8-A — écarts déclarés de ce fournisseur (catalogue, corps, comptabilité). */
+  traits?: ProviderTraits;
 }
 
 export interface ModelInfo {
@@ -288,23 +294,20 @@ export interface ChatOptions {
   maxTokens?: number;
 }
 
-export interface ChatUsage {
-  /** `null` si le fournisseur ne remonte pas ce compteur (le coût peut l'être sans lui). */
-  promptTokens: number | null;
-  /** Idem — voir `parseChatDone` : les champs sont optionnels INDÉPENDAMMENT. */
-  completionTokens: number | null;
-  /** R0 — coût réel remonté par le fournisseur (comptabilité d'usage OpenRouter), null si absent. */
-  costUsd?: number | null;
-  /** R0 — tokens servis depuis le cache, null si absent. */
-  cachedTokens?: number | null;
-}
+import { toRouteDebord, isRouteTier, toRouteTarget } from "./protocole";
 
-export interface ChatDoneData {
-  finishReason: string;
-  usage: ChatUsage | null;
-  /** R0 — slug du modèle réellement servi (modèles de secours OpenRouter), null si inconnu. */
-  modelUsed: string | null;
-}
+export {
+  parseChatDone,
+  parseClaudeDone,
+  parseNeutralDone,
+  type ChatDoneData,
+  type ChatUsage,
+  type ClaudeDoneData,
+  type ClaudeUsage,
+  type NeutralDoneData,
+  isRouteTier,
+  toRouteTarget,
+} from "./protocole";
 
 function isModelInfo(value: unknown): value is ModelInfo {
   return (
@@ -326,49 +329,6 @@ export async function modelsList(providerId: string): Promise<ModelInfo[]> {
   const { done } = request("models.list", { providerId });
   const data = await done;
   return Array.isArray(data.models) ? data.models.filter(isModelInfo) : [];
-}
-
-/** Tarifs $/million de tokens (déjà convertis côté sidecar depuis le $/token OpenRouter). */
-export interface ModelPricing {
-  promptUsdPerM?: number;
-  completionUsdPerM?: number;
-}
-
-/** Métadonnées détaillées d'un modèle (voir docs/protocol.md, `models.detail`). */
-export interface ModelDetail {
-  id: string;
-  name?: string;
-  contextLength?: number;
-  pricing?: ModelPricing;
-  description?: string;
-}
-
-/** Parsing défensif de `value.pricing` : nombres finis uniquement, sinon champ omis. */
-function toModelPricing(value: unknown): ModelPricing | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const p = value as Record<string, unknown>;
-  const pricing: ModelPricing = {};
-  if (typeof p.promptUsdPerM === "number" && Number.isFinite(p.promptUsdPerM)) {
-    pricing.promptUsdPerM = p.promptUsdPerM;
-  }
-  if (typeof p.completionUsdPerM === "number" && Number.isFinite(p.completionUsdPerM)) {
-    pricing.completionUsdPerM = p.completionUsdPerM;
-  }
-  return pricing.promptUsdPerM !== undefined || pricing.completionUsdPerM !== undefined ? pricing : undefined;
-}
-
-/** Parsing défensif d'une entrée brute `models.detail` : seul `id` est requis, le reste est omis si invalide. */
-function toModelDetail(value: Record<string, unknown>): ModelDetail | null {
-  if (typeof value.id !== "string" || !value.id) return null;
-  const model: ModelDetail = { id: value.id };
-  if (typeof value.name === "string" && value.name) model.name = value.name;
-  if (typeof value.contextLength === "number" && Number.isFinite(value.contextLength)) {
-    model.contextLength = value.contextLength;
-  }
-  if (typeof value.description === "string" && value.description) model.description = value.description;
-  const pricing = toModelPricing(value.pricing);
-  if (pricing) model.pricing = pricing;
-  return model;
 }
 
 /**
@@ -453,6 +413,8 @@ export interface RouteDebord {
   /** Vrai = plafond mensuel atteint, repli sur la cible du tier trivial. */
   blocked: boolean;
   fiveHourPct: number | null;
+  /** T-005 — occupation de la fenêtre 7 jours (`null` : absente, ou sidecar antérieur). */
+  sevenDayPct: number | null;
 }
 
 /** Résultat d'un `router.route` : classement + cible de la table courante. */
@@ -465,23 +427,6 @@ export interface RouteResult {
   method: "heuristique" | "llm";
   /** R3 — `null` quand la règle de débord n'a pas joué (ou sidecar antérieur). */
   debord: RouteDebord | null;
-}
-
-export function isRouteTier(value: unknown): value is RouteTier {
-  return value === "trivial" || value === "simple" || value === "moyen" || value === "complexe";
-}
-
-/** Parsing défensif d'une cible `{engine, providerId?, model}` — null si invalide. */
-export function toRouteTarget(value: unknown): RouteTarget | null {
-  if (typeof value !== "object" || value === null) return null;
-  const v = value as Record<string, unknown>;
-  if (v.engine !== "claude" && v.engine !== "neutral") return null;
-  if (typeof v.model !== "string" || !v.model) return null;
-  if (v.engine === "neutral") {
-    if (typeof v.providerId !== "string" || !v.providerId) return null;
-    return { engine: "neutral", providerId: v.providerId, model: v.model };
-  }
-  return { engine: "claude", model: v.model };
 }
 
 /**
@@ -517,17 +462,6 @@ export async function routerSet(
  * `allowLlm: false` court-circuite le classificateur LLM ; `method` indique
  * l'origine du classement.
  */
-/** R3 — parsing défensif du champ `debord` d'un `router.route` (absent/inconnu → null). */
-function toRouteDebord(value: unknown): RouteDebord | null {
-  if (typeof value !== "object" || value === null) return null;
-  const v = value as Record<string, unknown>;
-  if (typeof v.active !== "boolean") return null;
-  return {
-    active: v.active,
-    blocked: v.blocked === true,
-    fiveHourPct: typeof v.fiveHourPct === "number" && Number.isFinite(v.fiveHourPct) ? v.fiveHourPct : null,
-  };
-}
 
 export async function routerRoute(params: {
   text: string;
@@ -596,15 +530,28 @@ export type ChatAttachment = ImageAttachment | TextAttachment;
  * et l'`id` retourné pour un éventuel `chatAbort`. `attachments` (voir le
  * contrat) : porté par le DERNIER message utilisateur, omis si vide.
  */
+// R9 — le contrat de la recherche web vit dans la feuille `rechercheWeb.ts`
+// (testable sans Tauri) ; on le ré-exporte pour les appelants habitués à
+// trouver les types du protocole ici.
+import { parseEtatWeb, type OptionsWebChat } from "./rechercheWeb";
+export type { AvancementWeb, EtatRechercheWeb, OptionsWebChat, SourceWeb } from "./rechercheWeb";
+
+export interface ExtrasChatSend {
+  attachments?: ChatAttachment[];
+  meta?: RequestMeta;
+  /** R9 — recherche web. Absent = tour identique à celui d'avant R9. */
+  web?: OptionsWebChat;
+}
+
 export function chatSend(
   providerId: string,
   model: string,
   messages: ChatMessage[],
   options: ChatOptions,
   onDelta: (delta: string) => void,
-  attachments?: ChatAttachment[],
-  meta?: RequestMeta,
+  extras: ExtrasChatSend = {},
 ): RequestHandle {
+  const { attachments, meta, web } = extras;
   return request(
     "chat.send",
     {
@@ -614,9 +561,17 @@ export function chatSend(
       options,
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(meta ? { meta } : {}),
+      // R9 — opt-in strict : le champ n'est envoyé QUE s'il est vrai, pour que
+      // le corps d'un tour sans recherche reste identique à l'octet près.
+      ...(web?.actif ? { webSearch: true } : {}),
     },
     {
       onChunk: (data) => {
+        const etat = parseEtatWeb(data.web);
+        if (etat) {
+          web?.onWeb?.(etat);
+          return;
+        }
         const delta = typeof data.delta === "string" ? data.delta : "";
         if (delta) onDelta(delta);
       },
@@ -625,36 +580,6 @@ export function chatSend(
 }
 
 /** Extrait `finishReason`/`usage`/`modelUsed` du `data` reçu au `done` d'un `chat.send`. */
-export function parseChatDone(data: Record<string, unknown>): ChatDoneData {
-  const finishReason = typeof data.finishReason === "string" ? data.finishReason : "stop";
-  let usage: ChatUsage | null = null;
-  const rawUsage = data.usage;
-  if (rawUsage && typeof rawUsage === "object") {
-    const u = rawUsage as Record<string, unknown>;
-    // Chaque champ est optionnel INDÉPENDAMMENT : le sidecar émet un usage à
-    // champs nullables (voir engine.ts), parce que tous les fournisseurs ne
-    // remontent pas les mêmes chiffres. Exiger les deux compteurs de tokens
-    // faisait jeter l'objet ENTIER quand un fournisseur ne donnait que le
-    // coût : le prix réel du tour n'était jamais affiché, alors que le sidecar
-    // l'avait transmis et enregistré dans events.jsonl.
-    const nombreOuNull = (v: unknown): number | null => (typeof v === "number" ? v : null);
-    const aUneValeur =
-      typeof u.promptTokens === "number" ||
-      typeof u.completionTokens === "number" ||
-      typeof u.costUsd === "number";
-    if (aUneValeur) {
-      usage = {
-        promptTokens: nombreOuNull(u.promptTokens),
-        completionTokens: nombreOuNull(u.completionTokens),
-        costUsd: nombreOuNull(u.costUsd),
-        cachedTokens: nombreOuNull(u.cachedTokens),
-      };
-    }
-  }
-  const modelUsed = typeof data.modelUsed === "string" && data.modelUsed ? data.modelUsed : null;
-  return { finishReason, usage, modelUsed };
-}
-
 /** Interrompt le `chat.send` en cours identifié par `targetId`. */
 export async function chatAbort(targetId: string): Promise<boolean> {
   const { done } = request("chat.abort", { targetId });
@@ -730,30 +655,6 @@ export interface ClaudeStartParams {
   attachments?: ChatAttachment[];
   /** Métadonnées de supervision (voir docs/protocol.md § S1) — omis si absent. */
   meta?: RequestMeta;
-}
-
-export interface ClaudeUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadInputTokens?: number;
-}
-
-/** Données extraites du `done` d'un `claude.start` (un tour de conversation). */
-export interface ClaudeDoneData {
-  sessionId: string;
-  subtype: string;
-  result?: string;
-  usage: ClaudeUsage | null;
-  /**
-   * Occupation réelle de la fenêtre de contexte au dernier appel API du tour,
-   * en tokens — sert la jauge « Contexte » de l'en-tête. À NE PAS confondre
-   * avec `usage`, qui cumule tous les appels du tour agentique (son cache_read
-   * additionne N fois le préfixe, d'où des « contextes » à plusieurs centaines
-   * de %). `null` si le sidecar ne l'a pas remonté (tour sans appel modèle, ou
-   * version antérieure).
-   */
-  contextTokens: number | null;
-  totalCostUsd: number | null;
 }
 
 /** Callbacks appelés au fil de l'eau, un par `kind` de chunk (union discriminée côté protocole). */
@@ -883,29 +784,6 @@ export function claudeStart(params: ClaudeStartParams, callbacks: ClaudeStartCal
 }
 
 /** Extrait les champs typés du `data` reçu au `done` d'un `claude.start`. */
-export function parseClaudeDone(data: Record<string, unknown>): ClaudeDoneData {
-  const sessionId = typeof data.sessionId === "string" ? data.sessionId : "";
-  const subtype = typeof data.subtype === "string" ? data.subtype : "success";
-  const result = typeof data.result === "string" ? data.result : undefined;
-
-  let usage: ClaudeUsage | null = null;
-  if (data.usage && typeof data.usage === "object") {
-    const u = data.usage as Record<string, unknown>;
-    if (typeof u.inputTokens === "number" && typeof u.outputTokens === "number") {
-      usage = {
-        inputTokens: u.inputTokens,
-        outputTokens: u.outputTokens,
-        cacheReadInputTokens:
-          typeof u.cacheReadInputTokens === "number" ? u.cacheReadInputTokens : undefined,
-      };
-    }
-  }
-
-  const contextTokens = typeof data.contextTokens === "number" ? data.contextTokens : null;
-  const totalCostUsd = typeof data.totalCostUsd === "number" ? data.totalCostUsd : null;
-  return { sessionId, subtype, result, usage, contextTokens, totalCostUsd };
-}
-
 /** Répond à un `permission_request` en attente sur le tour `targetId`. */
 export async function claudePermission(
   targetId: string,
@@ -1047,30 +925,6 @@ export function neutralStart(params: NeutralStartParams, callbacks: NeutralStart
       },
     },
   );
-}
-
-/** Données extraites du `done` d'un `neutral.start` : même forme que `parseClaudeDone`, sessionId/totalCostUsd toujours `null`. */
-export interface NeutralDoneData {
-  sessionId: null;
-  subtype: string;
-  result?: string;
-  usage: ClaudeUsage | null;
-  totalCostUsd: null;
-}
-
-export function parseNeutralDone(data: Record<string, unknown>): NeutralDoneData {
-  const subtype = typeof data.subtype === "string" ? data.subtype : "success";
-  const result = typeof data.result === "string" ? data.result : undefined;
-
-  let usage: ClaudeUsage | null = null;
-  if (data.usage && typeof data.usage === "object") {
-    const u = data.usage as Record<string, unknown>;
-    if (typeof u.inputTokens === "number" && typeof u.outputTokens === "number") {
-      usage = { inputTokens: u.inputTokens, outputTokens: u.outputTokens };
-    }
-  }
-
-  return { sessionId: null, subtype, result, usage, totalCostUsd: null };
 }
 
 /** Répond à un `permission_request` en attente sur le tour `targetId` (même contrat que `claudePermission`). */

@@ -1,0 +1,32 @@
+{
+  "quoi": "done d'un claude.start (tour complet : texte, outil, permission accordée). contextTokens est le prompt du DERNIER appel API — la jauge de contexte — à ne pas confondre avec usage, qui cumule tous les appels du tour.",
+  "parseur": "parseClaudeDone",
+  "evenement": {
+    "id": "temoin-claude-1",
+    "event": "done",
+    "data": {
+      "sessionId": "fake-session-1",
+      "subtype": "success",
+      "result": "Réponse pour: Bonjour",
+      "usage": {
+        "inputTokens": 12,
+        "outputTokens": 5,
+        "cacheReadInputTokens": 2
+      },
+      "contextTokens": 5300,
+      "totalCostUsd": 0.0021
+    }
+  },
+  "attendu": {
+    "sessionId": "fake-session-1",
+    "subtype": "success",
+    "result": "Réponse pour: Bonjour",
+    "usage": {
+      "inputTokens": 12,
+      "outputTokens": 5,
+      "cacheReadInputTokens": 2
+    },
+    "contextTokens": 5300,
+    "totalCostUsd": 0.0021
+  }
+}

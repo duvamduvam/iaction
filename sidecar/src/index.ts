@@ -11,7 +11,11 @@
  * relais ci-dessus est donc inchangé. Voir docs/protocol.md, section
  * « Méthodes L1 — journal applicatif (logs) ».
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
+
 import {
   handleChatAbort,
   handleChatSend,
@@ -31,11 +35,11 @@ import {
   handleClaudePermission,
   handleClaudePush,
   handleClaudeRelease,
-  handleClaudeSessionTitles,
   handleClaudeStart,
   handleClaudeUsage,
   handleClaudeUsageInit,
 } from "./claude.js";
+import { handleClaudeSessionTitles } from "./claudeSessionTitles.js";
 import { isNonEmptyString, isPlainObject } from "./base.js";
 import { migrerDepuisAncienNom } from "./appPaths.js";
 import { handleContextCompact } from "./context.js";
@@ -74,8 +78,28 @@ import {
 import { handleTachesTimerApply, handleTachesTimerRemove, handleTachesTimerStatus } from "./tachesTimers.js";
 import { handleTicketsList } from "./tickets.js";
 import { handleSpeechConfigure, handleSpeechSynthesize, handleSpeechTranscribe } from "./speech.js";
+import { signalerPeremption } from "./peremption.js";
 
-const VERSION = "0.1.0";
+/**
+ * T-016 — la version est LUE, plus recopiée.
+ *
+ * Cette constante est restée à « 0.1.0 » pendant que le reste du dépôt passait
+ * à 0.2.0 : l'événement `ready` annonçait donc une version fausse, et personne
+ * ne pouvait s'en apercevoir puisque rien ne l'affiche encore. Un numéro
+ * recopié à la main finit toujours par mentir. `package.json` voyage avec le
+ * sidecar (le bundle en emporte un — voir scripts/preparer-bundle.sh), et le
+ * repli n'invente pas de numéro : il dit qu'il ne sait pas.
+ */
+function lireVersion(): string {
+  try {
+    const ici = path.dirname(fileURLToPath(import.meta.url));
+    return JSON.parse(readFileSync(path.join(ici, "..", "package.json"), "utf8")).version ?? "inconnue";
+  } catch {
+    return "inconnue";
+  }
+}
+
+const VERSION = lireVersion();
 
 // ---------------------------------------------------------------------------
 // Émission d'événements (stdout uniquement)
@@ -433,6 +457,11 @@ function handleLine(line: string): void {
 }
 
 function main(): void {
+  // AVANT toute autre trace : QUEL code s'exécute ici, et est-il celui du
+  // dépôt ? (T-020) Le 2026-08-10, trois jours de corrections étaient
+  // compilées et testées sans jamais tourner, et rien nulle part ne le disait.
+  signalerPeremption();
+
   // AVANT tout accès disque : rapatrier ce qui resterait sous l'ancien nommage
   // du produit. Synchrone et à cet endroit précis — un handler qui lirait
   // `taches/` ou `usage/` pendant la migration verrait un dossier à moitié

@@ -1,6 +1,8 @@
 mod clipboard;
 mod config_store;
+pub mod demarrage;
 mod fs_browse;
+mod journal_coquille;
 mod open_external;
 mod secrets;
 mod sidecar;
@@ -137,7 +139,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(sidecar::managed_state())
         .setup(|app| {
-            sidecar::spawn_supervisor(app.handle().clone());
+            // Premier jalon : il clôt tout ce qui précède le code applicatif
+            // (chargement des bibliothèques, init Tauri/GTK) — le segment qui
+            // n'avait jusqu'ici aucune trace. Voir `demarrage.rs`.
+            demarrage::jalon(app.handle(), "rust:setup");
+            sidecar::spawn_supervisor(app.handle().clone(), sidecar::ORIGINE_PREMIER_DEMARRAGE);
             // Micro pour la dictée vocale (speech-to-text côté UI). Sous Linux,
             // WebKitGTK rejette `getUserMedia` par défaut : il faut à la fois
             // activer le réglage `enable-media-stream` et répondre « autoriser »
@@ -175,13 +181,19 @@ pub fn run() {
             state_store::state_read,
             state_store::state_write,
             system_probe::open_terminal,
-            system_probe::system_stats
+            system_probe::system_stats,
+            demarrage::demarrage_jalon
         ])
         .build(tauri::generate_context!())
         .expect("échec de la construction de l'application Tauri")
         .run(|app_handle, event| {
-            if let RunEvent::Exit = event {
-                sidecar::request_shutdown(app_handle);
+            match event {
+                // La boucle d'événements tourne : l'application est construite
+                // et la fenêtre existe. Ce jalon isole le coût de Tauri lui-même
+                // de celui du moteur web, qui commence tout juste à charger l'UI.
+                RunEvent::Ready => demarrage::jalon(app_handle, "rust:boucle-evenements"),
+                RunEvent::Exit => sidecar::request_shutdown(app_handle),
+                _ => {}
             }
         });
 }

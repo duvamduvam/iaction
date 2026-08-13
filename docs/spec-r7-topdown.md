@@ -1,6 +1,7 @@
 # Spec R7 — Deux stratégies de routage : montante (Chat) et descendante (Projets)
 
-Statut : **spec fermée, prête à déléguer** (révisée le 2026-07-31 après
+Statut : **RÉALISÉE — spec de référence, ne plus déléguer** (révisée le 2026-07-31 après
+Mise à jour du statut le 2026-08-10 : présence des artefacts vérifiée dans le code, la ligne précédente annonçait encore un travail à faire.
 retour utilisateur : A+B ne font qu'améliorer le bottom-up ; le top-down est
 une stratégie distincte, à appliquer par défaut aux gros travaux).
 Cadre : `docs/etude-routage-llm.md` §10 (constat : 100 % des tours Auto →

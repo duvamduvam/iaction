@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { AgentPage, type AgentPageHandle } from "./AgentPage";
-import { ChatPage, type ChatPageHandle } from "./ChatPage";
+import type { ChatPageHandle } from "./ChatPage";
 import { CommandPalette } from "./CommandPalette";
-import { OrchestrationPage } from "./OrchestrationPage";
-import { ProvidersPage } from "./ProvidersPage";
-import { SupervisionPage } from "./SupervisionPage";
-import { SystemPage } from "./SystemPage";
+// Les cinq autres pages n'arrivent qu'à leur première visite, et ne repartent
+// jamais ensuite — voir pagesParesseuses.tsx (T-029).
+import { ChatPage, OrchestrationPage, ProvidersPage, SlotPage, SupervisionPage, SystemPage } from "./pagesParesseuses";
 import {
   subscribeReady,
   fetchStatus,
@@ -38,6 +37,7 @@ import { useProjects } from "./useProjects";
 import { useProviders } from "./useProviders";
 import { useRovingFocus } from "./useRovingFocus";
 import { useSpeech } from "./useSpeech";
+import { Donut } from "./Donut";
 
 /* ---------- Encart conso ---------- */
 
@@ -45,12 +45,6 @@ import { useSpeech } from "./useSpeech";
 const USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 /** Garde anti-rafale du micro-tour d'initialisation (ready + statut + cron). */
 const CLAUDE_INIT_MIN_GAP_MS = 60 * 1000;
-
-function usageLevel(pct: number): "ok" | "warn" | "error" {
-  if (pct >= 90) return "error";
-  if (pct >= 70) return "warn";
-  return "ok";
-}
 
 function formatResetTime(iso: string): string {
   const date = new Date(iso);
@@ -71,39 +65,6 @@ function remainingUntil(iso: string, mode: "hours" | "days"): string {
   }
   if (ms < 86_400_000) return `${Math.ceil(ms / 3_600_000)}h`;
   return `${Math.ceil(ms / 86_400_000)}j`;
-}
-
-/**
- * Camembert (anneau SVG) de consommation : rempli = part consommée. Couleur
- * par niveau (ok/warn/error, mêmes seuils que les jauges historiques).
- */
-function Donut({
-  label,
-  pct,
-  text,
-  title,
-}: Readonly<{ label: string; pct: number; text?: string; title: string }>) {
-  const bounded = Math.min(100, Math.max(0, Math.round(pct)));
-  const level = usageLevel(bounded);
-  const radius = 8;
-  const circumference = 2 * Math.PI * radius;
-  return (
-    <div className={`usage-donut usage-donut--${level}`} title={title}>
-      <svg className="usage-donut__svg" viewBox="0 0 22 22" aria-hidden="true">
-        <circle className="usage-donut__bg" cx="11" cy="11" r={radius} />
-        <circle
-          className="usage-donut__val"
-          cx="11"
-          cy="11"
-          r={radius}
-          strokeDasharray={`${(bounded / 100) * circumference} ${circumference}`}
-          transform="rotate(-90 11 11)"
-        />
-      </svg>
-      <span className="usage-donut__label">{label}</span>
-      <span className="usage-donut__text">{text ?? `${bounded}%`}</span>
-    </div>
-  );
 }
 
 /**
@@ -462,6 +423,19 @@ function formatGb(mb: number): string {
   return (mb / 1024).toFixed(1).replace(".", ",");
 }
 
+/**
+ * Plage de remplissage de l'anneau de température : 30 °C (machine au repos)
+ * = anneau vide, 100 °C (limite thermique) = anneau plein. Nécessaire parce
+ * que `usageLevel` raisonne en POURCENTAGE : lui passer 72 °C bruts le ferait
+ * conclure « ok » à 72 % alors que 72 °C est déjà chaud.
+ */
+const TEMP_MIN_C = 30;
+const TEMP_MAX_C = 100;
+
+function tempPct(celsius: number): number {
+  return ((celsius - TEMP_MIN_C) / (TEMP_MAX_C - TEMP_MIN_C)) * 100;
+}
+
 /** Vue minimale de l'utilisation machine dans l'en-tête (poll 5 s). */
 function SystemStatsWidget() {
   const [stats, setStats] = useState<SystemStats | null>(null);
@@ -498,12 +472,36 @@ function SystemStatsWidget() {
       {stats.cpuPct !== null && (
         <Donut label="CPU" pct={stats.cpuPct} title={`Processeur : ${Math.round(stats.cpuPct)} %`} />
       )}
+      {stats.cpuTempC !== null && (
+        <Donut
+          label="T.CPU"
+          pct={tempPct(stats.cpuTempC)}
+          text={`${Math.round(stats.cpuTempC)}°`}
+          title={`Température processeur : ${Math.round(stats.cpuTempC)} °C`}
+        />
+      )}
       <Donut label="RAM" pct={ramPct} title={`Mémoire : ${ramDetail}`} />
+      {stats.ramTempC !== null && (
+        <Donut
+          label="T.RAM"
+          pct={tempPct(stats.ramTempC)}
+          text={`${Math.round(stats.ramTempC)}°`}
+          title={`Température mémoire : ${Math.round(stats.ramTempC)} °C`}
+        />
+      )}
       {stats.gpuPct !== null && (
         <Donut
           label="GPU"
           pct={stats.gpuPct}
           title={`Carte graphique : ${Math.round(stats.gpuPct)} %${gpuMemDetail}`}
+        />
+      )}
+      {stats.gpuTempC !== null && (
+        <Donut
+          label="T.GPU"
+          pct={tempPct(stats.gpuTempC)}
+          text={`${Math.round(stats.gpuTempC)}°`}
+          title={`Température carte graphique : ${Math.round(stats.gpuTempC)} °C`}
         />
       )}
     </div>
@@ -916,6 +914,12 @@ function Header({
         <div className="brand">
           <div className="brand__title">
             IA <em>STUDIO</em>
+            {/* Injectée à la compilation (ui/vite.config.ts) : pas d'attente,
+                pas d'état d'échec à dessiner, et la même valeur qu'affiche
+                l'installeur. */}
+            <span className="brand__version" title={`IAction ${__VERSION_APPLICATION__}`}>
+              v{__VERSION_APPLICATION__}
+            </span>
           </div>
           <div className="brand__subtitle">Chat multi-fournisseur</div>
         </div>
@@ -928,10 +932,6 @@ function Header({
       <Nav active={page} onSelect={onSelectPage} onOpenTerminal={onOpenTerminal} orchestrationAlert={orchestrationAlert} />
     </header>
   );
-}
-
-function slotClass(active: boolean): string {
-  return active ? "page-slot" : "page-slot page-slot--hidden";
 }
 
 /* ---------- App ---------- */
@@ -1193,11 +1193,12 @@ function App() {
       <SidecarMortBanner />
       <main className="app-content">
         {/*
-          Les six pages restent montées en permanence (masquées via CSS)
-          pour ne pas perdre la conversation en cours ou les logs quand on
-          change d'onglet.
+          Une page reste montée une fois visitée (masquée via CSS) pour ne pas
+          perdre la conversation en cours ou les logs quand on change d'onglet.
+          Ce qui est différé, c'est seulement sa PREMIÈRE mise en mémoire —
+          voir pagesParesseuses.tsx.
         */}
-        <div className={slotClass(page === "projects")}>
+        <SlotPage active={page === "projects"}>
           <AgentPage
             ref={agentPageRef}
             projects={projectAdmin.projects}
@@ -1208,8 +1209,8 @@ function App() {
             conversationConfig={speechAdmin.config.conversation}
             pageVisible={page === "projects"}
           />
-        </div>
-        <div className={slotClass(page === "chat")}>
+        </SlotPage>
+        <SlotPage active={page === "chat"}>
           <ChatPage
             ref={chatPageRef}
             providers={providerAdmin.providers}
@@ -1217,14 +1218,14 @@ function App() {
             conversationConfig={speechAdmin.config.conversation}
             pageVisible={page === "chat"}
           />
-        </div>
-        <div className={slotClass(page === "orchestration")}>
+        </SlotPage>
+        <SlotPage active={page === "orchestration"}>
           <OrchestrationPage projects={projectAdmin.projects} providers={providerAdmin.providers} />
-        </div>
-        <div className={slotClass(page === "supervision")}>
+        </SlotPage>
+        <SlotPage active={page === "supervision"}>
           <SupervisionPage />
-        </div>
-        <div className={slotClass(page === "config")}>
+        </SlotPage>
+        <SlotPage active={page === "config"}>
           <ProvidersPage
             providers={providerAdmin.providers}
             keyStatus={providerAdmin.keyStatus}
@@ -1248,10 +1249,10 @@ function App() {
             onSaveSpeechKey={speechAdmin.saveKey}
             onClearSpeechKey={speechAdmin.clearKey}
           />
-        </div>
-        <div className={slotClass(page === "system")}>
+        </SlotPage>
+        <SlotPage active={page === "system"}>
           <SystemPage />
-        </div>
+        </SlotPage>
       </main>
       <CommandPalette projects={projectAdmin.projects} onSelectProject={handlePaletteSelectProject} />
     </div>

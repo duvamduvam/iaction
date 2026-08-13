@@ -9,9 +9,9 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
+import { entry, moduleCompile } from "./harness.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const entry = path.join(__dirname, "..", "dist", "index.js");
 
 function fail(message) {
   console.error(`ECHEC: ${message}`);
@@ -29,7 +29,7 @@ function assert(condition, message) {
 // 1. Parseur / encodeur WAV (unitaire, en mémoire)
 // ---------------------------------------------------------------------------
 
-const speech = await import(pathToFileURL(path.join(__dirname, "..", "dist", "speech.js")).href);
+const speech = await import(moduleCompile("speech.js"));
 
 // Sinusoïde 440 Hz, 0,25 s à 16 kHz.
 const sampleRate = 16000;

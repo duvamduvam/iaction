@@ -43,6 +43,16 @@ import {
 } from "./mcp.js";
 import { ensureProjectDoc } from "./projectDoc.js";
 import { recordClaudeWindowsSnapshot, recordUsageEvent, type UsageStatus } from "./usageStats.js";
+import { executerClaudeCommands } from "./claudeCommands.js";
+import { resolveQueryFn } from "./claudeQueryFn.js";
+import { armerPlafondSilence, cloturerTourSansResultatFinal, type ResultatDeTour } from "./claudeFinDeTour.js";
+import {
+  captureUsageSnapshot,
+  executerClaudeUsage,
+  executerClaudeUsageInit,
+  type ClaudeUsageSnapshot,
+  type DepotUsageClaude,
+} from "./claudeUsage.js";
 
 // ---------------------------------------------------------------------------
 // Types minimalistes pour le sous-ensemble du SDK utilisé ici.
@@ -171,7 +181,7 @@ export type ClaudeQueryFn = (params: {
 const MAX_SUMMARY = 500;
 
 /** Résumé textuel borné du contenu d'un tool_result (string ou tableau de blocs). */
-function summarizeToolResult(content: unknown): string {
+export function summarizeToolResult(content: unknown): string {
   let text: string;
   if (typeof content === "string") {
     text = content;
@@ -200,14 +210,14 @@ function summarizeToolResult(content: unknown): string {
   return text.length > MAX_SUMMARY ? text.slice(0, MAX_SUMMARY) + "…" : text;
 }
 
-interface Usage {
+export interface Usage {
   inputTokens: number;
   outputTokens: number;
   cacheReadInputTokens?: number;
 }
 
 /** Le SDK expose l'usage en snake_case (hérité de l'API Anthropic). */
-function extractUsage(usage: unknown): Usage | null {
+export function extractUsage(usage: unknown): Usage | null {
   if (!isPlainObject(usage)) {
     return null;
   }
@@ -238,7 +248,7 @@ function extractUsage(usage: unknown): Usage | null {
  * largement la fenêtre (d'où un « contexte » à plusieurs centaines de %). Pour
  * la jauge, seul le PROMPT du DERNIER appel compte, pas le cumul.
  */
-function extractContextTokens(usage: unknown): number | null {
+export function extractContextTokens(usage: unknown): number | null {
   if (!isPlainObject(usage)) return null;
   const input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
   const cacheRead =
@@ -249,7 +259,7 @@ function extractContextTokens(usage: unknown): number | null {
   return total > 0 ? total : null;
 }
 
-function decorateAuthError(message: string): string {
+export function decorateAuthError(message: string): string {
   // Limite d'abonnement : à distinguer d'un défaut d'authentification (le mot
   // « limit » côtoie souvent « credit »/« plan » dans ces messages), sinon
   // l'utilisateur reçoit un conseil de reconnexion sans rapport.
@@ -370,142 +380,12 @@ function createTurnPrompt(
 }
 
 // ---------------------------------------------------------------------------
-// claude.commands — session « à vide » (aucun tour joué) pour ne récupérer
-// que supportedCommands(). Voir docs/protocol.md, section « claude.commands ».
-// ---------------------------------------------------------------------------
-
-/**
- * Construit un prompt en entrée streamée qui ne yield JAMAIS de message
- * utilisateur : le générateur reste suspendu sur une promesse tant que
- * `close()` n'a pas été appelé. Ça suffit à faire démarrer une session SDK
- * complète (system/init, supportedCommands()...) sans jamais envoyer de tour
- * à Claude — donc sans consommer le moindre token. `close()` termine le
- * générateur proprement (return), ce qui permet à `query.interrupt()` de
- * refermer le process CLI sous-jacent sans qu'il reste bloqué en attente
- * d'une entrée qui ne viendra jamais.
- */
-function createNonYieldingPrompt(): {
-  iterable: AsyncIterable<Record<string, unknown>>;
-  close: () => void;
-} {
-  let closeResolve: (() => void) | null = null;
-  const closeSignal = new Promise<void>((resolve) => {
-    closeResolve = resolve;
-  });
-  async function* gen(): AsyncGenerator<Record<string, unknown>> {
-    await closeSignal;
-  }
-  return {
-    iterable: gen(),
-    close: () => closeResolve?.(),
-  };
-}
-
-/** Rejette avec `timeoutMessage` si `promise` ne s'est pas réglée sous `timeoutMs`. */
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    );
-  });
-}
-
-const COMMANDS_TIMEOUT_MS = 15000;
-
-// ---------------------------------------------------------------------------
 // Support MCP — la lecture de <cwd>/.mcp.json, les interrupteurs locaux, les
 // secrets et l'allowlist d'outils vivent dans mcp.ts (prepareMcpForTurn) ; ce
 // module ne fait que consommer le résultat et rapporter l'état constaté.
 // Invariant conservé : un fichier absent, invalide ou mal formé ne fait
 // JAMAIS échouer le tour (voir docs/protocol.md, claude.start § MCP).
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// usage.claude — instantané des limites d'abonnement (mini-tranche du Lot 8)
-// ---------------------------------------------------------------------------
-
-export interface ClaudeUsageWindow {
-  utilization: number | null;
-  resetsAt: string | null;
-}
-
-export interface ClaudeUsageSnapshot {
-  available: boolean;
-  subscriptionType: string | null;
-  fiveHour: ClaudeUsageWindow | null;
-  sevenDay: ClaudeUsageWindow | null;
-  /**
-   * TOUTES les fenêtres présentes dans `rate_limits` (clé brute → fenêtre),
-   * y compris celles spécifiques à un modèle (ex. hebdo Opus/Fable) dont le
-   * nommage peut évoluer — l'API est expérimentale, on relaie sans présumer.
-   * `fiveHour`/`sevenDay` restent extraits à part pour compatibilité.
-   */
-  windows: Record<string, ClaudeUsageWindow>;
-  capturedAt: string;
-}
-
-const USAGE_CAPTURE_TIMEOUT_MS = 3000;
-
-function extractUsageWindow(value: unknown): ClaudeUsageWindow | null {
-  if (!isPlainObject(value)) {
-    return null;
-  }
-  return {
-    utilization: typeof value.utilization === "number" ? value.utilization : null,
-    resetsAt: typeof value.resets_at === "string" ? value.resets_at : null,
-  };
-}
-
-/**
- * Capture défensive de l'instantané d'usage via la méthode expérimentale du
- * SDK. Ne lève jamais : indisponibilité, forme inattendue ou lenteur (>3s)
- * renvoient simplement `null` sans perturber la fin du tour claude.start.
- */
-async function captureUsageSnapshot(query: ClaudeQuery): Promise<ClaudeUsageSnapshot | null> {
-  try {
-    if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") {
-      return null;
-    }
-    const timeout = new Promise<null>((resolve) => {
-      setTimeout(() => resolve(null), USAGE_CAPTURE_TIMEOUT_MS);
-    });
-    const result = await Promise.race([
-      query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
-      timeout,
-    ]);
-    if (!isPlainObject(result)) {
-      return null;
-    }
-    const rateLimits = isPlainObject(result.rate_limits) ? result.rate_limits : null;
-    const windows: Record<string, ClaudeUsageWindow> = {};
-    if (rateLimits) {
-      for (const [key, value] of Object.entries(rateLimits)) {
-        const window = extractUsageWindow(value);
-        if (window && window.utilization !== null) {
-          windows[key] = window;
-        }
-      }
-    }
-    return {
-      available: result.rate_limits_available === true,
-      subscriptionType: typeof result.subscription_type === "string" ? result.subscription_type : null,
-      fiveHour: rateLimits ? extractUsageWindow(rateLimits.five_hour) : null,
-      sevenDay: rateLimits ? extractUsageWindow(rateLimits.seven_day) : null,
-      windows,
-      capturedAt: new Date().toISOString(),
-    };
-  } catch {
-    return null;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Moteur : createClaudeEngine({queryFn}) — état en mémoire isolé, injectable
@@ -879,14 +759,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     let sawTextDeltaForCall = false;
     /** Dernier `result` NON final (tour en attente de tâches de fond, micro-tour
         vide) : repli émis si le flux se termine sans autre `result`. */
-    let pendingResultDone: {
-      sessionId: string | null;
-      subtype: string;
-      result: string | null;
-      usage: ReturnType<typeof extractUsage>;
-      contextTokens: number | null;
-      totalCostUsd: number | null;
-    } | null = null;
+    let pendingResultDone: ResultatDeTour | null = null;
     /** Nombre de micro-tours vides ignorés (borné : au-delà, on clôt quand même). */
     let spuriousEmptyResults = 0;
     /** Garde-fou du micro-tour vide : si RIEN ne suit dans les 30 s, interrupt()
@@ -926,6 +799,9 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     const nettoyerFinDeTour = (): void => {
       clearEmptyResultWatchdog();
       clearBackgroundWaitWatchdog();
+      // Armé plus bas (sûr : jamais appelé avant). CE désarmement-ci couvre
+      // tous les chemins de sortie — un minuteur orphelin retiendrait la boucle.
+      plafondSilence.desarmer();
       // Fermer l'entrée AVANT l'interrupt : le générateur du prompt doit
       // pouvoir se terminer, sinon le process reste bloqué en attente.
       try {
@@ -960,8 +836,17 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
         });
     };
 
+    // Plafond de SILENCE TOTAL du flux SDK (voir claudeFinDeTour.ts) : un tour
+    // sans le moindre message, pas même `system:init`, faisait attendre
+    // l'interface pour toujours. Armé ici, désarmé au PREMIER message reçu.
+    const plafondSilence = armerPlafondSilence({
+      id, emitter, model: lastModel, sessionId: lastSessionId, auSilence: nettoyerFinDeTour,
+    });
+
     try {
       for await (const message of query) {
+        // Le SDK a parlé, quel qu'en soit le contenu : plus de plafond.
+        plafondSilence.desarmer();
         if (!isPlainObject(message) || typeof message.type !== "string") {
           continue;
         }
@@ -1250,6 +1135,17 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
               errorMessage: resultStatus === "error" ? `résultat Claude: ${resultSubtype}` : null,
               meta: params.meta,
             });
+            if (resultStatus === "error") {
+              // T-015 — l'échec était consigné dans le magasin d'usage et NULLE
+              // PART ailleurs : le journal, celui que lit la page Système et
+              // qu'on ouvre quand quelque chose cloche, n'en recevait rien.
+              // Même règle que ci-dessus : le `subtype` EST la cause, et
+              // `message.result` n'entre jamais ici.
+              journal.error("claude", "tour Claude terminé en erreur", {
+                reqId: id,
+                fields: { subtype: resultSubtype, sessionId: lastSessionId, model: lastModel },
+              });
+            }
             emitter.done(id, doneData);
             const snapshot = await captureUsageSnapshot(query);
             if (snapshot) {
@@ -1274,7 +1170,10 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
         if (turnFinished) break;
       }
     } catch (err) {
-      if (!runState.aborted) {
+      // `aSignale()` : le plafond de silence a déjà rendu son verdict, et
+      // l'exception qui remonte n'est que l'écho de son interrupt — on ne
+      // signale pas le même échec deux fois.
+      if (!runState.aborted && !plafondSilence.aSignale()) {
         const message = err instanceof Error ? err.message : String(err);
         denyAllPending(runState, "Tour interrompu");
         runs.delete(id);
@@ -1291,6 +1190,14 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
           // est une aide d'affichage, pas la cause).
           errorMessage: message,
           meta: params.meta,
+        });
+        // Une exception qui remonte du flux SDK est la façon la plus brutale
+        // dont un tour meurt : elle DOIT laisser une pile dans le journal
+        // (T-015). C'est le seul endroit où on la connaît encore.
+        journal.error("claude", "exception pendant le tour Claude", {
+          reqId: id,
+          fields: { sessionId: lastSessionId, model: lastModel, erreur: message },
+          stack: err instanceof Error ? err.stack : null,
         });
         // Nettoyage AVANT de sortir : ce chemin d'erreur sautait tout ce qui
         // suit la boucle (fermeture de l'entrée streamée, interrupt du CLI,
@@ -1316,50 +1223,22 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     denyAllPending(runState, "Tour interrompu");
     runs.delete(id);
 
-    if (!turnFinished) {
-      if (pendingResultDone) {
-        // Flux terminé sans `result` final (garde-fou du micro-tour vide,
-        // arrêt utilisateur pendant l'attente de tâches de fond, process
-        // mort) : on livre le dernier résultat connu plutôt qu'un tour
-        // fantôme sans fin.
-        recordUsageEvent({
-          id,
-          engine: "claude",
-          method: "claude.start",
-          providerId: null,
-          model: lastModel,
-          promptTokens: pendingResultDone.usage?.inputTokens ?? null,
-          completionTokens: pendingResultDone.usage?.outputTokens ?? null,
-          status: pendingResultDone.subtype === "success" ? "done" : "error",
-          // L4 — même règle que le `result` final : seul le subtype est repris.
-          errorMessage:
-            pendingResultDone.subtype === "success"
-              ? null
-              : `résultat Claude: ${pendingResultDone.subtype}`,
-          meta: params.meta,
-        });
-        emitter.done(id, pendingResultDone);
-      } else if (!sawResult) {
-        recordUsageEvent({
-          id,
-          engine: "claude",
-          method: "claude.start",
-          providerId: null,
-          model: lastModel,
-          promptTokens: null,
-          completionTokens: null,
-          status: "aborted",
-          meta: params.meta,
-        });
-        emitter.done(id, {
-          sessionId: lastSessionId,
-          subtype: "aborted",
-          result: null,
-          usage: null,
-          contextTokens: lastContextTokens,
-          totalCostUsd: null,
-        });
-      }
+    if (!turnFinished && !plafondSilence.aSignale()) {
+      // Fin ANORMALE : voir claudeFinDeTour.ts — un tour qui rate laisse un
+      // événement d'usage, une ligne de journal `error` et un message à
+      // l'interface, jamais le silence (T-015).
+      cloturerTourSansResultatFinal({
+        id,
+        emitter,
+        meta: params.meta,
+        model: lastModel,
+        sessionId: lastSessionId,
+        contextTokens: lastContextTokens,
+        pendingResult: pendingResultDone,
+        sawResult,
+        aborted: runState.aborted,
+        sawAssistantOutput,
+      });
     }
   }
 
@@ -1495,146 +1374,19 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     emitter.done(id, { released: true });
   }
 
-  function handleClaudeUsage(
-    id: string,
-    _params: Record<string, unknown>,
-    emitter: EngineEmitter,
-  ): void {
-    if (!lastUsageSnapshot) {
-      emitter.done(id, { available: false });
-      return;
-    }
-    emitter.done(id, { ...lastUsageSnapshot });
-  }
-
   /**
-   * usage.claude.init — initialise le relevé d'abonnement sans conversation :
-   * micro-tour chat pur (haiku, prompt « ping », aucun outil) dont on ne garde
-   * que l'instantané de limites capturé PENDANT le tour (voir le commentaire
-   * de tryCaptureUsage dans handleClaudeStart : après le message result, la
-   * requête de contrôle du SDK part dans le vide). Coût négligeable, déclenché
-   * uniquement à la demande de l'utilisateur (bouton ↻ de l'encart conso).
+   * Étape 9 — usage et commands vivent désormais dans claudeUsage.ts /
+   * claudeCommands.ts. La fermeture ne garde que ce qu'elle POSSÈDE :
+   * `lastUsageSnapshot` (écrit aussi par handleClaudeStart en fin de tour)
+   * exposé via un dépôt lire/ecrire, `queryFn` et `apiKey` injectés à
+   * l'appel — UNE seule instance moteur, jamais d'état dupliqué.
    */
-  async function handleClaudeUsageInit(
-    id: string,
-    _params: Record<string, unknown>,
-    emitter: EngineEmitter,
-  ): Promise<void> {
-    let query: ClaudeQuery;
-    try {
-      query = queryFn({
-        prompt: "ping",
-        options: {
-          cwd: os.homedir(),
-          model: "claude-haiku-4-5",
-          tools: [],
-          permissionMode: "default",
-        },
-      });
-    } catch (err) {
-      emitter.error(id, `échec du micro-tour d'initialisation : ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
-
-    try {
-      let captured: ClaudeUsageSnapshot | null = null;
-      for await (const message of query) {
-        if (!captured && isPlainObject(message) && message.type === "assistant") {
-          captured = await captureUsageSnapshot(query);
-        }
-      }
-      // Filet pour les SDK/faux SDK qui ne passent pas par le transport
-      // processus (la capture post-tour y fonctionne).
-      captured ??= await captureUsageSnapshot(query);
-      if (captured) {
-        lastUsageSnapshot = captured;
-        recordClaudeWindowsSnapshot(captured.windows);
-        emitter.done(id, { ...captured });
-      } else if (lastUsageSnapshot) {
-        emitter.done(id, { ...lastUsageSnapshot });
-      } else {
-        emitter.done(id, { available: false });
-      }
-    } catch (err) {
-      emitter.error(id, `échec du micro-tour d'initialisation : ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  /**
-   * claude.commands — énumère les slash-commands/skills disponibles pour un
-   * projet sans jouer de tour (voir docs/protocol.md, section
-   * « claude.commands »). Ouvre une session SDK en entrée streamée avec un
-   * prompt qui ne yield jamais (createNonYieldingPrompt) : le SDK initialise
-   * la session (system/init, supportedCommands()...) sans qu'aucun message
-   * ne parte jamais vers Claude — zéro token consommé. Referme la session
-   * proprement une fois la liste récupérée (ou en cas d'erreur/timeout).
-   */
-  async function handleClaudeCommands(
-    id: string,
-    params: Record<string, unknown>,
-    emitter: EngineEmitter,
-  ): Promise<void> {
-    const cwd = params.cwd;
-    if (!isNonEmptyString(cwd)) {
-      emitter.error(id, "params.cwd manquant ou invalide");
-      return;
-    }
-
-    const options: ClaudeQueryOptions = {
-      cwd,
-      includePartialMessages: false,
-      permissionMode: "default",
-      env: { ...process.env, ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}) },
-      // Mêmes sources que le moteur projet de claude.start : la liste des
-      // commandes doit refléter ce que le tour verra RÉELLEMENT — skills et
-      // commandes globaux du poste (~/.claude) compris, sinon le menu « / »
-      // afficherait moins que ce qui est réellement disponible.
-      settingSources: ["user", "project", "local"],
-    };
-
-    const { iterable: promptForQuery, close: closePrompt } = createNonYieldingPrompt();
-
-    let query: ClaudeQuery;
-    try {
-      query = queryFn({ prompt: promptForQuery, options });
-    } catch (err) {
-      closePrompt();
-      const message = err instanceof Error ? err.message : String(err);
-      emitter.error(id, decorateAuthError(message));
-      return;
-    }
-
-    try {
-      if (typeof query.supportedCommands !== "function") {
-        throw new Error("le SDK ne fournit pas supportedCommands()");
-      }
-      const commands = await withTimeout(
-        query.supportedCommands(),
-        COMMANDS_TIMEOUT_MS,
-        "délai dépassé en attendant la liste des commandes",
-      );
-      await query.interrupt().catch(() => {
-        // interrupt() peut rejeter si la session n'a pas encore fini de
-        // s'initialiser côté process : sans conséquence, on ferme quand
-        // même le générateur juste après.
-      });
-      closePrompt();
-      const mapped = commands.map((command) => ({
-        name: command.name,
-        description: command.description ?? "",
-        argumentHint: command.argumentHint ?? "",
-        ...(command.aliases && command.aliases.length > 0 ? { aliases: command.aliases } : {}),
-      }));
-      emitter.done(id, { commands: mapped });
-    } catch (err) {
-      await query.interrupt().catch(() => {
-        // Idem : on ferme au mieux, l'erreur d'origine prime.
-      });
-      closePrompt();
-      const message = err instanceof Error ? err.message : String(err);
-      emitter.error(id, decorateAuthError(message));
-    }
-  }
+  const depotUsage: DepotUsageClaude = {
+    lire: () => lastUsageSnapshot,
+    ecrire: (snapshot) => {
+      lastUsageSnapshot = snapshot;
+    },
+  };
 
   return {
     handleClaudeConfigure,
@@ -1643,34 +1395,12 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     handleClaudeAbort,
     handleClaudePush,
     handleClaudeRelease,
-    handleClaudeUsage,
-    handleClaudeUsageInit,
-    handleClaudeCommands,
+    handleClaudeUsage: (id, params, emitter) => executerClaudeUsage(depotUsage, id, params, emitter),
+    handleClaudeUsageInit: (id, params, emitter) =>
+      executerClaudeUsageInit({ queryFn, depot: depotUsage }, id, params, emitter),
+    handleClaudeCommands: (id, params, emitter) =>
+      executerClaudeCommands({ queryFn, apiKey: () => apiKey, decorerErreurAuth: decorateAuthError }, id, params, emitter),
   };
-}
-
-// ---------------------------------------------------------------------------
-// Instance par défaut : choisit la vraie fonction query() du SDK, sauf en
-// test (IACTION_FAKE_CLAUDE=1) où un faux module est chargé dynamiquement.
-// Le SDK réel n'est alors jamais importé : aucun risque d'appel réseau/CLI
-// pendant les tests.
-// ---------------------------------------------------------------------------
-
-async function resolveQueryFn(): Promise<ClaudeQueryFn> {
-  if (process.env.IACTION_FAKE_CLAUDE === "1") {
-    const modulePath = process.env.IACTION_FAKE_CLAUDE_MODULE;
-    if (isNonEmptyString(modulePath)) {
-      const mod = (await import(pathToFileURL(modulePath).href)) as { fakeQuery?: ClaudeQueryFn };
-      if (typeof mod.fakeQuery === "function") {
-        return mod.fakeQuery;
-      }
-      throw new Error(`IACTION_FAKE_CLAUDE_MODULE (${modulePath}) n'exporte pas fakeQuery`);
-    }
-  }
-  const sdk = (await import("@anthropic-ai/claude-agent-sdk")) as {
-    query: (params: { prompt: string; options?: Record<string, unknown> }) => ClaudeQuery;
-  };
-  return sdk.query as unknown as ClaudeQueryFn;
 }
 
 const enginePromise: Promise<ClaudeEngine> = resolveQueryFn().then((queryFn) =>
@@ -1756,71 +1486,4 @@ export async function handleClaudeCommands(
 ): Promise<void> {
   const engine = await enginePromise;
   await engine.handleClaudeCommands(id, params, emitter);
-}
-
-// ---------------------------------------------------------------------------
-// claude.sessionTitles — titres courts déjà calculés par le CLI Claude
-// (SDKSessionInfo.customTitle / summary), pour remplacer le repli local terne
-// de l'UI (les 48 premiers caractères du premier message, voir
-// ui/src/sessionStore.ts deriveTitleFromText). Indépendant du moteur
-// createClaudeEngine (pas de queryFn, pas d'apiKey) : `listSessions()` ne fait
-// que lire les métadonnées JSONL déjà sur disque, sans relancer de session ni
-// consommer le moindre token — voir docs/protocol.md, § claude.sessionTitles.
-// ---------------------------------------------------------------------------
-
-/**
- * `summary` retombe sur le premier prompt tel quel tant que le CLI n'a pas
- * encore calculé de titre IA pour la session — dans ce cas il n'apporte rien
- * de mieux que le repli local existant. Le SDK tronque parfois `summary` :
- * on compare donc par préfixe, pas par égalité stricte.
- */
-function isFallbackTitle(candidate: string, firstPrompt: string | undefined): boolean {
-  if (!isNonEmptyString(firstPrompt)) return false;
-  const trimmedCandidate = candidate.trim();
-  return trimmedCandidate.length > 0 && firstPrompt.trim().startsWith(trimmedCandidate);
-}
-
-interface SdkSessionInfoLike {
-  sessionId: string;
-  summary: string;
-  customTitle?: string;
-  firstPrompt?: string;
-}
-
-/**
- * claude.sessionTitles — jamais bloquant : amélioration cosmétique du panneau
- * Sessions, toute panne (SDK indisponible, cwd inconnu du CLI, aucune
- * session) retombe sur `{titles: []}` — jamais sur `error` — pour que l'UI
- * garde silencieusement son repli local.
- */
-export async function handleClaudeSessionTitles(
-  id: string,
-  params: Record<string, unknown>,
-  emitter: EngineEmitter,
-): Promise<void> {
-  const cwd = params.cwd;
-  if (!isNonEmptyString(cwd)) {
-    emitter.done(id, { titles: [] });
-    return;
-  }
-  const wantedIds = Array.isArray(params.sessionIds)
-    ? new Set(params.sessionIds.filter(isNonEmptyString))
-    : null;
-
-  try {
-    const sdk = (await import("@anthropic-ai/claude-agent-sdk")) as {
-      listSessions: (options?: { dir?: string }) => Promise<SdkSessionInfoLike[]>;
-    };
-    const sessions = await sdk.listSessions({ dir: cwd });
-    const titles: Array<{ sessionId: string; title: string }> = [];
-    for (const session of sessions) {
-      if (wantedIds && !wantedIds.has(session.sessionId)) continue;
-      const candidate = isNonEmptyString(session.customTitle) ? session.customTitle : session.summary;
-      if (!isNonEmptyString(candidate) || isFallbackTitle(candidate, session.firstPrompt)) continue;
-      titles.push({ sessionId: session.sessionId, title: candidate });
-    }
-    emitter.done(id, { titles });
-  } catch {
-    emitter.done(id, { titles: [] });
-  }
 }

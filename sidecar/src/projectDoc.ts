@@ -104,6 +104,27 @@ capacité — sans jamais avoir besoin de lire le code source d'iaction.
   recevoir leurs rapports — plafonné (10 min par défaut), bouton « Rendre la
   main » dans l'UI pour clore sans attendre.
 
+## Fichiers produits ou modifiés : où les écrire, comment les citer
+
+- **Le livrable s'écrit DANS le projet.** Tout fichier produit ou modifié pour
+  l'utilisateur va sous la racine du projet (un dossier métier existant, sinon
+  un dossier explicite) : il y est versionnable, indexable, et l'app sait
+  l'ouvrir.
+- **Une source qui vit dehors se copie d'abord.** Document déposé dans
+  \`~/Téléchargements\`, \`~/Documents\`, un montage réseau : le copier dans le
+  projet, travailler sur la copie, livrer la copie. Ne recopier vers
+  l'emplacement d'origine QUE si l'utilisateur l'a demandé — et le dire alors
+  explicitement, avec le chemin de destination.
+- **Un chemin cité en \`code\` inline devient un bouton cliquable** dans la
+  transcription, et ce bouton n'ouvre QUE ce qui est sous la racine du projet
+  (chemin relatif, ou absolu sous la racine ; à défaut, recherche par nom de
+  base dans le projet). Citer donc le chemin RELATIF à la racine —
+  \`rapports/2026-08-10.md\`. Un \`~/…\`, un \`/home/…\` hors projet ou un chemin
+  d'un autre dépôt ne s'ouvrira jamais : le donner en texte simple, JAMAIS en
+  \`code\` inline, pour ne pas promettre un lien mort.
+- Hors recopie demandée par l'utilisateur, la seule écriture hors projet
+  prévue par le contrat est le manifeste de tâche planifiée (ci-dessous).
+
 ## Ajouter une capacité au projet
 
 - **Un outil autonome** (serveur, script, API) → le déclarer dans
@@ -166,8 +187,9 @@ capacité — sans jamais avoir besoin de lire le code source d'iaction.
   collision de nom, le projet gagne.
 - **Une tâche récurrente** (exécution planifiée d'une orchestration) : un
   agent PEUT la créer en écrivant le manifeste
-  \`~/.config/net.duvam.iaction/taches/<nom>/tache.yaml\` — c'est la SEULE
-  écriture autorisée hors du projet (zone de contrat de l'app), et
+  \`~/.config/net.duvam.iaction/taches/<nom>/tache.yaml\` — c'est la seule
+  écriture hors projet prévue par le contrat (zone de l'app ; voir
+  « Fichiers produits » pour la recopie demandée par l'utilisateur), et
   UNIQUEMENT avec \`enabled: false\` : l'armement du timer systemd reste un
   acte de l'utilisateur (bascule « Armée » dans la page Orchestration, où la
   tâche apparaît dès le fichier écrit). Format :

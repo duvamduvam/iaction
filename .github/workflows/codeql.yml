@@ -1,0 +1,59 @@
+# Analyse statique de sécurité (CodeQL) — TypeScript, Rust et les workflows
+# eux-mêmes.
+#
+# Pourquoi : c'est un REGARD que la chaîne locale n'a pas. `npm run verif`
+# vérifie que le code fait ce qu'on attend (tests) et respecte une règle qui a
+# fait ses preuves (rules-of-hooks) ; CodeQL cherche autre chose — flux de
+# données dangereux, injections, usages d'API risqués — et ses requêtes sont
+# mises à jour par GitHub sans qu'on ait rien à maintenir. Gratuit sur un
+# dépôt public.
+#
+# Deux conventions du projet s'appliquent aux résultats :
+#   - tout constat CodeQL retenu = un ticket dans docs/tickets.md (règle
+#     « constat = ticket ») ; l'onglet Security n'est pas une seconde liste ;
+#   - la correction se fait LOCALEMENT et part avec l'instantané suivant —
+#     jamais de commit de correction directement sur le dépôt public.
+#
+# Réglage côté dépôt : « Code scanning → default setup » doit rester DÉSACTIVÉ
+# — c'est ce fichier qui fait foi (configuration versionnée, comme le reste).
+
+name: CodeQL
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  # Les requêtes CodeQL évoluent chaque semaine : un passage planifié trouve
+  # des défauts NOUVELLEMENT reconnus dans du code qui n'a pas changé.
+  schedule:
+    - cron: "35 6 * * 1"
+
+jobs:
+  analyser:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      # Même logique que la construction : savoir QUEL langage casse.
+      fail-fast: false
+      matrix:
+        langage:
+          - javascript-typescript
+          - rust
+          - actions
+    steps:
+      - uses: actions/checkout@v4
+
+      # `build-mode: none` : CodeQL lit les sources sans compiler — suffisant
+      # pour ces trois langages, et évite de payer une compilation Rust
+      # complète à chaque analyse.
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.langage }}
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.langage }}"

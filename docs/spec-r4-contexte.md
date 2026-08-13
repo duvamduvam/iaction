@@ -1,6 +1,7 @@
 # Spec R4 — Économie de contexte du moteur neutre (Lot 14, phase R4)
 
-Statut : **spec fermée, prête à déléguer** (2026-07-27). Indépendante de
+Statut : **RÉALISÉE — spec de référence, ne plus déléguer** (2026-07-27). Indépendante de
+Mise à jour du statut le 2026-08-10 : présence des artefacts vérifiée dans le code, la ligne précédente annonçait encore un travail à faire.
 R2/R3 (utilise la config routage de R1 si présente). Cadre :
 `docs/etude-routage-llm.md` §6 (résumé auto par modèle local, N derniers
 tours intacts, résumé consultable). Taille : 1 lot.

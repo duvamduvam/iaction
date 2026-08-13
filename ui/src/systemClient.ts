@@ -19,6 +19,12 @@ export interface SystemStats {
   gpuPct: number | null;
   gpuMemUsedMb: number | null;
   gpuMemTotalMb: number | null;
+  /** Température GPU en °C — même source que les champs GPU ci-dessus. */
+  gpuTempC: number | null;
+  /** Température du processeur en °C — null si la machine n'a pas de capteur. */
+  cpuTempC: number | null;
+  /** Température de la mémoire en °C — null si aucun capteur (cas courant). */
+  ramTempC: number | null;
 }
 
 export async function systemStats(): Promise<SystemStats> {

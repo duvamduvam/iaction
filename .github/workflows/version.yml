@@ -26,6 +26,15 @@ on:
   push:
     branches: ["main"]
     tags: ["v*"]
+  # Le PORTIQUE de publication : l'instantané arrive par une pull request
+  # (scripts/publier-instantane.sh), et ce workflow tourne dessus AVANT la
+  # fusion. Avec la protection de branche (voir docs/github.md), rien ne peut
+  # atteindre `main` sans que « construire (ubuntu-latest) » et
+  # « construire (windows-latest) » soient verts — la vérification complète
+  # tourne donc sur une machine vierge, là où le poste local peut mentir par
+  # omission (fichier jamais `git add`, dépendance présente par accident).
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
@@ -78,6 +87,36 @@ jobs:
       # compilation Rust.
       - name: Lint (rules-of-hooks — la règle qui a trouvé le plantage du 2026-08-07)
         run: npx eslint .
+
+      # Le cliquet ne répare rien : il empêche que le découpage en cours soit
+      # reperdu fichier par fichier. Ses propres tests passent d'abord — une
+      # barrière qui ne peut plus échouer ne protège plus de rien.
+      - name: Cliquet de taille (et ses tests)
+        run: npm run cliquet:test && npm run cliquet
+
+      # Le poste de développement est sous Linux, qui distingue `ModelPicker`
+      # de `modelPicker` ; Windows non. Sans cette barrière, la collision ne se
+      # voit qu'ici, à la compilation de l'installeur — T-039, découvert en
+      # livrant la 0.3.1. Le contrôle tourne sur les DEUX plateformes : sur
+      # Linux il est utile (il voit ce que le développeur ne voit pas), sur
+      # Windows il est déjà trop tard mais le diagnostic reste lisible.
+      - name: Collisions de casse (et ses tests)
+        run: npm run casse:test && npm run casse
+
+      # Le dépôt local EST le produit public depuis le 2026-08-07 : la
+      # séparation qui protégeait par construction a disparu, et cet audit la
+      # remplace. Ici les motifs littéraux (scripts/.audit-motifs) sont absents
+      # — ils ne sont pas versionnés, par définition — donc seules les règles
+      # structurelles tournent. C'est voulu : la CI attrape les formes,
+      # l'exécution locale attrape en plus les noms.
+      - name: Audit de publication (et ses tests)
+        run: npm run audit:test && npm run audit
+
+      # Le miroir tickets→issues (voir tickets.yml) ne tourne pas ici, mais
+      # ses tests verrouillent le FORMAT de docs/tickets.md : une ligne de
+      # tableau malformée doit casser avant d'atteindre le miroir.
+      - name: Miroir des tickets (tests)
+        run: npm run tickets:test
 
       - name: Tests unitaires UI (vitest)
         run: npm run test -w ui
@@ -136,9 +175,32 @@ jobs:
 
       # `beforeBuildCommand` déclenche scripts/preparer-bundle.sh : interface,
       # sidecar, bundle de ses dépendances d'exécution et runtime Node.
+      #
+      # Comme les tests, l'échec doit voyager par une ANNOTATION : le
+      # 2026-08-13, `tauri build` a rendu « failed to run linuxdeploy » et RIEN
+      # d'autre — pas une ligne de l'outil qui a échoué, donc aucune cause
+      # (T-038). Tauri n'affiche pas la sortie de linuxdeploy quand il tombe ;
+      # on la garde donc dans un fichier et on en recopie la fin.
       - name: Construire
         shell: bash
-        run: npx tauri build --bundles ${{ matrix.bundles }}
+        env:
+          # linuxdeploy et son greffon sont eux-mêmes des AppImages : sans FUSE
+          # sur le runner, ils doivent s'extraire pour tourner. Sans effet là où
+          # FUSE est présent, et sans effet sous Windows.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          set +e
+          # `--verbose` : sans lui, Tauri avale la sortie de linuxdeploy et
+          # l'échec se résume à « failed to run linuxdeploy » (T-038). La
+          # sortie part dans un fichier, dont on ne recopie que la fin.
+          npx tauri build --verbose --bundles ${{ matrix.bundles }} > sortie-build.txt 2>&1
+          code=$?
+          tail -25 sortie-build.txt
+          if [ "$code" -ne 0 ]; then
+            resume=$(tail -40 sortie-build.txt | sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=Construire (${{ matrix.os }})::${resume:-sortie vide}"
+          fi
+          exit $code
 
       # Dire ce qui a été empaqueté, pas seulement que ça a réussi. Un
       # installeur peut se construire sans erreur en ayant SILENCIEUSEMENT

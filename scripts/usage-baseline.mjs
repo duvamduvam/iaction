@@ -189,6 +189,41 @@ for (const [src, b] of [...bySource].sort((a, z) => z[1].tours - a[1].tours)) {
   console.log(pad(src, 20) + padN(fmt.format(b.tours), 7) + padN(pct(b.tours, total), 9));
 }
 
+console.log("\n## Répartition horaire — P0 capacité dormante (heure locale)");
+// Tours par heure locale + saturation 5 h observée à la même heure. Les
+// heures sans tour NI instantané = poste éteint : la fenêtre s'y recharge,
+// c'est la capacité dormante que l'ordonnanceur du fond doit moissonner
+// (orgaia-fond/docs/etude-coordination.md §7).
+const hourEv = Array.from({ length: 24 }, () => 0);
+for (const e of evs) hourEv[new Date(e.ts).getHours()] += 1;
+const hourWin = Array.from({ length: 24 }, () => []);
+for (const w of wins) {
+  const u = w.windows?.five_hour?.utilization;
+  if (typeof u === "number") hourWin[new Date(w.ts).getHours()].push(u);
+}
+console.log(pad("heure", 7) + padN("tours", 7) + padN("% tours", 9) + padN("5 h méd.", 10) + padN("5 h max", 9));
+for (let h = 0; h < 24; h++) {
+  const us = [...hourWin[h]].sort((a, z) => a - z);
+  const med = us.length > 0 ? `${Math.round(us[Math.floor(us.length / 2)])} %` : "—";
+  const max = us.length > 0 ? `${Math.round(us.at(-1))} %` : "—";
+  console.log(
+    pad(`${String(h).padStart(2, "0")} h`, 7) + padN(fmt.format(hourEv[h]), 7) +
+    padN(pct(hourEv[h], total), 9) + padN(med, 10) + padN(max, 9),
+  );
+}
+// Synthèse sur la plage creuse de l'ordonnanceur (02 h-08 h — ajustée au vu
+// du premier relevé : les soirées 23 h-01 h sont du travail interactif réel).
+const NUIT = [2, 3, 4, 5, 6, 7];
+const toursNuit = NUIT.reduce((s, h) => s + hourEv[h], 0);
+const winsNuit = NUIT.flatMap((h) => hourWin[h]);
+const creuses = winsNuit.filter((u) => u < 20).length;
+console.log(
+  `\nPlage creuse 02 h-08 h : ${fmt.format(toursNuit)} tours (${pct(toursNuit, total)}) · ` +
+  (winsNuit.length > 0
+    ? `${pct(creuses, winsNuit.length)} des instantanés 5 h < 20 % (seuil ordonnanceur)`
+    : "aucun instantané — poste éteint : fenêtres rechargées, capacité 100 % dormante"),
+);
+
 console.log("\n## Saturation des fenêtres d'abonnement (instantanés)");
 if (wins.length === 0) {
   console.log("(aucun instantané sur la période)");

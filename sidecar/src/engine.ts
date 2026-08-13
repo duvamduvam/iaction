@@ -17,7 +17,16 @@ import {
   type Attachment,
 } from "./attachments.js";
 import { isNonEmptyString, isPlainObject } from "./base.js";
+import { cibleCatalogue, normaliserCatalogue, toDetailedModel } from "./catalogue.js";
+import {
+  appliquerBodyExtras,
+  extraireUsage,
+  normaliserTraits,
+  type ProviderTraits,
+  type Usage,
+} from "./profilFournisseur.js";
 import { recordUsageEvent, type UsageStatus } from "./usageStats.js";
+import { injecterContexteWeb } from "./webSearch.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,6 +44,8 @@ export interface Provider {
   priceSort?: boolean;
   /** R0 — demander coût réel + tokens cachés dans l'usage (OpenRouter `usage.include`). */
   usageAccounting?: boolean;
+  /** R8-A — écarts déclarés de ce fournisseur (catalogue, corps, comptabilité). */
+  traits?: ProviderTraits;
 }
 
 export interface ChatMessage {
@@ -154,7 +165,9 @@ export function handleProvidersSet(
     const priceSort = typeof entry.priceSort === "boolean" ? entry.priceSort : undefined;
     const usageAccounting =
       typeof entry.usageAccounting === "boolean" ? entry.usageAccounting : undefined;
-    next.set(pid, { id: pid, label, baseUrl, apiKey, headers, fallbackModels, priceSort, usageAccounting });
+    // R8-A — profil du fournisseur, validé de la même façon souple.
+    const traits = normaliserTraits(entry.traits);
+    next.set(pid, { id: pid, label, baseUrl, apiKey, headers, fallbackModels, priceSort, usageAccounting, traits });
   }
 
   providers.clear();
@@ -191,25 +204,17 @@ async function fetchRawModels(
     return undefined;
   }
 
+  // R8-A — l'endroit du catalogue et la forme de sa réponse sont des traits
+  // déclarés : sans profil, la requête est celle d'avant, à l'octet près.
+  const cible = cibleCatalogue(provider.traits, joinUrl(provider.baseUrl, "models"));
   try {
-    const res = await fetch(joinUrl(provider.baseUrl, "models"), {
-      method: "GET",
-      headers: buildHeaders(provider),
-    });
+    const res = await fetch(cible.url, { method: "GET", headers: buildHeaders(provider) });
     if (!res.ok) {
       const body = await readBoundedBody(res);
       emitter.error(id, `HTTP ${res.status} ${res.statusText}: ${body}`);
       return undefined;
     }
-    const json = (await res.json()) as unknown;
-    const rawModels = isPlainObject(json) && Array.isArray(json.data)
-      ? json.data
-      : Array.isArray(json)
-        ? json
-        : [];
-    return rawModels.filter(
-      (m): m is Record<string, unknown> => isPlainObject(m) && isNonEmptyString(m.id),
-    );
+    return normaliserCatalogue(await res.json(), cible.forme);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     emitter.error(id, `erreur réseau: ${message}`);
@@ -230,52 +235,6 @@ export async function handleModelsList(
   emitter.done(id, { models });
 }
 
-/** Arrondit un $/token OpenRouter (chaîne) en $/million (nombre), ou undefined si invalide. */
-function usdPerTokenToPerMillion(value: unknown): number | undefined {
-  if (typeof value !== "string" && typeof value !== "number") {
-    return undefined;
-  }
-  const perToken = Number(value);
-  if (!Number.isFinite(perToken)) {
-    return undefined;
-  }
-  // 4 décimales suffisent à représenter les grilles tarifaires usuelles ($/M) sans bruit
-  // de virgule flottante (ex. 0.000003 * 1e6 → 3, pas 2.9999999999999996).
-  return Math.round(perToken * 1e6 * 10000) / 10000;
-}
-
-interface DetailedModel {
-  id: string;
-  name?: string;
-  contextLength?: number;
-  pricing?: { promptUsdPerM?: number; completionUsdPerM?: number };
-  description?: string;
-}
-
-function toDetailedModel(m: Record<string, unknown>): DetailedModel {
-  const model: DetailedModel = { id: m.id as string };
-  if (isNonEmptyString(m.name)) {
-    model.name = m.name;
-  }
-  if (isFiniteNumber(m.context_length)) {
-    model.contextLength = m.context_length;
-  }
-  if (isPlainObject(m.pricing)) {
-    const promptUsdPerM = usdPerTokenToPerMillion(m.pricing.prompt);
-    const completionUsdPerM = usdPerTokenToPerMillion(m.pricing.completion);
-    if (promptUsdPerM !== undefined || completionUsdPerM !== undefined) {
-      model.pricing = {
-        ...(promptUsdPerM !== undefined ? { promptUsdPerM } : {}),
-        ...(completionUsdPerM !== undefined ? { completionUsdPerM } : {}),
-      };
-    }
-  }
-  if (isNonEmptyString(m.description)) {
-    model.description = m.description;
-  }
-  return model;
-}
-
 export async function handleModelsDetail(
   id: string,
   params: Record<string, unknown>,
@@ -292,30 +251,6 @@ export async function handleModelsDetail(
 // ---------------------------------------------------------------------------
 // chat.send
 // ---------------------------------------------------------------------------
-
-interface Usage {
-  promptTokens: number | null;
-  completionTokens: number | null;
-  /** R0 — coût réel `usage.cost` (comptabilité d'usage OpenRouter), null si absent. */
-  costUsd: number | null;
-  /** R0 — tokens servis depuis le cache (`usage.prompt_tokens_details.cached_tokens`), null si absent. */
-  cachedTokens: number | null;
-}
-
-function extractUsage(obj: Record<string, unknown>): Usage | null {
-  const usage = obj.usage;
-  if (!isPlainObject(usage)) {
-    return null;
-  }
-  const promptTokens = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : null;
-  const completionTokens =
-    typeof usage.completion_tokens === "number" ? usage.completion_tokens : null;
-  const costUsd = isFiniteNumber(usage.cost) ? usage.cost : null;
-  const details = usage.prompt_tokens_details;
-  const cachedTokens =
-    isPlainObject(details) && isFiniteNumber(details.cached_tokens) ? details.cached_tokens : null;
-  return { promptTokens, completionTokens, costUsd, cachedTokens };
-}
 
 /**
  * Construit le contenu OpenAI en tableau du dernier message utilisateur quand
@@ -450,6 +385,15 @@ export async function handleChatSend(
     });
   }
 
+  // R9 — recherche web (docs/spec-r9-recherche-web.md). Opt-in STRICT : sans
+  // `webSearch: true`, pas une requête sortante de plus et pas un message
+  // ajouté — le tour est identique à l'octet près. Placé APRÈS les pièces
+  // jointes, qui adressent le dernier message par son INDEX : préfixer avant
+  // elles décalerait la cible d'un cran.
+  if (params.webSearch === true) {
+    sendMessages = await injecterContexteWeb(id, messages, sendMessages, emitter);
+  }
+
   const options = isPlainObject(params.options) ? params.options : {};
   const body: Record<string, unknown> = {
     model,
@@ -463,6 +407,9 @@ export async function handleChatSend(
   if (isFiniteNumber(options.maxTokens)) {
     body.max_tokens = options.maxTokens;
   }
+  // R8-A — champs non standard du profil, AVANT les réglages R0 : un profil ne
+  // peut donc pas écraser un réglage explicite du même fournisseur.
+  appliquerBodyExtras(body, provider.traits);
   // R0 — réglages de routage OpenRouter du provider (opt-in : un provider sans
   // ces champs produit un body strictement identique à avant).
   if (provider.fallbackModels?.length) {
@@ -491,6 +438,9 @@ export async function handleChatSend(
   let usage: Usage | null = null;
   /** R0 — slug du modèle réellement servi (dernier champ `model` vu dans le flux SSE). */
   let modelUsed: string | null = null;
+  /* Capture explicite : dans une fonction déclarée, TypeScript ne conserve pas
+   * l'affinage `provider !== undefined` fait plus haut. */
+  const profil: Provider = provider;
 
   function dispatchEvent(raw: string): "continue" | "done" {
     if (raw.trim() === "[DONE]") {
@@ -511,7 +461,7 @@ export async function handleChatSend(
     if (isNonEmptyString(obj.model)) {
       modelUsed = obj.model;
     }
-    const u = extractUsage(obj);
+    const u = extraireUsage(obj, profil);
     if (u) {
       usage = u;
     }

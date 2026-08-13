@@ -101,6 +101,25 @@ Produire les installeurs soi-même : `npm run build:linux` /
 pas d'une plateforme à l'autre). Tout est détaillé dans
 [docs/empaquetage.md](docs/empaquetage.md).
 
+### Chaîne de qualité
+
+Avant de pousser : **`npm run verif`** — lint, cliquet de taille, audit de
+publication, tests du miroir de tickets, tests UI, tests du sidecar, tests
+Rust. `cargo test` recompile la coquille : le lancer **application fermée**,
+sinon il tue le sidecar de la session en cours.
+
+Tout changement atteint `main` par une pull request, et la chaîne complète
+rejoue sur **deux machines vierges** (Ubuntu et Windows) avant la fusion. Ce
+n'est pas une formalité : le portique a attrapé un défaut propre à Windows dès
+son premier passage (T-014), invisible depuis le poste Linux. S'y ajoute
+CodeQL — TypeScript, Rust et les workflows eux-mêmes.
+
+Le backlog vit dans [docs/tickets.md](docs/tickets.md), versionné et lu par la
+page Système de l'application ; les issues GitHub préfixées `T-nnn` n'en sont
+que le reflet. Règle de la maison : **tout dysfonctionnement constaté produit
+un ticket**, même corrigé dans la foulée. Le circuit complet de publication est
+décrit dans [docs/github.md](docs/github.md).
+
 ### Pièges d'environnement connus (Linux)
 
 - **Terminal VSCode installé via Snap** : les variables injectées (`GTK_PATH`,

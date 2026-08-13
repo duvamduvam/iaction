@@ -11,6 +11,8 @@
 [![React](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A5%2022-339933.svg)](https://nodejs.org)
 [![Local‑first](https://img.shields.io/badge/local--first-no%20telemetry-e11d48.svg)](#-privacy-by-architecture)
+[![Build](https://github.com/duvamduvam/iaction/actions/workflows/version.yml/badge.svg)](https://github.com/duvamduvam/iaction/actions/workflows/version.yml)
+[![CodeQL](https://github.com/duvamduvam/iaction/actions/workflows/codeql.yml/badge.svg)](https://github.com/duvamduvam/iaction/actions/workflows/codeql.yml)
 
 *Pilot AI agents across all your projects from one keyboard-friendly cockpit — locally, observably, and without vendor lock-in.*
 
@@ -203,10 +205,33 @@ Near-term: hardening, packaging/distribution, i18n, screenshots & demo project.
 
 Issues and PRs are welcome — bug reports, i18n, docs, UI polish.
 
-Before pushing: **`npm run verif`** (lint + UI unit tests + sidecar protocol
-suite + Rust tests) — the same sequence CI runs on Ubuntu and Windows. The test
-strategy, and what only a human can validate, is written down in
-[docs/plan-de-test.md](docs/plan-de-test.md) (French).
+Before pushing: **`npm run verif`** (lint + size ratchet + publication audit +
+UI unit tests + sidecar protocol suite + Rust tests) — the same sequence CI
+runs on Ubuntu and Windows. The test strategy, and what only a human can
+validate, is written down in [docs/plan-de-test.md](docs/plan-de-test.md)
+(French).
+
+### How quality is enforced
+
+Every change reaches `main` through a pull request, and the full chain runs on
+**two clean machines** (Ubuntu + Windows) before it can be merged. That gate is
+not ceremony: it caught a Windows-only test defect on its very first run
+(T-014), invisible on the Linux workstation. [CodeQL](.github/workflows/codeql.yml)
+analyses TypeScript, Rust and the workflows themselves on every push and weekly.
+
+**Issues prefixed `T-nnn` are mirrors.** The backlog lives in
+[docs/tickets.md](docs/tickets.md) — versioned with the code, read by the app's
+own System page, usable offline — and a workflow reflects it into issues.
+Comment freely on them, but the state changes in the file. Issues you open
+yourself are never touched by the mirror; if one leads somewhere, it gets
+transcribed into the file, and that is how it enters the backlog.
+
+A house rule worth knowing if you report something: **every observed
+malfunction becomes a ticket**, even one fixed minutes later. The backlog is
+the memory of failures, not just the list of remaining work.
+
+**Security**: private vulnerability reporting is enabled — use *Security →
+Report a vulnerability* rather than a public issue.
 
 ## 📄 License
 

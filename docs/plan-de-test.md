@@ -13,39 +13,86 @@ tort.
 |---|---|---|---|
 | **Unitaire** (vitest, cargo) | qu'une règle métier est juste, dans tous ses cas limites | que les morceaux se parlent | ms |
 | **Protocole** (`sidecar/test/*.test.js`) | que le contrat JSON-Lines tient de bout en bout | que l'écran affiche la bonne chose | s |
-| **Construction** (CI) | que ça compile et s'empaquette sur les deux plateformes | que ça démarre | min |
+| **Construction** (CI, sur PR) | que ça compile et s'empaquette sur les deux plateformes, depuis une machine VIERGE | que ça démarre | min |
+| **Analyse statique** (CodeQL) | que des formes dangereuses connues sont absentes | qu'il n'y en a pas d'autres | min |
 | **Humain** (toi) | que l'application EST utilisable | rien d'automatisable | ta soirée |
+
+La ligne « machine vierge » n'est pas décorative : depuis le 2026-08-09, la
+publication passe par une pull request, et la chaîne rejoue là où rien ne
+traîne. Le poste, lui, ment par omission — un fichier jamais `git add` (T-011),
+un test que Windows seul contredit (T-014). Les deux ont été trouvés par ce
+niveau-là, pas par les précédents.
 
 **Règle qui découle du reste** : ne jamais demander à un humain ce qu'une
 machine peut vérifier. Ton temps est la ressource rare, il va aux quatre choses
 qu'aucune machine ici ne sait faire (§4).
 
-## 2. Où on en est (mesuré le 2026-08-07)
+## 2. Où on en est (mesuré le 2026-08-09)
 
 | Couche | Code | Tests | Verdict |
 |---|---|---|---|
-| `sidecar/src` | 14 714 lignes | 7 660 lignes, 661 assertions | solide |
+| `sidecar/src` | 14 829 lignes | 21 fichiers, ~660 assertions | solide |
 | `src-tauri/src` | 2 806 lignes | 50 tests unitaires | correct |
-| `ui/src` | 31 080 lignes | 64 tests unitaires | **le trou** |
+| `ui/src` | 34 776 lignes | 19 fichiers, 233 tests | en cours de comblement |
 
-Les 64 tests de l'interface couvrent 5 modules purs sur 59 fichiers. Les sept
-fichiers de plus de 1 000 lignes n'en ont aucun — **et ne peuvent pas en avoir
-tels qu'ils sont** (voir `docs/etude-structure.md`). C'est pourquoi le plan
-ci-dessous lie la couverture de l'UI à l'avancement du découpage : promettre des
-tests d'interface avant d'extraire serait promettre du vide.
+L'interface est passée de 64 à **233 tests** (2 231 lignes de test), soit un
+rapport de 1 pour 16 contre 1 pour 50 le 2026-08-07 — le sidecar reste à 1 pour
+1,7. Ce n'est pas de la bonne volonté : c'est l'étude de structure, soldée
+17/17, qui l'a rendu possible. Un module pur se teste, un fichier dieu de 5 000
+lignes ne se teste pas. AgentPage est passé de 5 558 à 2 936 lignes, et chaque
+extraction s'est terminée par un fichier de test — jamais l'inverse.
+
+Reste vrai malgré tout : les fichiers en dérogation de cliquet n'ont pas de
+tests propres, et n'en auront pas tels qu'ils sont (voir
+`docs/etude-structure.md`).
 
 ## 3. Ce que la machine fait, sans toi
 
 À chaque poussée sur `main`, sur **Ubuntu ET Windows** :
 
 ```
-lint (rules-of-hooks) → tests UI → tests sidecar → bundle → tests Rust → build
+lint (rules-of-hooks) → cliquet de taille → audit de publication
+  → tests UI → tests sidecar → bundle → tests Rust → build
 ```
 
 Les vérifications rapides d'abord : un hook conditionnel casse la chaîne en
 30 secondes plutôt qu'après 15 minutes de compilation.
 
 En local, avant de pousser : **`npm run verif`** — la même séquence.
+
+Pour ne relancer qu'une partie de la suite du sidecar :
+`node sidecar/test/tous.mjs orchestr`. Et pour la lancer pendant que
+l'application tourne, sans écraser `dist/` — donc sans tuer le sidecar de la
+session en cours :
+
+```
+npx tsc -p sidecar/tsconfig.json --outDir sidecar/dist-verif
+IACTION_TEST_ENTRY=$PWD/sidecar/dist-verif/index.js node sidecar/test/tous.mjs
+```
+
+### Deux barrières qui ne testent pas le produit
+
+Elles gardent le dépôt, pas le logiciel — mais elles échouent de la même façon,
+par code de sortie, et pour la même raison : ce qu'on ne vérifie pas
+mécaniquement finit par dépendre de la vigilance de quelqu'un.
+
+- **Le cliquet de taille** (`npm run cliquet`) refuse tout fichier neuf
+  au-dessus de 800 lignes, et toute croissance des 21 déjà au-dessus.
+- **L'audit de publication** (`npm run audit`) refuse de laisser partir un
+  chemin personnel, une adresse nominative, un hôte inconnu, une IP publique ou
+  un jeton. Il existe parce que le dépôt local est devenu le produit public le
+  2026-08-07 : la séparation qui protégeait par construction a disparu.
+
+  Ses règles *structurelles* sont publiables et tournent aussi en CI. Ses
+  motifs *littéraux* — noms de clients, domaines privés — vivent dans
+  `scripts/.audit-motifs`, jamais versionné : l'inscrire dans le dépôt public
+  reviendrait à publier exactement ce qu'il sert à retenir. L'audit refuse
+  d'ailleurs de publier ce fichier s'il devenait suivi par git, et c'est
+  vérifié par un test.
+
+Les deux ont leurs propres tests, lancés avant elles. Une barrière qu'on ne
+peut pas faire échouer volontairement n'est pas une barrière : on saurait
+seulement qu'elle est silencieuse, pas qu'elle veille.
 
 ### Ce que cette chaîne a déjà attrapé
 

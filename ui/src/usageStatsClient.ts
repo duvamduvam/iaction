@@ -46,6 +46,13 @@ export interface UsageRoutage {
   mixAbo: Array<{ model: string; tours: number }>;
   /** Dépense de débord du mois calendaire courant (USD), comparée au plafond. */
   debordMoisUsd: number;
+  /**
+   * S3 — dépense RÉELLE de la période (USD) : tout le payant, débord automatique
+   * ET choix manuel. `debordMoisUsd` n'en couvre qu'une fraction — voir T-035.
+   */
+  coutPeriodeUsd: number;
+  /** S3 — tours payants sans coût remonté : la dépense affichée est un minorant. */
+  coutInconnuTours: number;
 }
 
 /**
@@ -155,6 +162,9 @@ function parseRoutage(value: unknown): UsageRoutage | null {
     partCoutNulPct: toNumOrNull(v.partCoutNulPct),
     mixAbo,
     debordMoisUsd: toNum(v.debordMoisUsd),
+    // S3 — absents d'un sidecar antérieur : 0, la carte affiche « — ».
+    coutPeriodeUsd: toNum(v.coutPeriodeUsd),
+    coutInconnuTours: toNum(v.coutInconnuTours),
   };
 }
 

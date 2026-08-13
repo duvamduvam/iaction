@@ -1,6 +1,7 @@
 # Spec R5 — RAG local `search_knowledge` (Lot 14, phase R5)
 
-Statut : **spec fermée, prête à déléguer** (2026-07-27). Reprend la piste
+Statut : **RÉALISÉE — spec de référence, ne plus déléguer** (2026-07-27). Reprend la piste
+Mise à jour du statut le 2026-08-10 : présence des artefacts vérifiée dans le code, la ligne précédente annonçait encore un travail à faire.
 flexibilité n° 2 du plan. Cadre : `docs/etude-routage-llm.md` §6. Taille :
 1 lot+.
 

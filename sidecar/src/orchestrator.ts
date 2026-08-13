@@ -26,6 +26,7 @@ import type { EngineEmitter } from "./engine.js";
 import { handleClaudeAbort, handleClaudePermission, handleClaudeStart } from "./claude.js";
 import { handleNeutralAbort, handleNeutralPermission, handleNeutralStart } from "./neutralAgent.js";
 import { resolveRoute, type RouteTier } from "./router.js";
+import { normaliserModePourMoteur } from "./permissions.js";
 import { globalConfigRoot, projectDir } from "./appPaths.js";
 
 // ---------------------------------------------------------------------------
@@ -1575,10 +1576,9 @@ export function createOrchestratorRuntime(deps: { stepRunner?: StepRunner } = {}
           engine: route.target.engine,
           provider: route.target.engine === "neutral" ? (route.target.providerId ?? null) : null,
           model: route.target.model,
-          // Le mode « plan » n'existe pas côté moteur neutre (même garde-fou
-          // que l'UI Projets) : replié sur « default » si le routeur y envoie.
-          permissionMode:
-            agent.permissionMode === "plan" && route.target.engine === "neutral" ? "default" : agent.permissionMode,
+          // Repli du registre (permissions.ts) : « plan » n'existe pas côté
+          // moteur neutre — replié sur « default » si le routeur y envoie.
+          permissionMode: normaliserModePourMoteur(agent.permissionMode, route.target.engine),
         };
         // Moteur résolu : requis pour router permission/abort de l'étape en cours.
         info.engine = agent.engine;

@@ -6,6 +6,7 @@
 //! (lecture /proc pour CPU/RAM, `nvidia-smi` optionnel pour le GPU).
 
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -70,6 +71,15 @@ pub struct SystemStats {
     pub gpu_pct: Option<f64>,
     pub gpu_mem_used_mb: Option<u64>,
     pub gpu_mem_total_mb: Option<u64>,
+    /// Température du GPU en °C — même source que les autres champs GPU
+    /// (`nvidia-smi`), donc `None` dès qu'il est absent ou muet.
+    pub gpu_temp_c: Option<f64>,
+    /// Température du paquet processeur en °C, lue dans /sys/class/hwmon —
+    /// None si aucun capteur exploitable (autre OS, machine virtuelle…).
+    pub cpu_temp_c: Option<f64>,
+    /// Température des barrettes de mémoire en °C — None si aucun capteur.
+    /// C'est le cas courant : voir `ram_temp()`.
+    pub ram_temp_c: Option<f64>,
 }
 
 /// Échantillon précédent de /proc/stat (idle cumulé, total cumulé), partagé
@@ -124,33 +134,170 @@ fn mem_mb() -> (u64, u64) {
     (total.saturating_sub(available), total)
 }
 
-fn gpu_stats() -> (Option<f64>, Option<u64>, Option<u64>) {
+fn gpu_stats() -> (Option<f64>, Option<u64>, Option<u64>, Option<f64>) {
     let mut cmd = Command::new("nvidia-smi");
     cmd.args([
-        "--query-gpu=utilization.gpu,memory.used,memory.total",
+        "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
         "--format=csv,noheader,nounits",
     ]);
     // Pas de prepare_detached : on VEUT la sortie (process court, non interactif).
     let Ok(output) = cmd.output() else {
-        return (None, None, None);
+        return (None, None, None, None);
     };
     if !output.status.success() {
-        return (None, None, None);
+        return (None, None, None, None);
     }
     let text = String::from_utf8_lossy(&output.stdout);
     // Première ligne = premier GPU (multi-GPU : hors périmètre v1).
     let Some(line) = text.lines().next() else {
-        return (None, None, None);
+        return (None, None, None, None);
     };
     let parts: Vec<&str> = line.split(',').map(str::trim).collect();
+    // Le garde reste à 3, PAS à 4 : la température est lue seulement si la
+    // colonne est là. Un pilote qui ne connaîtrait pas `temperature.gpu` ne
+    // doit pas faire perdre l'utilisation et la mémoire, qui, elles,
+    // marchaient déjà.
     if parts.len() < 3 {
-        return (None, None, None);
+        return (None, None, None, None);
     }
+    let temp = parts
+        .get(3)
+        .and_then(|v| v.parse::<f64>().ok())
+        .and_then(temperature_plausible);
     (
         parts[0].parse().ok(),
         parts[1].parse().ok(),
         parts[2].parse().ok(),
+        temp,
     )
+}
+
+/* ---------- Températures (lecture /sys/class/hwmon) ---------- */
+
+/// Racine des puces de surveillance matérielle exposées par le noyau Linux.
+/// Absente ailleurs : toutes les sondes ci-dessous rendent alors None.
+const HWMON_ROOT: &str = "/sys/class/hwmon";
+
+/// Puces candidates pour la température processeur, PAR ORDRE DE PRÉFÉRENCE :
+/// les capteurs intégrés au processeur d'abord (Intel, puis AMD), et
+/// `acpitz` — zone thermique ACPI, souvent grossière et parfois éloignée du
+/// die — seulement en dernier recours.
+const CPU_HWMON_NAMES: &[&str] = &["coretemp", "k10temp", "zenpower", "acpitz"];
+
+/// Étiquettes désignant la température du PAQUET (et non d'un cœur isolé) :
+/// « Package id 0 » chez Intel, « Tctl » chez AMD.
+const CPU_TEMP_LABELS: &[&str] = &["Package id 0", "Tctl"];
+
+/// Puces exposant la température des barrettes de mémoire : capteur thermique
+/// des SPD DDR5 (`spd5118`) ou son ancêtre JEDEC sur DDR4 (`jc42`).
+const RAM_HWMON_NAMES: &[&str] = &["spd5118", "jc42"];
+
+/// Bornes de plausibilité en °C. Hors de ]0, 150[, la lecture est rejetée :
+/// un 0 pile trahit un capteur muet, et au-delà de 150 l'unité n'est pas
+/// celle qu'on croit — mieux vaut ne rien afficher qu'un chiffre faux.
+fn temperature_plausible(celsius: f64) -> Option<f64> {
+    (celsius > 0.0 && celsius < 150.0).then_some(celsius)
+}
+
+/// Inventaire des puces hwmon : (contenu de `name`, répertoire). Liste vide
+/// si /sys est absent ou illisible — aucune erreur remontée.
+fn hwmon_chips() -> Vec<(String, PathBuf)> {
+    let Ok(entries) = fs::read_dir(HWMON_ROOT) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let dir = entry.path();
+            let name = fs::read_to_string(dir.join("name")).ok()?;
+            Some((name.trim().to_string(), dir))
+        })
+        .collect()
+}
+
+/// Lit un fichier `tempN_input` : le noyau y écrit des MILLIDEGRÉS, d'où la
+/// division par 1000. None si le fichier manque, n'est pas un nombre, ou
+/// donne une valeur invraisemblable.
+fn read_temp_input(path: &Path) -> Option<f64> {
+    let raw = fs::read_to_string(path).ok()?;
+    let millidegrees: f64 = raw.trim().parse().ok()?;
+    temperature_plausible(millidegrees / 1000.0)
+}
+
+/// Dans `dir`, cherche la première entrée `tempN_label` dont l'étiquette
+/// satisfait `accepte`, et rend le `tempN_input` correspondant. Les puces
+/// exposent souvent des dizaines d'entrées (un cœur chacune) : l'étiquette
+/// est le seul moyen fiable de désigner celle qu'on veut.
+fn temp_par_etiquette(dir: &Path, accepte: impl Fn(&str) -> bool) -> Option<f64> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return None;
+    };
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some(index) = file_name
+            .strip_prefix("temp")
+            .and_then(|reste| reste.strip_suffix("_label"))
+        else {
+            continue;
+        };
+        let Ok(label) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        if !accepte(label.trim()) {
+            continue;
+        }
+        if let Some(celsius) = read_temp_input(&dir.join(format!("temp{index}_input"))) {
+            return Some(celsius);
+        }
+    }
+    None
+}
+
+/// Température du processeur en °C, ou None si la machine n'expose rien
+/// d'exploitable. Parcourt les puces dans l'ordre de `CPU_HWMON_NAMES` et,
+/// dans la puce retenue, préfère l'entrée étiquetée « paquet » ; à défaut,
+/// `temp1_input` (les puces sans étiquette n'en exposent qu'une).
+fn cpu_temp() -> Option<f64> {
+    let chips = hwmon_chips();
+    for souhaitee in CPU_HWMON_NAMES {
+        for (_, dir) in chips.iter().filter(|(name, _)| name == souhaitee) {
+            if let Some(celsius) = temp_par_etiquette(dir, |l| CPU_TEMP_LABELS.contains(&l)) {
+                return Some(celsius);
+            }
+            if let Some(celsius) = read_temp_input(&dir.join("temp1_input")) {
+                return Some(celsius);
+            }
+        }
+    }
+    None
+}
+
+/// Température de la mémoire vive en °C, ou None.
+///
+/// ATTENTION, cas nominal : la plupart des machines — dont le poste de
+/// développement de référence — n'ont AUCUN capteur de barrette. Ni
+/// `spd5118`, ni `jc42`, ni étiquette « DIMM » : la fonction rend alors None
+/// et l'indicateur correspondant n'est simplement pas affiché. Ce n'est pas
+/// une panne à corriger, c'est l'absence de matériel de mesure.
+fn ram_temp() -> Option<f64> {
+    let chips = hwmon_chips();
+    for (name, dir) in &chips {
+        if RAM_HWMON_NAMES.contains(&name.as_str()) {
+            if let Some(celsius) = read_temp_input(&dir.join("temp1_input")) {
+                return Some(celsius);
+            }
+        }
+    }
+    // Repli : une puce quelconque (carte mère) peut étiqueter « DIMM ».
+    for (_, dir) in &chips {
+        if let Some(celsius) =
+            temp_par_etiquette(dir, |l| l.to_ascii_uppercase().contains("DIMM"))
+        {
+            return Some(celsius);
+        }
+    }
+    None
 }
 
 /// Commande Tauri : instantané CPU/RAM/GPU. Jamais d'erreur pour une sonde
@@ -158,7 +305,7 @@ fn gpu_stats() -> (Option<f64>, Option<u64>, Option<u64>) {
 #[tauri::command]
 pub fn system_stats() -> SystemStats {
     let (mem_used_mb, mem_total_mb) = mem_mb();
-    let (gpu_pct, gpu_mem_used_mb, gpu_mem_total_mb) = gpu_stats();
+    let (gpu_pct, gpu_mem_used_mb, gpu_mem_total_mb, gpu_temp_c) = gpu_stats();
     SystemStats {
         cpu_pct: cpu_pct(),
         mem_used_mb,
@@ -166,6 +313,9 @@ pub fn system_stats() -> SystemStats {
         gpu_pct,
         gpu_mem_used_mb,
         gpu_mem_total_mb,
+        gpu_temp_c,
+        cpu_temp_c: cpu_temp(),
+        ram_temp_c: ram_temp(),
     }
 }
 
@@ -202,6 +352,34 @@ mod tests {
     fn stats_ne_paniquent_jamais() {
         let stats = system_stats();
         assert!(stats.mem_total_mb >= stats.mem_used_mb);
+        // Les températures sont facultatives (aucun capteur = None) : on
+        // n'exige que leur plausibilité quand elles sont là.
+        for (quoi, mesure) in [("CPU", stats.cpu_temp_c), ("RAM", stats.ram_temp_c)] {
+            if let Some(celsius) = mesure {
+                assert!(
+                    celsius > 0.0 && celsius < 150.0,
+                    "température {quoi} invraisemblable : {celsius}"
+                );
+            }
+        }
+    }
+
+    /// Les températures se lisent dans `/sys/class/hwmon` : hors Linux, ce
+    /// répertoire n'existe pas et `cpu_temp()` rend None par construction —
+    /// même garde que `mem_totale_plausible`, pour ne pas tester l'OS.
+    ///
+    /// Même sous Linux on n'exige PAS `Some` : une machine virtuelle ou un
+    /// runner de CI peut n'exposer aucune puce reconnue. Le test vérifie donc
+    /// l'absence de panique et, si une mesure existe, sa plausibilité.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpu_temp_absente_ou_plausible() {
+        if let Some(celsius) = cpu_temp() {
+            assert!(
+                celsius > 0.0 && celsius < 150.0,
+                "température processeur invraisemblable : {celsius}"
+            );
+        }
     }
 
     /// Résolution du répertoire de travail du terminal.

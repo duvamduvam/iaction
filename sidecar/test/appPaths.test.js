@@ -12,14 +12,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  APP_ID,
-  LEGACY_APP_ID,
-  globalConfigRoot,
-  globalDataRoot,
-  migrerDepuisAncienNom,
-  projectDir,
-} from "../dist/appPaths.js";
+import { moduleCompile } from "./harness.mjs";
+
+const { APP_ID, LEGACY_APP_ID, globalConfigRoot, globalDataRoot, migrerDepuisAncienNom, projectDir } = await import(moduleCompile("appPaths.js"));
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `iaction-${prefix}-`));

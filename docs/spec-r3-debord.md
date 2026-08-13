@@ -1,6 +1,7 @@
 # Spec R3 — Débord, plafond, encart « Routage » (Lot 14, phase R3)
 
-Statut : **spec fermée, prête à déléguer** (2026-07-27). Dépend de R1 (R2
+Statut : **RÉALISÉE — spec de référence, ne plus déléguer** (2026-07-27). Dépend de R1 (R2
+Mise à jour du statut le 2026-08-10 : présence des artefacts vérifiée dans le code, la ligne précédente annonçait encore un travail à faire.
 souhaitable). Cadre : `docs/etude-routage-llm.md` §6 (débord auto + bandeau,
 plafond mensuel + coupure) et §9 (défauts). Taille : ½ lot.
 

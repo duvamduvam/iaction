@@ -312,7 +312,7 @@ async function readTextSource(abs: string, sizeBytes: number): Promise<string | 
 // Embeddings — API NATIVE Ollama POST /api/embed
 // ---------------------------------------------------------------------------
 
-type EmbedResult = { ok: true; embeddings: number[][]; model: string } | { ok: false; message: string };
+export type EmbedResult = { ok: true; embeddings: number[][]; model: string } | { ok: false; message: string };
 
 /**
  * Embed une liste de textes par lots de EMBED_BATCH_SIZE via le provider de
@@ -320,7 +320,7 @@ type EmbedResult = { ok: true; embeddings: number[][]; model: string } | { ok: f
  * HTTP, réseau, timeout, réponse difforme — renvoie un message français
  * lisible, jamais d'exception.
  */
-async function embedTexts(texts: string[]): Promise<EmbedResult> {
+export async function embedTexts(texts: string[]): Promise<EmbedResult> {
   const config = getEmbeddingsConfig();
   const provider = getProvider(config.providerId);
   if (!provider) {
