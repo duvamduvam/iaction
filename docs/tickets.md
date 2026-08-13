@@ -46,8 +46,8 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 | T-026 | feat | P3   | ouvert | Recherche web : sur une question d'actualité, le moteur rend des pages de rubrique, pas des articles |
 | T-029 | tech | P2   | en cours | Démarrage long : aucun budget mesuré entre le lancement et la première image |
 | T-030 | bug  | P1   | ouvert | La fenêtre gèle au démarrage quand le process WebKit meurt, sans une ligne de journal |
-| T-034 | tech | P2   | ouvert | Le cliquet de taille est rouge sur `master` : `src-tauri/src/sidecar.rs` à 807 lignes |
 | T-036 | bug  | P3   | ouvert | Recherche web et tours Swiftask ne remontent aucun coût : la dépense affichée est un minorant |
+| T-045 | tech | P2   | ouvert | Aucune traversée de proxy documentée : l'app est inutilisable en réseau d'entreprise sans le drapeau |
 | T-041 | tech | P3   | ouvert | Empaquetage local : `target/release/sidecar/` garde les fichiers disparus de la source et les reverse dans l'AppDir |
 
 ### T-007 — `ollama.ps` répond 404 avec une page web
@@ -623,7 +623,7 @@ d'observabilité interdit — la coquille sait pourtant journaliser la mort du s
 
 ### T-034 — Le cliquet de taille est rouge sur `master`
 
-**Type** tech · **Prio** P2 · **Statut** ouvert · **Créé** 2026-08-13
+**Type** tech · **Prio** P2 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-13
 
 Constaté le 2026-08-13 en lançant `npm run verif` avant de livrer T-033 :
 `node scripts/cliquet-taille.mjs` sort en **échec** sur `master` propre —
@@ -644,8 +644,21 @@ acceptable pour la commande qui garde la porte.
 **Dérogation posée le 2026-08-13** — `"src-tauri/src/sidecar.rs": 807` dans
 `scripts/cliquet-taille.json`, pour livrer la 0.3.1 sur une chaîne verte. Le fichier de
 référence est du JSON : il ne porte pas de commentaire, la date et le motif vivent donc ici.
-Ce n'est **pas** la clôture du ticket : la dérogation gèle la taille (le fichier ne peut plus
-que rétrécir) mais ne découpe rien. Le ticket reste ouvert pour le découpage réel.
+Ce n'était **pas** la clôture du ticket : la dérogation gèle la taille (le fichier ne peut
+plus que rétrécir) mais ne découpe rien.
+
+**Clos le 2026-08-13, par la bande.** En corrigeant [T-043](#t-043--tous-les-fournisseurs-en--erreur-réseau--sur-un-poste-dentreprise),
+le cliquet a refusé les 27 lignes que j'ajoutais à un fichier qui n'avait le droit que de
+maigrir. Plutôt que de relâcher son budget deux fois dans la même journée — ce qui aurait vidé
+le garde-fou de son sens — les deux modules de test sont sortis dans
+[src-tauri/src/sidecar/tests.rs](../src-tauri/src/sidecar/tests.rs) (`#[path]`, ils restent des
+tests unitaires du module). `sidecar.rs` passe de 807 à **794 lignes** : sous la limite, et
+donc HORS dérogation.
+
+Honnêteté sur ce qu'on a fait : c'est la coupe la plus franche, pas la plus profonde. Aucune
+logique n'a été redécoupée — seulement les tests, qui ne tenaient au reste que par `super`. Le
+fichier reste dense, mais il n'a plus de traitement de faveur, et c'est ce que le cliquet
+demandait.
 
 ### T-036 — Des tours payants ne remontent aucun coût
 
@@ -669,6 +682,30 @@ lire un total faux, mais le trou reste : on ne sait pas ce que ces tours ont co�
 n'est-elle pas cochée sur son profil ? Même question pour la recherche web, dont les appels
 n'apparaissent pas du tout dans `events.jsonl`. Si le fournisseur est structurellement muet, le
 dire dans son profil vaut mieux que de compter zéro.
+
+### T-045 — La traversée de proxy n'est ni configurable, ni documentée
+
+**Type** tech · **Prio** P2 · **Statut** ouvert · **Créé** 2026-08-13
+
+[T-043](#t-043--tous-les-fournisseurs-en--erreur-réseau--sur-un-poste-dentreprise) a réparé le
+cas courant — un proxy déclaré dans l'environnement — d'une ligne. Il laisse trois trous, et
+les nommer vaut mieux que de croire le sujet clos :
+
+1. **Le PAC est ignoré.** Le poste concerné déclare aussi un `AutoConfigURL` dans le registre. `--use-env-proxy` ne lit que les variables ; un poste qui
+   n'aurait QUE le PAC resterait en panne, avec le même message pour l'utilisateur.
+2. **Aucun réglage dans l'application.** Si les variables ne sont pas posées pour la session
+   graphique — cas fréquent sous Windows, où elles vivent souvent dans le profil du terminal —
+   l'utilisateur n'a aucun endroit où saisir son proxy. Il faut passer par `setx`, ce qu'aucune
+   documentation ne dit.
+3. **Le certificat d'inspection TLS n'est pas traité.** Ce poste-ci coupe avant le handshake,
+   donc la question ne s'est pas posée. Le poste suivant, derrière un proxy MITM, tombera sur
+   `SELF_SIGNED_CERT_IN_CHAIN` — Node n'utilise pas le magasin de certificats de Windows.
+   Le remède existe (`--use-system-ca`, `NODE_EXTRA_CA_CERTS`), il n'est pas posé.
+
+À faire : un encart « Réseau » dans la configuration (proxy explicite, autorité
+supplémentaire), et une section dans `docs/empaquetage.md` sur l'usage en entreprise. Tant que
+ce n'est pas fait, l'application est **utilisable au bureau par accident**, pas par
+conception.
 
 ### T-041 — L'empaquetage local ressuscite les fichiers supprimés
 
@@ -846,6 +883,9 @@ plus coûteuse.
 | ID    | Type | Prio | Statut | Titre |
 |-------|------|------|--------|-------|
 | T-040 | bug  | P1   | fait   | L'image `ia-runner` ne se construisait plus : le Dockerfile ne copiait pas `sidecar/scripts/` |
+| T-034 | tech | P2   | fait   | Le cliquet de taille était rouge sur `master` : `src-tauri/src/sidecar.rs` à 807 lignes |
+| T-043 | bug  | P1   | fait   | Poste d'entreprise : tous les fournisseurs en « erreur réseau », le fetch de Node ignorait le proxy |
+| T-044 | bug  | P2   | fait   | « erreur réseau: fetch failed » sans le code de cause : quatre pannes, un seul message |
 | T-042 | bug  | P1   | fait   | L'installeur n'embarquait pas la version testée : le bundle réinstallait ses dépendances sans verrou |
 | T-038 | bug  | P1   | fait   | L'AppImage ne se construisait plus : linuxdeploy casse le CLI Claude avec `patchelf`, puis abandonne |
 | T-039 | bug  | P1   | fait   | `ModelPicker.tsx` et `modelPicker.ts` : deux noms que Windows confond, l'installeur ne compilait plus |
@@ -912,6 +952,74 @@ la CI, au moins sur les PR qui touchent `docker/`, `sidecar/` ou les manifestes 
 Docker sans push coûte quelques minutes et aurait attrapé les trois.
 
 ---
+
+### T-043 — Tous les fournisseurs en « erreur réseau » sur un poste d'entreprise
+
+**Type** bug · **Prio** P1 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-13
+
+Constat utilisateur du 2026-08-13, sur un **poste d'entreprise** fraîchement passé en 0.3.1 :
+Swiftask configuré à la main, et « erreur réseau » à chaque appel. Depuis le poste Linux, le
+même service répond (`/public/bots` → 200, `/v1/models` → 200, `POST /v1/chat/completions`
+sans clé → 401) : le défaut était donc local à ce poste.
+
+Diagnostic mené **à distance**, par un agent tournant sur le poste lui-même — la machine
+n'ouvre aucun port entrant. Quatre mesures faites sur place :
+
+| mesure | résultat |
+|---|---|
+| `curl.exe https://graphql.swiftask.ai/public/bots` | **200** |
+| Node embarqué, `fetch()` sur la même URL | **`UND_ERR_CONNECT_TIMEOUT`** |
+| `HTTPS_PROXY` / `HTTP_PROXY` | un proxy d'entreprise, port 8080 |
+| WinHTTP / WinINET | direct / PAC `…/proxy.pac` |
+
+La cause tient à un écart de comportement qui n'a rien d'évident : **`curl` honore
+`HTTPS_PROXY`, le `fetch` de Node non.** Sur un réseau d'entreprise à egress contrôlé,
+l'application tente une connexion directe qui expire, pendant que le navigateur d'à côté
+fonctionne parfaitement. `UND_ERR_CONNECT_TIMEOUT`
+tombe **avant** la négociation TLS : ce n'est pas un problème de certificat.
+
+**Corrigé** en une ligne : la coquille lance le sidecar avec `--use-env-proxy`. Le Node
+embarqué (v22.22.1) sait honorer les variables d'environnement, il suffisait de le lui
+demander — pas de dépendance `undici` à ajouter. Le drapeau est **inconditionnel** : sans
+variable posée il ne fait rien, et une détection maison ferait moins bien que Node.
+
+Un test Rust verrouille la présence du drapeau **et sa position avant le script** : Node ne
+traite ses propres options qu'avant le nom du fichier à exécuter. Placé après, il partirait
+au sidecar comme un argument quelconque, ignoré en silence — la panne reviendrait sans un mot
+dans le journal.
+
+Fausse piste écartée en chemin, et il faut le dire : le poste portait un `err.txt` rempli
+d'erreurs `EISDIR: lstat 'C:'`, celles du sidecar mort-né du 7 août. Le fichier **datait du 7
+août** (mesuré : 4 804 octets, jamais réécrit depuis) et notre code n'écrit plus ce fichier.
+Le sidecar tournait (PID actif, « sidecar à jour » au démarrage). Un vestige de diagnostic
+laissé sur un poste est un faux coupable qui attend son heure.
+
+### T-044 — Quatre pannes réseau, un seul message
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-13
+
+Trouvé en instruisant [T-043](#t-043--tous-les-fournisseurs-en--erreur-réseau--sur-un-poste-dentreprise).
+Le journal du poste ne portait que ceci, douze fois :
+
+```json
+{"level":"error","scope":"ui","msg":"erreur réseau: fetch failed","stack":null}
+```
+
+Le `fetch` de Node rend **toujours** le même message et range la vraie cause dans
+`err.cause.code`. Nos cinq points de capture prenaient `err.message` et jetaient la cause.
+Résultat : un proxy, un certificat non reconnu, un DNS muet et un service éteint produisent
+la même ligne — quatre pannes, quatre remèdes, un seul message.
+
+Le coût s'est mesuré le jour même : il a fallu **piloter la machine à distance** pour obtenir
+`UND_ERR_CONNECT_TIMEOUT`, c'est-à-dire un mot que le journal avait sous la main et n'écrivait
+pas. C'est la doctrine d'observabilité prise en défaut sur son propre terrain : le message
+existait, il était juste inexploitable.
+
+**Corrigé** par `avecCause()` / `messageReseau()` dans [base.ts](../sidecar/src/base.ts),
+utilisés aux cinq sites d'`engine.ts` — y compris celui du Chat, le plus visible, qui rendait
+`fetch failed` tout court. Le code n'est ajouté que s'il n'est pas déjà dans le message.
+Six cas de test ([messageReseau.test.js](../sidecar/test/messageReseau.test.js)), dont celui
+qui compte vraiment : **quatre causes doivent donner quatre messages distincts**.
 
 ### T-042 — L'installeur n'embarquait pas la version testée
 

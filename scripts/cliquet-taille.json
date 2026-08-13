@@ -14,9 +14,8 @@
     "sidecar/src/speech.ts": 1130,
     "ui/src/voiceConversation.ts": 985,
     "ui/src/useVoiceComposer.ts": 894,
-    "sidecar/src/engine.ts": 841,
+    "sidecar/src/engine.ts": 840,
     "ui/src/speechAdmin.ts": 828,
-    "src-tauri/src/sidecar.rs": 807,
     "sidecar/src/knowledge.ts": 806
   }
 }

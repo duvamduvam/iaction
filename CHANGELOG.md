@@ -9,6 +9,25 @@ versions selon [SemVer](https://semver.org/lang/fr/).
 > Les entrées commencent à la 0.3.0 ; les versions antérieures ne sont pas
 > reconstituées après coup.
 
+## [0.3.2] — 2026-08-13
+
+### Corrigé
+
+- **Réseau d'entreprise : tous les fournisseurs en « erreur réseau ».** Le
+  `fetch` de Node n'honore pas `HTTP_PROXY`/`HTTPS_PROXY`, contrairement à curl
+  ou à un navigateur : derrière un proxy obligatoire, chaque appel expirait en
+  `UND_ERR_CONNECT_TIMEOUT` pendant que le navigateur d'à côté fonctionnait. Le
+  sidecar est désormais lancé avec `--use-env-proxy` (T-043).
+- **Le journal disait « erreur réseau: fetch failed » sans la cause.** Un
+  proxy, un certificat, un DNS muet et un service éteint produisaient la même
+  ligne. Le code (`UND_ERR_CONNECT_TIMEOUT`, `ENOTFOUND`…) accompagne
+  maintenant le message, y compris dans le Chat (T-044).
+
+### Interne
+
+- `sidecar.rs` sort des dérogations de taille : ses tests unitaires vivent dans
+  un fichier à part, le fichier repasse sous la limite de 800 lignes (T-034).
+
 ## [0.3.1] — 2026-08-13
 
 ### Ajouté
