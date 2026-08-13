@@ -16,6 +16,8 @@ use serde_json::Value;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::journal_coquille::{journal_coquille, journaliser_mort, TamponStderr};
+
 /// Backoff initial avant la première tentative de redémarrage.
 const INITIAL_BACKOFF_MS: u64 = 500;
 /// Plafond du backoff exponentiel.
@@ -196,52 +198,6 @@ fn node_program(_app: &AppHandle) -> String {
     "node".to_string()
 }
 
-/// Taille au-delà de laquelle le journal de la coquille est archivé en `.1`.
-/// Ces lignes sont rares par nature ; le plafond ne protège que du cas
-/// pathologique — une boucle d'échec qui journalise sans fin.
-const COQUILLE_MAX_OCTETS: u64 = 1_000_000;
-
-/// Écrit une ligne de journal DIRECTEMENT sur le disque, sans passer par le
-/// sidecar.
-///
-/// Fichier séparé (`logs/coquille.jsonl`) et non `app.jsonl` : le contrat du
-/// protocole réserve ce dernier à un écrivain unique (le sidecar, via
-/// `log.append`), et deux processus qui ajoutent au même fichier finiraient par
-/// s'entrelacer. Même format de ligne, pour qu'un seul lecteur suffise.
-///
-/// Best-effort d'un bout à l'autre : si l'écriture échoue, on se tait. On ne
-/// journalise pas l'échec du journal, et surtout on n'empêche pas
-/// l'application de démarrer pour si peu.
-fn journal_coquille(app: &AppHandle, level: &str, msg: &str, fields: &Value) {
-    let Ok(base) = app.path().app_config_dir() else {
-        return;
-    };
-    let dossier = base.join("logs");
-    if std::fs::create_dir_all(&dossier).is_err() {
-        return;
-    }
-    let fichier = dossier.join("coquille.jsonl");
-
-    if let Ok(meta) = std::fs::metadata(&fichier) {
-        if meta.len() > COQUILLE_MAX_OCTETS {
-            let _ = std::fs::rename(&fichier, dossier.join("coquille.jsonl.1"));
-        }
-    }
-
-    let ligne = serde_json::json!({
-        "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "level": level,
-        "scope": "rust",
-        "msg": msg,
-        "fields": fields,
-    });
-
-    use std::io::Write as _;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&fichier) {
-        let _ = writeln!(f, "{ligne}");
-    }
-}
-
 /// Construit la commande de lancement du sidecar : les trois flux en tuyaux
 /// (c'est par eux que passe tout le protocole), et **aucune fenêtre** sous
 /// Windows.
@@ -329,16 +285,26 @@ fn emit_status(app: &AppHandle, state: &SidecarState) {
     }
 }
 
-/// Démarre la supervision du sidecar dans un thread dédié. À appeler une fois, depuis
-/// `setup()`.
-pub fn spawn_supervisor(app: AppHandle) {
+/// Démarre la supervision du sidecar dans un thread dédié.
+///
+/// `origine` dit POURQUOI cette boucle naît — c'est la distinction qui
+/// manquait au journal (T-017) : devant huit lignes « démarrage de la
+/// supervision » identiques, rien ne permettait de répondre « plantage ou
+/// relance volontaire ? ». Voir `ORIGINE_PREMIER_DEMARRAGE` / `ORIGINE_RELANCE`.
+pub fn spawn_supervisor(app: AppHandle, origine: &'static str) {
     {
         let shared = app.state::<SharedState>();
         let mut guard = lock_state(&shared);
         guard.supervising = true;
     }
-    thread::spawn(move || supervise(app));
+    thread::spawn(move || supervise(app, origine));
 }
+
+/// Première boucle de la session : l'application vient de démarrer.
+pub const ORIGINE_PREMIER_DEMARRAGE: &str = "premier démarrage de l'application";
+/// Boucle repartie après une mort définitive, sur geste explicite de
+/// l'utilisateur (bouton « Relancer le sidecar »).
+pub const ORIGINE_RELANCE: &str = "relance demandée après mort du sidecar";
 
 /// Commande Tauri : RELANCE un sidecar mort.
 ///
@@ -387,7 +353,7 @@ pub fn sidecar_restart(app: AppHandle) -> Result<(), String> {
     );
 
     if relancer_boucle {
-        spawn_supervisor(app);
+        spawn_supervisor(app, ORIGINE_RELANCE);
     }
     Ok(())
 }
@@ -408,7 +374,7 @@ impl Drop for FinDeSupervision {
 
 /// Boucle de supervision : spawn, attend la mort du process, gère le backoff et les
 /// redémarrages, jusqu'à état `dead` ou demande d'arrêt.
-fn supervise(app: AppHandle) {
+fn supervise(app: AppHandle, origine: &'static str) {
     // Quoi qu'il arrive, la fin de cette fonction doit lever `supervising` :
     // c'est ce drapeau qui autorise `sidecar_restart` à repartir d'une boucle
     // neuve. Le garde ci-dessous le fait même en cas de retour anticipé.
@@ -429,7 +395,7 @@ fn supervise(app: AppHandle) {
         &app,
         "info",
         "démarrage de la supervision du sidecar",
-        &serde_json::json!({ "node": &node, "entry": &entry }),
+        &serde_json::json!({ "node": &node, "entry": &entry, "origine": origine }),
     );
 
     // Publie l'état initial "starting" avant la première tentative de spawn.
@@ -471,8 +437,11 @@ fn supervise(app: AppHandle) {
         };
 
         let pid = child.id();
+        // Un tampon NEUF par process : les dernières paroles d'un sidecar ne
+        // doivent jamais se mélanger à celles du précédent.
+        let tampon = TamponStderr::neuf();
         spawn_stdout_reader(app.clone(), child.stdout.take());
-        spawn_stderr_reader(app.clone(), child.stderr.take());
+        spawn_stderr_reader(app.clone(), child.stderr.take(), tampon.clone());
         let stdin = child.stdin.take();
 
         let started_at = Instant::now();
@@ -485,6 +454,10 @@ fn supervise(app: AppHandle) {
             guard.child = Some(child);
             emit_status(&app, &guard);
         }
+
+        // État de sortie constaté, s'il a pu l'être : `None` quand la mort est
+        // déduite (échec de `try_wait`, handle disparu) plutôt qu'observée.
+        let mut fin: Option<std::process::ExitStatus> = None;
 
         // Sonde régulièrement le process jusqu'à sa mort ou une demande d'arrêt.
         loop {
@@ -515,7 +488,10 @@ fn supervise(app: AppHandle) {
 
             let died = match guard.child.as_mut() {
                 Some(child) => match child.try_wait() {
-                    Ok(Some(_status)) => true,
+                    Ok(Some(status)) => {
+                        fin = Some(status);
+                        true
+                    }
                     Ok(None) => false,
                     Err(err) => {
                         eprintln!("[sidecar] échec de try_wait : {err}");
@@ -537,11 +513,21 @@ fn supervise(app: AppHandle) {
                 guard.child = None;
                 guard.stdin = None;
                 guard.pid = None;
+                // L'état DOIT tomber en même temps que stdin : le laisser à
+                // `Running` sans stdin faisait répondre à `sidecar_request`
+                // « sidecar indisponible : stdin absent », message d'entrailles
+                // que l'utilisateur n'a aucun moyen d'interpréter. `register_failure`
+                // affinera juste après (`Restarting` confirmé, ou `Dead` au bout
+                // du backoff) — ici on ne fait que refermer la fenêtre
+                // d'incohérence entre la mort et sa prise en compte.
+                guard.state = SidecarLifecycle::Restarting;
+                emit_status(&app, &guard);
                 break;
             }
         }
 
         let uptime = started_at.elapsed();
+        journaliser_mort(&app, pid, fin, uptime, &tampon);
         if register_failure(&app, uptime) {
             continue;
         } else {
@@ -686,9 +672,10 @@ fn spawn_stdout_reader(app: AppHandle, stdout: Option<ChildStdout>) {
     });
 }
 
-/// Lit la stderr du sidecar ligne par ligne : chaque ligne est loguée côté Rust et
-/// relayée à l'UI via l'event `sidecar:log`.
-fn spawn_stderr_reader(app: AppHandle, stderr: Option<ChildStderr>) {
+/// Lit la stderr du sidecar ligne par ligne : chaque ligne est loguée côté Rust,
+/// relayée à l'UI via l'event `sidecar:log`, et RETENUE dans `tampon` — c'est
+/// cette mémoire courte que le journal de mort recopiera (`journaliser_mort`).
+fn spawn_stderr_reader(app: AppHandle, stderr: Option<ChildStderr>, tampon: TamponStderr) {
     let Some(stderr) = stderr else {
         return;
     };
@@ -711,6 +698,10 @@ fn spawn_stderr_reader(app: AppHandle, stderr: Option<ChildStderr>) {
                 }
             };
             eprintln!("[sidecar:stderr] {line}");
+            // Mémoire courte, en RAM et bornée : aucune écriture, aucun event,
+            // donc rien qui puisse reboucler. Elle ne sortira qu'une fois, à la
+            // mort du process (`journaliser_mort`).
+            tampon.pousser(&line);
             // PAS d'`app:log` ici ni dans la branche d'échec ci-dessous : ces
             // lignes partent déjà sur `sidecar:log`, et le sidecar écrit chaque
             // entrée de journal sur sa propre stderr. En journaliser une de
@@ -744,6 +735,9 @@ pub fn request_shutdown(app: &AppHandle) {
     }
     guard.child = None;
     guard.stdin = None;
+    // Plus aucun redémarrage ne suivra (`shutdown` est armé) : l'état doit le
+    // dire, sans quoi une requête tardive verrait un `running` sans stdin.
+    guard.state = SidecarLifecycle::Dead;
 }
 
 /// Commande Tauri : sérialise `request` en une ligne JSON et l'écrit sur stdin du
@@ -759,10 +753,12 @@ pub fn sidecar_request(request: Value, sidecar: State<'_, SharedState>) -> Resul
         ));
     }
 
-    let stdin = guard
-        .stdin
-        .as_mut()
-        .ok_or_else(|| "sidecar indisponible : stdin absent".to_string())?;
+    // Filet de sécurité : `running` sans stdin ne devrait plus arriver (la mort
+    // du child fait tomber l'état avec lui), mais si la fenêtre se rouvrait, le
+    // message doit rester actionnable plutôt qu'anatomique.
+    let stdin = guard.stdin.as_mut().ok_or_else(|| {
+        "sidecar indisponible : le processus vient de s'arrêter, redémarrage en cours".to_string()
+    })?;
 
     let mut line = serde_json::to_string(&request).map_err(|err| err.to_string())?;
     line.push('\n');

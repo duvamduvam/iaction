@@ -17,9 +17,21 @@ import {
 } from "./appsAdmin";
 import { listMicrophones, micLevelStyle, startRecording, stopRecording, type MicrophoneDevice } from "./audioCapture";
 import { startPlayback } from "./audioPlayback";
-import { BENCH_DISCLAIMER, matchBenchNote, readFeatured, toggleFeatured } from "./modelCatalog";
+import {
+  BENCH_DISCLAIMER,
+  MODEL_SORT_OPTIONS,
+  formatContext,
+  formatPricing,
+  matchBenchNote,
+  readFeatured,
+  sortModels,
+  toggleFeatured,
+  type ModelSortKey,
+} from "./modelCatalog";
 import { initProjectIaction, type ProjectConfig } from "./projectAdmin";
 import type { ProviderConfig } from "./providerAdmin";
+import { ProviderForm } from "./ProviderForm";
+import { ProviderModelTester } from "./ProviderModelTester";
 import { subscribeProvidersPushed } from "./providersBus";
 import {
   DEFAULT_CLASSIFIER,
@@ -345,170 +357,6 @@ function ProjectsSection({
   );
 }
 
-/* ---------- Formulaire ajout / édition ---------- */
-
-interface ProviderFormValues {
-  id: string;
-  label: string;
-  baseUrl: string;
-  needsKey: boolean;
-  /** R0 — réglages de routage OpenRouter (opt-in : propriétés absentes si non renseignées). */
-  fallbackModels?: string[];
-  priceSort?: boolean;
-  usageAccounting?: boolean;
-}
-
-function ProviderForm({
-  mode,
-  initial,
-  existingIds,
-  onSubmit,
-  onCancel,
-}: Readonly<{
-  mode: "add" | "edit";
-  initial?: ProviderFormValues;
-  existingIds: string[];
-  onSubmit: (values: ProviderFormValues) => Promise<void>;
-  onCancel: () => void;
-}>) {
-  const [id, setId] = useState(initial?.id ?? "");
-  const [label, setLabel] = useState(initial?.label ?? "");
-  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? "");
-  const [needsKey, setNeedsKey] = useState(initial?.needsKey ?? false);
-  // R0 — routage OpenRouter (saisie libre : ids séparés par virgules ou retours ligne).
-  const [fallbackModelsText, setFallbackModelsText] = useState(
-    initial?.fallbackModels?.join(", ") ?? "",
-  );
-  const [priceSort, setPriceSort] = useState(initial?.priceSort ?? false);
-  const [usageAccounting, setUsageAccounting] = useState(initial?.usageAccounting ?? false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  const trimmedId = id.trim();
-  const idTaken = mode === "add" && existingIds.includes(trimmedId);
-  const canSubmit =
-    trimmedId.length > 0 && label.trim().length > 0 && baseUrl.trim().length > 0 && !idTaken;
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!canSubmit || saving) return;
-    setSaving(true);
-    setError("");
-    try {
-      // R0 — champ vide (ou case décochée) → propriété absente (opt-in pur).
-      const fallbackModels = fallbackModelsText
-        .split(/[\n,]/)
-        .map((m) => m.trim())
-        .filter((m) => m.length > 0);
-      await onSubmit({
-        id: trimmedId,
-        label: label.trim(),
-        baseUrl: baseUrl.trim(),
-        needsKey,
-        ...(fallbackModels.length > 0 ? { fallbackModels } : {}),
-        ...(priceSort ? { priceSort: true } : {}),
-        ...(usageAccounting ? { usageAccounting: true } : {}),
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <form className="provider-form" onSubmit={(e) => void handleSubmit(e)}>
-      <div className="field">
-        <label htmlFor={`pf-id-${mode}`}>Identifiant</label>
-        <input
-          id={`pf-id-${mode}`}
-          value={id}
-          onChange={(e) => setId(e.currentTarget.value)}
-          disabled={mode === "edit"}
-          placeholder="ex. mon-fournisseur"
-        />
-      </div>
-      <div className="field">
-        <label htmlFor={`pf-label-${mode}`}>Libellé</label>
-        <input
-          id={`pf-label-${mode}`}
-          value={label}
-          onChange={(e) => setLabel(e.currentTarget.value)}
-          placeholder="ex. Mon fournisseur"
-        />
-      </div>
-      <div className="field">
-        <label htmlFor={`pf-url-${mode}`}>URL de base</label>
-        <input
-          id={`pf-url-${mode}`}
-          value={baseUrl}
-          onChange={(e) => setBaseUrl(e.currentTarget.value)}
-          placeholder="https://…/v1"
-        />
-      </div>
-      <label className="field field--checkbox" htmlFor={`pf-needskey-${mode}`}>
-        <input
-          id={`pf-needskey-${mode}`}
-          type="checkbox"
-          checked={needsKey}
-          onChange={(e) => setNeedsKey(e.currentTarget.checked)}
-        />
-        <span>Clé API requise</span>
-      </label>
-      {/* R0 — sous-section routage OpenRouter (opt-in : rien d'envoyé si non renseigné). */}
-      <p className="empty-hint">
-        <strong>Routage OpenRouter (optionnel)</strong> — ces réglages sont transmis tels quels dans
-        les requêtes de chat. Un serveur OpenAI-compatible strict pourrait les rejeter : dans ce cas,
-        laissez-les simplement vides.
-      </p>
-      <div className="field">
-        <label htmlFor={`pf-fallback-${mode}`}>Modèles de secours</label>
-        <textarea
-          id={`pf-fallback-${mode}`}
-          rows={2}
-          value={fallbackModelsText}
-          onChange={(e) => setFallbackModelsText(e.currentTarget.value)}
-          placeholder="ids séparés par des virgules ou retours ligne"
-        />
-        <p className="empty-hint">
-          Essayés dans l'ordre si le modèle demandé est indisponible (rate-limit, contexte, panne).
-        </p>
-      </div>
-      <label className="field field--checkbox" htmlFor={`pf-pricesort-${mode}`}>
-        <input
-          id={`pf-pricesort-${mode}`}
-          type="checkbox"
-          checked={priceSort}
-          onChange={(e) => setPriceSort(e.currentTarget.checked)}
-        />
-        <span>Trier par prix</span>
-      </label>
-      <p className="empty-hint">Chaque appel part vers l'endpoint le moins cher du modèle.</p>
-      <label className="field field--checkbox" htmlFor={`pf-usageacc-${mode}`}>
-        <input
-          id={`pf-usageacc-${mode}`}
-          type="checkbox"
-          checked={usageAccounting}
-          onChange={(e) => setUsageAccounting(e.currentTarget.checked)}
-        />
-        <span>Comptabilité d'usage</span>
-      </label>
-      <p className="empty-hint">
-        Historise le coût réel et les tokens servis depuis le cache (Supervision).
-      </p>
-      {idTaken && <div className="result-line result-line--error">Identifiant déjà utilisé.</div>}
-      {error && <div className="result-line result-line--error">Erreur : {error}</div>}
-      <div className="actions">
-        <button type="submit" className="btn" disabled={!canSubmit || saving}>
-          {saving ? "Enregistrement…" : mode === "add" ? "Ajouter" : "Enregistrer"}
-        </button>
-        <button type="button" className="btn btn--ghost" onClick={onCancel} disabled={saving}>
-          Annuler
-        </button>
-      </div>
-    </form>
-  );
-}
 
 /* ---------- Carte fournisseur ---------- */
 
@@ -672,6 +520,8 @@ function ProviderCard({
           {testState === "pending" ? "Test en cours…" : testMessage}
         </div>
       )}
+      {/* R8-A §5 — vérification modèle par modèle (mitigation assumée de T-025). */}
+      <ProviderModelTester providerId={provider.id} />
     </article>
   );
 }
@@ -679,49 +529,6 @@ function ProviderCard({
 /* ---------- Section Modèles OpenRouter ---------- */
 
 type ModelsLoadState = "idle" | "loading" | "ready" | "error";
-type ModelSortKey = "name" | "price-in" | "price-out" | "context";
-
-const MODEL_SORT_OPTIONS: { value: ModelSortKey; label: string }[] = [
-  { value: "name", label: "Nom" },
-  { value: "price-in", label: "Prix entrée ↑" },
-  { value: "price-out", label: "Prix sortie ↑" },
-  { value: "context", label: "Contexte ↓" },
-];
-
-/** "3 $ / 15 $ /M" ou "—" si aucune des deux valeurs n'est connue. */
-function formatPricing(pricing?: ModelDetail["pricing"]): string {
-  const fmt = (n?: number) => (n === undefined ? "—" : `${Math.round(n * 100) / 100} $`);
-  if (!pricing || (pricing.promptUsdPerM === undefined && pricing.completionUsdPerM === undefined)) return "—";
-  return `${fmt(pricing.promptUsdPerM)} / ${fmt(pricing.completionUsdPerM)} /M`;
-}
-
-/** "200k" ou "—" si inconnu. */
-function formatContext(n?: number): string {
-  if (!n) return "—";
-  return n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`;
-}
-
-function sortModels(models: ModelDetail[], key: ModelSortKey): ModelDetail[] {
-  const withFallback = (n: number | undefined, fallback: number) => (n === undefined ? fallback : n);
-  const sorted = [...models];
-  switch (key) {
-    case "price-in":
-      sorted.sort((a, b) => withFallback(a.pricing?.promptUsdPerM, Infinity) - withFallback(b.pricing?.promptUsdPerM, Infinity));
-      break;
-    case "price-out":
-      sorted.sort(
-        (a, b) => withFallback(a.pricing?.completionUsdPerM, Infinity) - withFallback(b.pricing?.completionUsdPerM, Infinity),
-      );
-      break;
-    case "context":
-      sorted.sort((a, b) => withFallback(b.contextLength, 0) - withFallback(a.contextLength, 0));
-      break;
-    case "name":
-    default:
-      sorted.sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
-  }
-  return sorted;
-}
 
 function ModelRow({
   model,

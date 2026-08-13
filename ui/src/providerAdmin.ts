@@ -11,6 +11,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { readConfig, writeConfig } from "./appConfig";
+import { nettoyerTraits, type ProviderTraits } from "./providerTraits";
 import { providersSet, type ProviderPayload } from "./sidecar";
 
 export interface ProviderConfig {
@@ -25,6 +26,8 @@ export interface ProviderConfig {
   priceSort?: boolean;
   /** R0 — demander coût réel + tokens cachés dans l'usage (OpenRouter `usage.include`). */
   usageAccounting?: boolean;
+  /** R8-A — écarts déclarés de ce fournisseur (catalogue, corps, comptabilité). */
+  traits?: ProviderTraits;
 }
 
 export const DEFAULT_PROVIDERS: ProviderConfig[] = [
@@ -77,6 +80,10 @@ function sanitizeRoutingFields(provider: ProviderConfig): ProviderConfig {
   }
   if (typeof v.priceSort !== "boolean") delete out.priceSort;
   if (typeof v.usageAccounting !== "boolean") delete out.usageAccounting;
+  // R8-A — même traitement pour le profil : trait mal formé retiré, jamais d'erreur.
+  const traits = nettoyerTraits(v.traits);
+  if (traits) out.traits = traits;
+  else delete out.traits;
   return out;
 }
 
@@ -137,6 +144,7 @@ export async function pushProviders(providers: ProviderConfig[]): Promise<PushRe
       fallbackModels: provider.fallbackModels,
       priceSort: provider.priceSort,
       usageAccounting: provider.usageAccounting,
+      traits: provider.traits,
     });
   }
 

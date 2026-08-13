@@ -1,0 +1,47 @@
+# Miroir des tickets : docs/tickets.md → issues GitHub.
+#
+# `docs/tickets.md` est la source de vérité (versionné, lu par la page Système
+# de l'application, utilisable hors ligne). Les issues n'en sont que la vitrine
+# publique : ce workflow les crée à l'ouverture d'un ticket et les ferme à son
+# archivage, à chaque poussée qui touche le fichier. Sens unique — une issue
+# ouverte à la main par un visiteur n'est jamais modifiée (pas de préfixe
+# « T-nnn ») ; si elle est pertinente, elle se transcrit dans le fichier, et
+# c'est ainsi qu'elle entre au backlog.
+#
+# Toute la logique vit dans scripts/refleter-tickets.mjs, testée sans réseau —
+# ici, on ne fait que l'exécuter avec le jeton du dépôt.
+
+name: Tickets
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - docs/tickets.md
+      - scripts/refleter-tickets.mjs
+  # Lancement manuel : première synchronisation, ou réparation après une
+  # modification d'issue faite à la main.
+  workflow_dispatch:
+
+jobs:
+  refleter:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Une barrière qui ne peut pas échouer ne protège de rien : les tests du
+      # miroir passent AVANT qu'il touche aux issues.
+      - name: Tests du miroir
+        run: node scripts/refleter-tickets.test.mjs
+
+      - name: Refléter les tickets en issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/refleter-tickets.mjs --appliquer

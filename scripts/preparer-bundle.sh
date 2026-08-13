@@ -41,15 +41,37 @@ rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE"
 cp -a sidecar/dist/. "$BUNDLE/"
 
-# package.json réduit : mêmes versions que le sidecar, moins les exclusions.
+# package.json réduit : les dépendances du sidecar, moins les exclusions, et
+# figées à la version RÉELLEMENT INSTALLÉE dans le dépôt.
+#
 # On repart du manifeste réel plutôt que d'une liste recopiée, pour qu'une
 # dépendance ajoutée demain se retrouve dans le bundle sans qu'on y pense.
+#
+# ── Pourquoi des versions EXACTES (T-042) ──────────────────────────────
+# Le manifeste du sidecar porte des plages (`^0.3.214`), et ce dossier n'a pas
+# de verrou : `npm install` y résolvait donc la version la plus récente du jour,
+# pas celle que la chaîne de tests venait de valider. Le 2026-08-13, le paquet
+# livré embarquait le CLI Claude 0.3.231 alors que tout avait été testé en
+# 0.3.214 — 46 Mo d'écart, et une version que personne n'avait jamais exécutée.
+# Livrer autre chose que ce qu'on a testé est un échec muet : il ne se voit
+# qu'après, chez l'utilisateur. On fige donc sur l'installé, qui est l'image du
+# verrou du dépôt.
 node -e '
 const fs = require("fs");
 const src = JSON.parse(fs.readFileSync("sidecar/package.json", "utf8"));
 const exclues = new Set('"$EXCLUES"');
+const versionInstallee = (nom) => {
+  const chemin = "node_modules/" + nom + "/package.json";
+  if (!fs.existsSync(chemin)) {
+    console.error("   ÉCHEC : " + nom + " n’est pas installé — lancer npm ci avant de construire.");
+    process.exit(1);
+  }
+  return JSON.parse(fs.readFileSync(chemin, "utf8")).version;
+};
 const deps = Object.fromEntries(
-  Object.entries(src.dependencies || {}).filter(([nom]) => !exclues.has(nom)),
+  Object.keys(src.dependencies || {})
+    .filter((nom) => !exclues.has(nom))
+    .map((nom) => [nom, versionInstallee(nom)]),
 );
 fs.writeFileSync(process.argv[1] + "/package.json", JSON.stringify({
   name: "iaction-sidecar-bundle",
@@ -57,7 +79,8 @@ fs.writeFileSync(process.argv[1] + "/package.json", JSON.stringify({
   type: src.type ?? "module",
   dependencies: deps,
 }, null, 2) + "\n");
-console.log("   dépendances embarquées :", Object.keys(deps).join(", "));
+const rendu = Object.entries(deps).map(([n, v]) => n + "@" + v).join(", ");
+console.log("   dépendances embarquées :", rendu);
 console.log("   exclues (voix locale)  :", [...exclues].join(", "));
 ' "$BUNDLE"
 
@@ -89,6 +112,44 @@ for (const nom of fs.readdirSync(dir)) {
   console.log("   retiré :", nom, "(libc non visée)");
 }
 ' "$BUNDLE"
+
+# ── Le CLI Claude ne survit pas à linuxdeploy (T-038) ──────────────────
+# L'AppImage se fabrique avec linuxdeploy, qui parcourt TOUS les ELF de
+# l'AppDir, leur réécrit leur RUNPATH avec `patchelf`, puis interroge `ldd`.
+# Le CLI Claude porte une charge utile collée en queue de fichier : la
+# réécriture le CASSE, `ldd` sort en 1 sur le fichier que linuxdeploy vient
+# lui-même d'abîmer, et il abandonne (SIGABRT). Mesuré le 2026-08-13 : même
+# BuildID, 4 096 octets de plus, `ldd` qui passe de 0 à 1.
+#
+# On le soustrait donc au balayage en le rangeant COMPRESSÉ : un `.gz` n'est
+# pas un ELF, linuxdeploy passe devant sans le voir. Le sidecar le détend au
+# premier lancement dans un dossier inscriptible (cliClaude.ts) — une AppImage
+# étant une image en lecture seule, il n'y a de toute façon pas d'autre endroit
+# où poser un exécutable.
+#
+# Uniquement sur Linux : Windows et macOS n'ont pas linuxdeploy dans la chaîne,
+# et un détour par une extraction leur coûterait un premier démarrage pour rien.
+if [ "$(uname -s)" = "Linux" ]; then
+  echo "==> Mise à l'abri du CLI Claude (linuxdeploy le casserait)"
+  node -e '
+const fs = require("fs"), path = require("path"), zlib = require("zlib");
+const dir = path.join(process.argv[1], "node_modules", "@anthropic-ai");
+if (!fs.existsSync(dir)) process.exit(0);
+for (const nom of fs.readdirSync(dir)) {
+  if (!nom.startsWith("claude-agent-sdk-linux")) continue;
+  const cli = path.join(dir, nom, "claude");
+  if (!fs.existsSync(cli)) continue;
+  const brut = fs.readFileSync(cli);
+  // Niveau 1 : le CLI est surtout du JavaScript, il se comprime déjà de plus
+  // de moitié, et chaque cran supplémentaire coûte des dizaines de secondes
+  // sur 265 Mo — à chaque construction, sur chaque runner.
+  fs.writeFileSync(cli + ".gz", zlib.gzipSync(brut, { level: 1 }));
+  fs.rmSync(cli);
+  const mo = (n) => Math.round(n / 1048576);
+  console.log(`   ${nom}/claude : ${mo(brut.length)} Mo → ${mo(fs.statSync(cli + ".gz").size)} Mo compressé`);
+}
+' "$BUNDLE"
+fi
 
 echo "==> Runtime Node livré"
 TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"

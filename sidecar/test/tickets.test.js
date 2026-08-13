@@ -21,9 +21,9 @@ import { fileURLToPath } from "node:url";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { entry } from "./harness.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const entry = path.join(__dirname, "..", "dist", "index.js");
 
 function fail(message) {
   console.error(`ECHEC: ${message}`);

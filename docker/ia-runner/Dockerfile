@@ -123,6 +123,13 @@ RUN npm ci --no-audit --no-fund -w sidecar --include-workspace-root
 
 COPY sidecar/tsconfig.json sidecar/tsconfig.json
 COPY sidecar/src sidecar/src
+# `sidecar/scripts/` est indispensable : le script `build` du sidecar ne se
+# résume pas à `tsc`, il enchaîne sur `node scripts/empreinte.mjs dist`. Sans
+# ce COPY, le build échoue sur MODULE_NOT_FOUND — et il a effectivement échoué
+# ainsi (T-040), l'image n'ayant plus été construite depuis que l'empreinte a
+# été ajoutée au script. Toute nouvelle étape du build sidecar doit vérifier
+# que ses fichiers arrivent bien ici.
+COPY sidecar/scripts sidecar/scripts
 RUN npm run build -w sidecar && test -f sidecar/dist/index.js
 
 

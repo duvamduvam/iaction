@@ -10,6 +10,8 @@
  */
 import { readConfig, writeConfig } from "./appConfig";
 
+import type { ModelDetail } from "./sidecar";
+
 export type FeaturedModelsMap = Record<string, string[]>;
 
 function isFeaturedModelsMap(value: unknown): value is FeaturedModelsMap {
@@ -97,4 +99,55 @@ export const BENCH_NOTES: BenchNote[] = [
 /** Note curatée correspondant à `modelId` (première entrée qui matche), sinon `null`. */
 export function matchBenchNote(modelId: string): string | null {
   return BENCH_NOTES.find((entry) => entry.pattern.test(modelId))?.note ?? null;
+}
+
+/* ---------- Affichage et tri du catalogue (sortis de ProvidersPage) ---------- */
+
+export type ModelSortKey = "name" | "price-in" | "price-out" | "context";
+
+export const MODEL_SORT_OPTIONS: { value: ModelSortKey; label: string }[] = [
+  { value: "name", label: "Nom" },
+  { value: "price-in", label: "Prix entrée ↑" },
+  { value: "price-out", label: "Prix sortie ↑" },
+  { value: "context", label: "Contexte ↓" },
+];
+
+/** "3 $ / 15 $ /M" ou "—" si aucune des deux valeurs n'est connue. */
+export function formatPricing(pricing?: ModelDetail["pricing"]): string {
+  const fmt = (n?: number) => (n === undefined ? "—" : `${Math.round(n * 100) / 100} $`);
+  if (!pricing || (pricing.promptUsdPerM === undefined && pricing.completionUsdPerM === undefined)) return "—";
+  return `${fmt(pricing.promptUsdPerM)} / ${fmt(pricing.completionUsdPerM)} /M`;
+}
+
+/** "200k" ou "—" si inconnu. */
+export function formatContext(n?: number): string {
+  if (!n) return "—";
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`;
+}
+
+/**
+ * Tri du catalogue. Les valeurs inconnues vont TOUJOURS en fin de liste :
+ * un modèle sans prix n'est pas un modèle gratuit, et un modèle sans taille
+ * de contexte n'est pas un modèle sans contexte. Ne mute pas l'entrée.
+ */
+export function sortModels(models: ModelDetail[], key: ModelSortKey): ModelDetail[] {
+  const withFallback = (n: number | undefined, fallback: number) => (n === undefined ? fallback : n);
+  const sorted = [...models];
+  switch (key) {
+    case "price-in":
+      sorted.sort((a, b) => withFallback(a.pricing?.promptUsdPerM, Infinity) - withFallback(b.pricing?.promptUsdPerM, Infinity));
+      break;
+    case "price-out":
+      sorted.sort(
+        (a, b) => withFallback(a.pricing?.completionUsdPerM, Infinity) - withFallback(b.pricing?.completionUsdPerM, Infinity),
+      );
+      break;
+    case "context":
+      sorted.sort((a, b) => withFallback(b.contextLength, 0) - withFallback(a.contextLength, 0));
+      break;
+    case "name":
+    default:
+      sorted.sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
+  }
+  return sorted;
 }

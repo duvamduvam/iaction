@@ -9,6 +9,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatTokens } from "./fableUsage";
 import { readRoutingDebord } from "./routerAdmin";
+import { SupervisionCourbes } from "./SupervisionCourbes";
+import {
+  formatPeriodLabel,
+  isoWeekKey,
+  parseLocalDate,
+  periodRange,
+  shiftAnchor,
+  todayLocalStr,
+  trendRange,
+  type Periode,
+} from "./supervisionPeriode";
 import {
   usageClaudeHistory,
   usageStats,
@@ -21,83 +32,6 @@ import {
 } from "./usageStatsClient";
 import { useRovingFocus } from "./useRovingFocus";
 
-/* ---------- Dates locales YYYY-MM-DD (pas de dépendance date) ---------- */
-
-function parseLocalDate(s: string): Date {
-  const [y, m, d] = s.split("-").map(Number);
-  return new Date(y || 1970, (m || 1) - 1, d || 1);
-}
-
-function formatLocalDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function todayLocalStr(): string {
-  return formatLocalDate(new Date());
-}
-
-function addDaysStr(s: string, days: number): string {
-  const d = parseLocalDate(s);
-  d.setDate(d.getDate() + days);
-  return formatLocalDate(d);
-}
-
-function addMonthsStr(s: string, months: number): string {
-  const d = parseLocalDate(s);
-  d.setMonth(d.getMonth() + months);
-  return formatLocalDate(d);
-}
-
-function firstOfMonthStr(s: string): string {
-  const d = parseLocalDate(s);
-  return formatLocalDate(new Date(d.getFullYear(), d.getMonth(), 1));
-}
-
-function formatRangeLabel(from: string, to: string): string {
-  const fmt = (s: string) =>
-    parseLocalDate(s).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
-  return `${fmt(from)} — ${fmt(to)}`;
-}
-
-/** Semaine ISO (lundi) d'une date : `{année, semaine}`. */
-function isoWeekInfo(d: Date): { year: number; week: number } {
-  const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const dayNum = (date.getDay() + 6) % 7; // lundi = 0
-  date.setDate(date.getDate() - dayNum + 3); // jeudi de cette semaine
-  const firstThursday = new Date(date.getFullYear(), 0, 4);
-  const firstDayNum = (firstThursday.getDay() + 6) % 7;
-  firstThursday.setDate(firstThursday.getDate() - firstDayNum + 3);
-  const week = 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 24 * 3600 * 1000));
-  return { year: date.getFullYear(), week };
-}
-
-function isoWeekKey(d: Date): string {
-  const { year, week } = isoWeekInfo(d);
-  return `${year}-S${String(week).padStart(2, "0")}`;
-}
-
-/* ---------- Fenêtre affichée : 30 derniers jours (jour/semaine), 6 derniers mois (mois) ---------- */
-
-function windowSpan(bucket: UsageBucketKind): { unit: "days" | "months"; amount: number } {
-  return bucket === "month" ? { unit: "months", amount: 6 } : { unit: "days", amount: 30 };
-}
-
-function computeFrom(bucket: UsageBucketKind, to: string): string {
-  const span = windowSpan(bucket);
-  if (span.unit === "months") return firstOfMonthStr(addMonthsStr(to, -(span.amount - 1)));
-  return addDaysStr(to, -(span.amount - 1));
-}
-
-/** Navigation ◀ ▶ par plage entière, plafonnée à aujourd'hui. */
-function shiftAnchor(bucket: UsageBucketKind, to: string, dir: 1 | -1): string {
-  const span = windowSpan(bucket);
-  const shifted = span.unit === "months" ? addMonthsStr(to, dir * span.amount) : addDaysStr(to, dir * span.amount);
-  const today = todayLocalStr();
-  return shifted > today ? today : shifted;
-}
 
 /* ---------- Sélecteur de période ---------- */
 
@@ -107,11 +41,17 @@ const BUCKET_ITEMS: { id: UsageBucketKind; label: string }[] = [
   { id: "month", label: "Mois" },
 ];
 
+/** Libellés de navigation, accordés à la période sélectionnée. */
+const PERIOD_NOUN: Record<UsageBucketKind, { prev: string; next: string; today: string }> = {
+  day: { prev: "Jour précédent", next: "Jour suivant", today: "Aujourd'hui" },
+  week: { prev: "Semaine précédente", next: "Semaine suivante", today: "Cette semaine" },
+  month: { prev: "Mois précédent", next: "Mois suivant", today: "Ce mois-ci" },
+};
+
 function PeriodSelector({
   bucket,
   onBucket,
-  from,
-  to,
+  periode,
   onPrev,
   onNext,
   onToday,
@@ -119,13 +59,13 @@ function PeriodSelector({
 }: Readonly<{
   bucket: UsageBucketKind;
   onBucket: (b: UsageBucketKind) => void;
-  from: string;
-  to: string;
+  periode: Periode;
   onPrev: () => void;
   onNext: () => void;
   onToday: () => void;
   atToday: boolean;
 }>) {
+  const noun = PERIOD_NOUN[bucket];
   // Sélecteur aux flèches, activation manuelle (Entrée / Espace) — voir Nav dans App.tsx.
   const roving = useRovingFocus<HTMLElement>({
     selector: ".config-subnav__item:not(:disabled)",
@@ -154,28 +94,22 @@ function PeriodSelector({
         ))}
       </nav>
       <div className="supervision-range-nav">
-        <button
-          type="button"
-          className="btn btn--ghost"
-          onClick={onPrev}
-          title="Plage précédente"
-          aria-label="Plage précédente"
-        >
+        <button type="button" className="btn btn--ghost" onClick={onPrev} title={noun.prev} aria-label={noun.prev}>
           ◀
         </button>
-        <span className="supervision-range-label">{formatRangeLabel(from, to)}</span>
+        <span className="supervision-range-label">{formatPeriodLabel(bucket, periode)}</span>
         <button
           type="button"
           className="btn btn--ghost"
           onClick={onNext}
           disabled={atToday}
-          title="Plage suivante"
-          aria-label="Plage suivante"
+          title={noun.next}
+          aria-label={noun.next}
         >
           ▶
         </button>
         <button type="button" className="btn btn--ghost" onClick={onToday} disabled={atToday}>
-          Aujourd'hui
+          {noun.today}
         </button>
       </div>
     </div>
@@ -336,86 +270,6 @@ function ProjetsPanel({
   );
 }
 
-/* ---------- Histogramme des buckets ---------- */
-
-function bucketLabel(bucket: UsageBucketKind, start: string): string {
-  const d = parseLocalDate(start);
-  if (bucket === "day") return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
-  if (bucket === "week") return `S${isoWeekInfo(d).week}`;
-  return d.toLocaleDateString("fr-FR", { month: "short" });
-}
-
-const HIST_HEIGHT = 130;
-const HIST_BAR_W = 20;
-const HIST_GAP = 8;
-
-function Histogram({ bucket, buckets }: Readonly<{ bucket: UsageBucketKind; buckets: UsageBucket[] }>) {
-  const max = buckets.reduce((m, b) => Math.max(m, b.tours), 0);
-  const width = Math.max(buckets.length * (HIST_BAR_W + HIST_GAP), 200);
-  return (
-    <section className="panel">
-      <div className="panel__title">Tours par période</div>
-      {buckets.length === 0 || max === 0 ? (
-        <p className="empty-hint">Aucun tour sur cette période.</p>
-      ) : (
-        <>
-          <div className="supervision-chart-wrap">
-            <svg
-              width={width}
-              height={HIST_HEIGHT + 20}
-              role="img"
-              aria-label="Histogramme des tours par période, orchestration en segment contrasté"
-            >
-              {buckets.map((b, i) => {
-                const x = i * (HIST_BAR_W + HIST_GAP);
-                const totalH = (b.tours / max) * HIST_HEIGHT;
-                const orchH = (b.orchTours / max) * HIST_HEIGHT;
-                const y0 = HIST_HEIGHT;
-                return (
-                  <g key={b.start} transform={`translate(${x},0)`}>
-                    <title>{`${b.start} — ${b.tours} tour(s), dont ${b.orchTours} en orchestration`}</title>
-                    {totalH > 0 && (
-                      <rect
-                        x={0}
-                        y={y0 - totalH}
-                        width={HIST_BAR_W}
-                        height={totalH}
-                        rx={2}
-                        style={{ fill: "var(--neon-cyan)" }}
-                      />
-                    )}
-                    {orchH > 0 && (
-                      <rect
-                        x={0}
-                        y={y0 - totalH}
-                        width={HIST_BAR_W}
-                        height={orchH}
-                        rx={2}
-                        style={{ fill: "var(--neon-magenta)" }}
-                      />
-                    )}
-                    <text x={HIST_BAR_W / 2} y={HIST_HEIGHT + 14} textAnchor="middle" className="supervision-hist-label">
-                      {bucketLabel(bucket, b.start)}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
-          <div className="supervision-hist-legend">
-            <span>
-              <i className="supervision-legend-dot supervision-legend-dot--cyan" /> Tours
-            </span>
-            <span>
-              <i className="supervision-legend-dot supervision-legend-dot--magenta" /> dont orchestration
-            </span>
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
 /* ---------- R3 — Encart « Routage » (spec docs/spec-r3-debord.md §2.4/§3) ---------- */
 
 /** Ordre d'affichage des tiers (même ordre canonique que routerAdmin). */
@@ -479,10 +333,25 @@ function RoutagePanel({ routage, totalTours }: Readonly<{ routage: UsageRoutage 
               </div>
               <div className="supervision-kpi-sub">abonnement + modèles locaux</div>
             </div>
+            {/* S3 — la dépense RÉELLE de la période. « Débord du mois » ne compte
+                que la fraction routée automatiquement : un tour OpenRouter choisi
+                à la main n'y apparaît pas, et la page n'affichait alors AUCUNE
+                dépense (T-035). */}
+            <div className="supervision-kpi-card">
+              <div className="panel__title">Dépense de la période</div>
+              <div className="supervision-kpi-value">{formatUsd(routage.coutPeriodeUsd)}</div>
+              <div className="supervision-kpi-sub">
+                {routage.coutInconnuTours > 0
+                  ? `au moins — ${routage.coutInconnuTours} tour${routage.coutInconnuTours > 1 ? "s" : ""} payant${routage.coutInconnuTours > 1 ? "s" : ""} sans coût remonté`
+                  : "tout le payant, débord et choix manuel"}
+              </div>
+            </div>
             <div className="supervision-kpi-card">
               <div className="panel__title">Débord du mois</div>
               <div className="supervision-kpi-value">{formatUsd(routage.debordMoisUsd)}</div>
-              <div className="supervision-kpi-sub">{plafondLabel}</div>
+              <div className="supervision-kpi-sub">
+                {plafondLabel} · routage auto seulement
+              </div>
             </div>
           </div>
 
@@ -729,22 +598,46 @@ function ClaudeSubscriptionPanel() {
 
 /* ---------- Page ---------- */
 
+/**
+ * Titre du graphe : il nomme la FENÊTRE tracée, pas la période sélectionnée —
+ * c'est le cran au-dessus, et le dire évite de croire que les courbes et les
+ * cartes couvrent la même chose.
+ */
+const COURBES_TITRE: Record<UsageBucketKind, (anchor: string) => string> = {
+  day: (a) => `Les jours de la semaine ${formatPeriodLabel("week", periodRange("week", a))}`,
+  week: (a) => `Les semaines de ${formatPeriodLabel("month", periodRange("month", a))}`,
+  month: (a) => `Les mois de ${parseLocalDate(a).getFullYear()}`,
+};
+
 export function SupervisionPage() {
   const [bucket, setBucket] = useState<UsageBucketKind>("day");
   const [anchor, setAnchor] = useState<string>(todayLocalStr());
   const [stats, setStats] = useState<UsageStats | null>(null);
+  const [trend, setTrend] = useState<UsageBucket[]>([]);
   const [loadError, setLoadError] = useState(false);
 
-  const from = useMemo(() => computeFrom(bucket, anchor), [bucket, anchor]);
-  const to = anchor;
-  const atToday = anchor >= todayLocalStr();
+  const periode = useMemo(() => periodRange(bucket, anchor), [bucket, anchor]);
+  const tendance = useMemo(() => trendRange(bucket, anchor), [bucket, anchor]);
+  // ▶ et « Aujourd'hui » n'ont de sens que hors de la période en cours ; une
+  // période qui court jusqu'à aujourd'hui (ou au-delà : mois entamé) est la
+  // dernière navigable.
+  const atToday = periode.to >= todayLocalStr();
 
+  // Deux requêtes : la période sélectionnée porte TOUS les encarts (KPI,
+  // modèles, projets, routage), la fenêtre du cran au-dessus ne sert qu'aux
+  // courbes. Les buckets de cette seconde fenêtre ne suffiraient pas aux
+  // encarts : ils ne portent ni modèles, ni projets, ni routage.
   useEffect(() => {
     let cancelled = false;
     setLoadError(false);
-    usageStats(from, to, bucket)
-      .then((s) => {
-        if (!cancelled) setStats(s);
+    Promise.all([
+      usageStats(periode.from, periode.to, bucket),
+      usageStats(tendance.from, tendance.to, bucket),
+    ])
+      .then(([p, t]) => {
+        if (cancelled) return;
+        setStats(p);
+        setTrend(t.buckets);
       })
       .catch(() => {
         if (!cancelled) setLoadError(true);
@@ -752,11 +645,13 @@ export function SupervisionPage() {
     return () => {
       cancelled = true;
     };
-  }, [from, to, bucket]);
+  }, [periode, tendance, bucket]);
 
+  // L'ancre est CONSERVÉE en changeant de granularité : depuis le 3 juillet en
+  // « Jour », « Semaine » montre la semaine du 3 juillet — pas un retour brutal
+  // à aujourd'hui, qui ferait perdre l'endroit qu'on était en train de lire.
   function handleBucket(next: UsageBucketKind) {
     setBucket(next);
-    setAnchor(todayLocalStr());
   }
 
   return (
@@ -772,8 +667,7 @@ export function SupervisionPage() {
       <PeriodSelector
         bucket={bucket}
         onBucket={handleBucket}
-        from={from}
-        to={to}
+        periode={periode}
         onPrev={() => setAnchor((a) => shiftAnchor(bucket, a, -1))}
         onNext={() => setAnchor((a) => shiftAnchor(bucket, a, 1))}
         onToday={() => setAnchor(todayLocalStr())}
@@ -785,18 +679,28 @@ export function SupervisionPage() {
       {stats && (
         <>
           <KpiCards totals={stats.totals} />
-          {/* S2 — répartition par projet (Chat compris), part autonome incluse. */}
-          <ProjetsPanel parProjet={stats.parProjet} totals={stats.totals} />
+          {/* Les quatre mêmes indicateurs, en courbes, sur le cran au-dessus. */}
+          <SupervisionCourbes
+            bucket={bucket}
+            buckets={trend}
+            highlight={periode.from}
+            titre={COURBES_TITRE[bucket](anchor)}
+          />
           <div className="panels">
+            {/* S2 — répartition par projet (Chat compris), part autonome incluse. */}
+            <ProjetsPanel parProjet={stats.parProjet} totals={stats.totals} />
             <ModelsPanel models={stats.models} />
-            <Histogram bucket={bucket} buckets={stats.buckets} />
           </div>
-          {/* R3 — encart « Routage » : part auto, tiers, coût nul, mix abo, débord vs plafond. */}
-          <RoutagePanel routage={stats.routage} totalTours={stats.totals.tours} />
+          <div className="panels">
+            {/* R3 — encart « Routage » : part auto, tiers, coût nul, mix abo, débord vs plafond. */}
+            <RoutagePanel routage={stats.routage} totalTours={stats.totals.tours} />
+            <ClaudeSubscriptionPanel />
+          </div>
         </>
       )}
 
-      <ClaudeSubscriptionPanel />
+      {/* Sans statistiques, l'encart abonnement reste seul : il ne dépend pas d'elles. */}
+      {!stats && <ClaudeSubscriptionPanel />}
     </div>
   );
 }

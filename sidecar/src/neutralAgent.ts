@@ -20,6 +20,7 @@ import { createReadStream, promises as fsp } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { isNonEmptyString, isPlainObject } from "./base.js";
+import { needsPermission as needsPermissionRegistre, versModeNeutre } from "./permissions.js";
 import { buildHeaders, getProvider, joinUrl, readBoundedBody, type EngineEmitter, type Provider } from "./engine.js";
 import { formatSearchResults, sanitizeTopK, searchKnowledge } from "./knowledge.js";
 import { recordUsageEvent, type UsageStatus } from "./usageStats.js";
@@ -49,7 +50,7 @@ function summarizeText(text: string): string {
  * `cwd` (égalité stricte pour "."/racine, ou préfixe `cwd + sep` sinon).
  * Ne lève jamais : renvoie une erreur explicite consommée comme tool_result.
  */
-function resolveSafePath(
+export function resolveSafePath(
   cwd: string,
   rawPath: string,
 ): { ok: true; abs: string } | { ok: false; message: string } {
@@ -510,7 +511,7 @@ const TOOLS_HORS_ALLOWLIST = new Set(["search_knowledge"]);
  * Résout l'allowlist déclarée en noms d'outils neutres.
  * `null` (champ absent) = palette complète, aucune restriction.
  */
-function resolveAllowedTools(declared: unknown): Set<string> | null {
+export function resolveAllowedTools(declared: unknown): Set<string> | null {
   if (!Array.isArray(declared) || !declared.every((t) => typeof t === "string")) return null;
   const out = new Set<string>(TOOLS_HORS_ALLOWLIST);
   for (const nom of declared as string[]) {
@@ -681,20 +682,11 @@ const TOOLS: ToolDefinition[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// permissionMode
+// permissionMode — la règle vit dans permissions.ts (étape 11), ré-exportée
+// ici pour les importeurs historiques (tests compris).
 // ---------------------------------------------------------------------------
 
-type PermissionMode = "default" | "acceptEdits" | "bypassPermissions";
-
-function needsPermission(toolName: string, mode: PermissionMode): boolean {
-  if (mode === "bypassPermissions") {
-    return false;
-  }
-  if (mode === "acceptEdits") {
-    return toolName === "bash";
-  }
-  return toolName === "write_file" || toolName === "edit_file" || toolName === "bash";
-}
+export { needsPermission } from "./permissions.js";
 
 // ---------------------------------------------------------------------------
 // État des runs en cours (privé à ce module — pas dans engine.ts::inFlight)
@@ -1066,11 +1058,8 @@ export async function handleNeutralStart(
 
   const cwd = path.resolve(cwdParam);
 
-  const permissionModeRaw = params.permissionMode;
-  const permissionMode: PermissionMode =
-    permissionModeRaw === "acceptEdits" || permissionModeRaw === "bypassPermissions"
-      ? permissionModeRaw
-      : "default";
+  // Coercition du registre (permissions.ts) : inconnu/plan/absent -> default.
+  const permissionMode = versModeNeutre(params.permissionMode);
 
   const maxTurnsRaw = params.maxTurns;
   const maxTurns =
@@ -1222,7 +1211,7 @@ export async function handleNeutralStart(
         // historique d'un tour antérieur). Refus sec, jamais d'exécution.
         isError = true;
         resultContent = `outil non autorisé pour cet agent: ${toolName}`;
-      } else if (needsPermission(toolName, permissionMode)) {
+      } else if (needsPermissionRegistre(toolName, permissionMode)) {
         const decision = await requestPermission(id, run, emitter, toolName, toolInput);
         if (!decision.allow) {
           isError = true;

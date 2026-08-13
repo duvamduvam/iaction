@@ -6,11 +6,14 @@
 ## 0. En pratique : ne construisez rien à la main
 
 `.github/workflows/version.yml` construit les DEUX installeurs à chaque
-étiquette de version et les attache à une release :
+étiquette de version et les attache à une release. Le circuit complet —
+instantané, pull request, fusion, puis :
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git push git@github.com:duvamduvam/iaction.git <sha-fusionné>:refs/tags/vX.Y.Z
 ```
+
+— est décrit dans `docs/github.md` §1.
 
 Un runner Ubuntu produit l'AppImage, un runner `windows-latest` l'installeur
 NSIS. C'est ce qui répond au vrai problème — Tauri ne compilant pas Windows

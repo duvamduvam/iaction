@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   addToolBlock,
   appendToLastBlock,
+  buildNeutralMessages,
   contextTokens,
   hasVisibleContent,
   mcpServerFromToolName,
@@ -19,6 +20,7 @@ import {
   spokenTextOfTurn,
   toolPreview,
   turnSubtypeNotice,
+  withAgentSystemPrompt,
   withTurnError,
   type AgentBlock,
   type AgentTurn,
@@ -178,5 +180,52 @@ describe("turnSubtypeNotice", () => {
   it("ne dit rien sur un succès, avertit sur les fins anormales", () => {
     expect(turnSubtypeNotice("success")).toBeNull();
     expect(turnSubtypeNotice("error_max_turns")).toBeTruthy();
+  });
+});
+
+describe("buildNeutralMessages — l'historique que le moteur neutre relit à CHAQUE tour", () => {
+  it("assistant = concaténation des blocs texte SEULS (thinking/tool sans équivalent OpenAI)", () => {
+    const history: AgentTurn[] = [
+      { id: "u1", role: "user", content: "question", status: "done" },
+      {
+        id: "a1",
+        role: "assistant",
+        status: "done",
+        blocks: [
+          { type: "thinking", id: "b1", content: "je réfléchis" },
+          { type: "text", id: "b2", content: "début" },
+          { type: "tool", id: "b3", toolUseId: "t", toolName: "Bash", toolInput: {} },
+          { type: "text", id: "b4", content: " et fin" },
+        ],
+      },
+    ];
+    expect(buildNeutralMessages(history, "suite")).toEqual([
+      { role: "user", content: "question" },
+      { role: "assistant", content: "début et fin" },
+      { role: "user", content: "suite" },
+    ]);
+  });
+
+  it("les tours en ERREUR sont sautés (contenu potentiellement vide/partiel)", () => {
+    const history: AgentTurn[] = [
+      { id: "u1", role: "user", content: "ok", status: "done" },
+      { id: "a1", role: "assistant", status: "error", blocks: [{ type: "text", id: "b", content: "partiel" }] },
+    ];
+    const messages = buildNeutralMessages(history, "nouveau");
+    expect(messages.map((m) => m.content)).toEqual(["ok", "nouveau"]);
+  });
+});
+
+describe("withAgentSystemPrompt", () => {
+  it("préfixe les instructions en message system ; sans instructions, rien ne bouge", () => {
+    const base = [{ role: "user" as const, content: "salut" }];
+    expect(withAgentSystemPrompt(base, "Tu es concis.")[0]).toEqual({ role: "system", content: "Tu es concis." });
+    expect(withAgentSystemPrompt(base, undefined)).toBe(base);
+    expect(withAgentSystemPrompt(base, "")).toBe(base);
+  });
+
+  it("jamais DEUX messages system : une tête system existante est respectée", () => {
+    const deja = [{ role: "system" as const, content: "déjà là" }, { role: "user" as const, content: "x" }];
+    expect(withAgentSystemPrompt(deja, "autre")).toBe(deja);
   });
 });

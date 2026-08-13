@@ -74,7 +74,6 @@
  */
 import {
   forwardRef,
-  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -90,25 +89,16 @@ import {
   clipboardHasImage,
   filesFromClipboard,
   filesFromDrop,
-  SentAttachments,
-  toAttachmentRefs,
-  toContractAttachments,
-  toSentAttachments,
   useAttachmentDraft,
 } from "./Attachments";
 import { FileEditorView, type OpenFileState } from "./FileEditor";
 import { FileTree } from "./FileTree";
 import { readClipboardImage } from "./clipboardClient";
 import { fsFindByName, fsListDir, fsReadFile, fsWriteFile, type DirEntry } from "./fsClient";
-import { closeDanglingFence, Markdown } from "./Markdown";
 import { McpPanel } from "./McpPanel";
-import { readFeatured, splitFeatured } from "./modelCatalog";
+import { useFavorisModeles } from "./useFavorisModeles";
 import { agentsList, type AgentInfo, type AgentScope } from "./orchestrationClient";
-import { OllamaPanel } from "./OllamaPanel";
 import {
-  readProjectKnowledgeMode,
-  writeProjectKnowledgeMode,
-  type KnowledgeMode,
   type ProjectConfig,
 } from "./projectAdmin";
 import type { ProviderConfig } from "./providerAdmin";
@@ -118,34 +108,17 @@ import {
   claudeCommands,
   claudeSessionTitles,
   claudePermission,
-  claudePush,
-  claudeStart,
-  isRouteTier,
-  knowledgeIndex,
-  knowledgeStatus,
-  modelsList,
+  modelsDetail,
   neutralAbort,
   neutralPermission,
-  neutralStart,
-  parseClaudeDone,
-  parseNeutralDone,
   projectEnsureDoc,
-  routerRoute,
-  toRouteTarget,
-  type ChatAttachment,
-  type ChatMessage,
-  type KnowledgeIndexProgress,
-  type KnowledgeStatus,
-  type ModelInfo,
+  type ModelDetail,
   type PermissionMode,
-  type RequestMeta,
-  type RouteDebord,
   type RouteTarget,
   type RouteTier,
   type SlashCommandInfo,
 } from "./sidecar";
-import { mergeRoutingTable, readRoutingDebord, readRoutingTable, ROUTE_TIERS } from "./routerAdmin";
-import { capSessions, deriveTitleFromText, formatRelativeDate, newSessionMeta, sortByRecent } from "./sessionStore";
+import { sortByRecent } from "./sessionStore";
 import { SidebarSection } from "./SidebarSection";
 import { useComposerLiveDraft } from "./useComposerLiveDraft";
 import { useComposerUndo } from "./useComposerUndo";
@@ -153,737 +126,58 @@ import { useRovingFocus } from "./useRovingFocus";
 import { useStickToBottom } from "./useStickToBottom";
 import { asRecord } from "./base";
 import {
-  addToolBlock,
-  appendToLastBlock,
   contextTokens,
-  hasVisibleContent,
-  mcpServerFromToolName,
-  nextId,
-  prettyJson,
-  setToolResult,
   spokenTextOfTurn,
-  toolPreview,
-  turnSubtypeNotice,
-  withBlocks,
-  withTurnDone,
-  withTurnError,
-  type AgentBlock,
   type AgentTurn,
 } from "./agentTurns";
 
-import { TtsButton, VoiceButtons, VoiceStatus } from "./VoiceControls";
+import { VoiceButtons, VoiceStatus } from "./VoiceControls";
 import {
   DEFAULT_CONVERSATION_SETTINGS,
   useVoiceComposer,
   type ConversationSettings,
 } from "./useVoiceComposer";
 import { stateRead, stateWrite } from "./stateClient";
-import { recordModelUsage } from "./fableUsage";
 import { subscribeProvidersPushed } from "./providersBus";
 import { publishContext, registerCompactHandler } from "./contextBus";
-import { notifyUsageChanged } from "./usageBus";
 import type { ProjectsLoadState } from "./useProjects";
+import { useConversationRuntime } from "./useConversationRuntime";
+import { prochainOnglet } from "./onglets";
+import { PermissionModal } from "./PermissionModal";
+import { cleAutoAllow } from "./permissions";
+import { type PermissionRequestItem } from "./questionsAgent";
+import {
+  AUTO_MODEL,
+  buildPersistedEntry,
+  CONVERSATIONS_STATE_KEY,
+  convIdOfTab,
+  convTabId,
+  deriveSessionTitle,
+  EMPTY_TAB,
+  emptyProjectState,
+  freshRuntime,
+  freshSession,
+  isConvTab,
+  LAST_PROJECT_STATE_KEY,
+  resolveAgentSelection,
+  SAVE_DEBOUNCE_MS,
+  sanitizePersistedConversations,
+  sessionStateFromPersisted,
+  type AgentSelection,
+  type ConvRuntime,
+  type PersistedConversations,
+  type PersistedProjectEntry,
+  type ProjectSession,
+  type ProjectState,
+} from "./modeleProjet";
+import { dedupDocsByPath, type PinnedDoc } from "./connaissances";
+import { libelleDebordNotice } from "./debordNotice";
+import { AgentTurnView } from "./agentTranscript";
+import { ConnaissancesSection, LlmSection, SessionsSection } from "./agentSidebarDroit";
+import { creerEnvoiProjet } from "./envoiProjet";
+import { useConnaissances } from "./useConnaissances";
 
 const MAX_OPEN_FILES = 6;
-
-/* ---------- Modèle de conversation ---------- */
-
-
-/* ---------- Blocs d'un tour assistant ---------- */
-
-function DiffLines({ text, prefix, variant }: Readonly<{ text: string; prefix: string; variant: "removed" | "added" }>) {
-  return (
-    <pre className={`diff-block diff-block--${variant}`}>
-      {text.split("\n").map((line, i) => (
-        // Bloc figé au rendu (pas de ré-ordonnancement) : l'index suffit comme clé.
-        // Clé = index assumée (voir commentaire) — règle react/no-array-index-key non chargée ici.
-        <div className="diff-line" key={i}>
-          {prefix}
-          {line}
-        </div>
-      ))}
-    </pre>
-  );
-}
-
-function EditDiff({ oldString, newString }: Readonly<{ oldString: string; newString: string }>) {
-  return (
-    <div className="diff-view">
-      <DiffLines text={oldString} prefix="− " variant="removed" />
-      <DiffLines text={newString} prefix="+ " variant="added" />
-    </div>
-  );
-}
-
-function ThinkingBlockView({ content }: Readonly<{ content: string }>) {
-  return (
-    <details className="thinking-block">
-      <summary>Raisonnement…</summary>
-      <div className="thinking-block__content">{content}</div>
-    </details>
-  );
-}
-
-/** `toolName` = "mcp__<serveur>__<outil>" pour un outil MCP (voir docs/protocol.md) — `null` sinon. */
-
-function ToolBlockView({ block }: Readonly<{ block: Extract<AgentBlock, { type: "tool" }> }>) {
-  const preview = toolPreview(block.toolName, block.toolInput);
-  const state = block.result ? (block.result.isError ? "error" : "ok") : "pending";
-  const icon = state === "error" ? "✗" : state === "ok" ? "✓" : "…";
-  const mcpServer = mcpServerFromToolName(block.toolName);
-  return (
-    <details className="tool-activity">
-      <summary>
-        <span aria-hidden="true">🔧</span>
-        <span className="tool-activity__name">{block.toolName}</span>
-        {mcpServer && <span className="tool-activity__mcp-badge">MCP:{mcpServer}</span>}
-        <span className="tool-activity__preview">{preview}</span>
-        <span className={`tool-activity__status tool-activity__status--${state}`}>{icon}</span>
-      </summary>
-      <div className="tool-activity__detail">
-        <pre className="pretty-json">{prettyJson(block.toolInput)}</pre>
-        {block.result && (
-          <div className={`tool-activity__result${block.result.isError ? " tool-activity__result--error" : ""}`}>
-            {block.result.summary}
-          </div>
-        )}
-      </div>
-    </details>
-  );
-}
-
-/** Mémoïsé (comme AgentTurnView) : seuls les blocs dont l'objet change
-    re-rendent — le markdown des longs tours n'est pas re-parsé à chaque
-    frappe du composeur ni à chaque delta streamé ailleurs dans le tour. */
-const AgentBlockView = memo(function AgentBlockView({
-  block,
-  onFileRef,
-}: Readonly<{ block: AgentBlock; onFileRef: (ref: string) => void }>) {
-  // Rendu Markdown (GFM) pour le texte de l'assistant uniquement — voir
-  // Markdown.tsx. `.agent-text-block` garde son rôle d'espacement entre
-  // blocs consécutifs (`.agent-text-block + .agent-text-block`, App.css) ;
-  // `.md` y réinitialise `white-space` (hérité en `pre-wrap` depuis
-  // `.chat-bubble`) pour laisser le flux Markdown normal s'appliquer.
-  if (block.type === "text") {
-    return (
-      <div className="agent-text-block">
-        <Markdown content={block.content} onFileRef={onFileRef} />
-      </div>
-    );
-  }
-  if (block.type === "thinking") return <ThinkingBlockView content={block.content} />;
-  return <ToolBlockView block={block} />;
-});
-
-function AgentTurnMeta({ info }: Readonly<{ info: NonNullable<AgentTurn["doneInfo"]> }>) {
-  return (
-    <div className="chat-bubble__usage">
-      {info.usage && (
-        <span>
-          {info.usage.inputTokens} in / {info.usage.outputTokens} out
-        </span>
-      )}
-      {info.totalCostUsd !== null && <span> · ${info.totalCostUsd.toFixed(4)} est.</span>}
-      {info.subtype !== "success" && <span> · {info.subtype}</span>}
-    </div>
-  );
-}
-
-/** Mémoïsé : le brouillon du composeur vit dans l'état de la page — sans
-    memo, chaque frappe re-rendait TOUS les tours (parsing markdown compris,
-    saisie visiblement ralentie sur les longs fils, constaté le 2026-07-31).
-    Exige des props stables : les callbacks passés ici sont des wrappers
-    useCallback+ref (voir le composant page). */
-const AgentTurnView = memo(function AgentTurnView({
-  turn,
-  onFileRef,
-  onReleaseBackground,
-}: Readonly<{
-  turn: AgentTurn;
-  onFileRef: (ref: string) => void;
-  /** Rendre la main pendant l'attente des rapports de tâches de fond (claude.release). */
-  onReleaseBackground?: () => void;
-}>) {
-  if (turn.role === "user") {
-    // Le texte AFFICHÉ n'est jamais le bloc de connaissances injecté — voir
-    // le commentaire de `AgentTurn.displayContent`.
-    const shown = turn.displayContent ?? turn.content;
-    const count = turn.injectedKnowledgeCount ?? 0;
-    return (
-      <div className={`chat-bubble chat-bubble--user${turn.injected ? " chat-bubble--injected" : ""}`}>
-        {/* S3 — demande glissée dans un tour déjà en cours : dite comme telle,
-            sinon on croirait à un tour normal (l'agent n'a pas « redémarré »). */}
-        {turn.injected && <div className="chat-bubble__note">en cours de tour</div>}
-        <div className="chat-bubble__content">{shown}</div>
-        {turn.attachments && turn.attachments.length > 0 && <SentAttachments items={turn.attachments} />}
-        {count > 0 && (
-          <div className="chat-bubble__knowledge-pill">
-            📎 {count} connaissance{count > 1 ? "s" : ""} injectée{count > 1 ? "s" : ""}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const rawBlocks = turn.blocks ?? [];
-  // Pendant le streaming, seul le DERNIER bloc texte peut porter une fence de
-  // code encore ouverte (les blocs précédents sont figés) : on la referme pour
-  // le rendu — voir closeDanglingFence (Markdown.tsx), stabilité du parse.
-  const blocks =
-    turn.status === "streaming"
-      ? rawBlocks.map((b, i) =>
-          i === rawBlocks.length - 1 && b.type === "text" ? { ...b, content: closeDanglingFence(b.content) } : b,
-        )
-      : rawBlocks;
-  return (
-    <div className="chat-bubble chat-bubble--assistant">
-      <div className="chat-bubble__content">
-        {blocks.map((block) => (
-          <AgentBlockView key={block.id} block={block} onFileRef={onFileRef} />
-        ))}
-        {turn.status === "streaming" && <span className="cursor" />}
-        {/* Tâches de fond lancées par le modèle : visibles pendant qu'elles
-            tournent (l'utilisateur sait que ça travaille), signalées si le
-            tour se clôt alors qu'il en restait (interrompues avant terme). */}
-        {turn.backgroundTasks && turn.backgroundTasks.count > 0 && (
-          <div className="chat-bubble__note">
-            {turn.status === "streaming"
-              ? turn.backgroundTasks.waiting
-                ? `Tour terminé — en attente des rapports de ${turn.backgroundTasks.count} tâche(s) de fond…`
-                : `${turn.backgroundTasks.count} tâche(s) de fond en cours`
-              : `Tâche(s) de fond interrompue(s) avant leur terme (${turn.backgroundTasks.count}).`}
-            {turn.status === "streaming" && turn.backgroundTasks.descriptions.length > 0 && (
-              <> : {turn.backgroundTasks.descriptions.join(" · ")}</>
-            )}
-            {/* Rendre la main : clôt le tour sans attendre les rapports (les
-                tâches de fond sont abandonnées — plafond auto par ailleurs,
-                voir BACKGROUND_WAIT_TIMEOUT_MS côté sidecar). */}
-            {turn.status === "streaming" && turn.backgroundTasks.waiting && onReleaseBackground && (
-              <button
-                type="button"
-                className="btn btn--ghost"
-                onClick={onReleaseBackground}
-                title="Clore le tour sans attendre les rapports des tâches de fond (elles seront abandonnées)"
-              >
-                Rendre la main
-              </button>
-            )}
-          </div>
-        )}
-        {/* Fin anormale (limite d'abonnement, max d'étapes…) : message explicite
-            plutôt qu'un `subtype` anglais noyé dans la ligne de tokens. */}
-        {turn.status === "done" && turn.doneInfo && turnSubtypeNotice(turn.doneInfo.subtype) && (
-          <div className="chat-bubble__note chat-bubble__note--strong">
-            {turnSubtypeNotice(turn.doneInfo.subtype)}
-          </div>
-        )}
-        {/* Compaction de contexte : confirmation explicite — c'est tout le
-            « résultat » d'un /compact, qui ne produit aucun texte par ailleurs. */}
-        {turn.compacted && (
-          <div className="chat-bubble__note">
-            {turn.status === "streaming" ? "Compactage du contexte…" : "Contexte compacté"}
-            {turn.compacted.preTokens !== null && ` (${Math.round(turn.compacted.preTokens / 1000)} k tokens avant)`}
-            {turn.status !== "streaming" && " — la session continue sur l'historique résumé."}
-          </div>
-        )}
-        {/* Tour clos sans le moindre contenu : on le DIT, au lieu de laisser une
-            bulle vide qui donne l'impression que l'application est bloquée. */}
-        {turn.status === "done" && !hasVisibleContent(blocks) && !turn.compacted && !turn.continued && (
-          <div className="chat-bubble__note">
-            L'agent a terminé sans produire de réponse (résultat vide du moteur). Renvoyez votre message ;
-            si cela se reproduit, ouvrez une « Nouvelle session ».
-          </div>
-        )}
-      </div>
-      {turn.status === "error" && <div className="chat-bubble__error">Erreur : {turn.errorMessage}</div>}
-      {turn.status === "done" && turn.doneInfo && <AgentTurnMeta info={turn.doneInfo} />}
-      {/* R2 — badge des tours envoyés en « Auto » : tier → modèle, raisons en
-          infobulle (même patron visuel que ChatPage). */}
-      {turn.routeTier && turn.routeModel && (
-        <div className="chat-bubble__route" title={(turn.routeReasons ?? []).join(" · ")}>
-          ⚡ auto : descendant → {turn.routeModel}
-        </div>
-      )}
-      {/* Lecture à voix haute des réponses terminées et non vides — même
-          bouton que dans le chat (voir VoiceControls.tsx). Placé en pied de
-          tour, sous la ligne de tokens : c'est l'équivalent naturel du bas de
-          bulle du chat, et il ne s'intercale pas entre les blocs d'un tour
-          agentique (texte, raisonnement, outils) qui, eux, se lisent dans
-          l'ordre. Seul le texte est lu (voir `spokenTextOfTurn`). */}
-      {turn.status === "done" && spokenTextOfTurn(turn) && <TtsButton text={spokenTextOfTurn(turn)} />}
-    </div>
-  );
-});
-
-/* ---------- Modale de permission ---------- */
-
-interface PermissionRequestItem {
-  targetId: string;
-  permissionId: string;
-  toolName: string;
-  toolInput: unknown;
-  /** Moteur d'origine du tour : détermine claudePermission vs neutralPermission à la réponse. */
-  engine: "claude" | "neutral";
-}
-
-function permissionTitle(item: PermissionRequestItem): string {
-  const input = asRecord(item.toolInput);
-  if ((item.toolName === "Edit" || item.toolName === "edit_file") && typeof input.file_path === "string") {
-    return `Modifier ${input.file_path}`;
-  }
-  if ((item.toolName === "Write" || item.toolName === "write_file") && typeof input.file_path === "string") {
-    return `Créer/écraser ${input.file_path}`;
-  }
-  if (item.toolName === "Bash" || item.toolName === "bash") return "Exécuter une commande";
-  if (isAskQuestionTool(item.toolName)) return "Question de l'agent";
-  return `Autoriser ${item.toolName} ?`;
-}
-
-/* ---------- Question de l'agent : rendu lisible (au lieu du JSON brut) ---------- */
-
-/**
- * Outils dont la « demande de permission » est en réalité une QUESTION posée à
- * l'utilisateur : la modale affiche des choix cliquables et la réponse repart
- * comme résultat de l'outil (voir sidecar/src/askUser.ts).
- *
- * - `mcp__studio__ask_user` : notre outil in-process, le seul en service.
- * - `AskUserQuestion` : l'outil intégré du CLI, désactivé côté sidecar
- *   (`disallowedTools`) parce que non adressable via le SDK — gardé ici pour
- *   qu'un tour venu d'ailleurs reste lisible.
- */
-function isAskQuestionTool(toolName: string): boolean {
-  return toolName === "mcp__studio__ask_user" || toolName === "AskUserQuestion";
-}
-
-interface AskOption {
-  label: string;
-  description: string;
-  preview?: string;
-}
-
-interface AskQuestion {
-  question: string;
-  header: string;
-  multiSelect: boolean;
-  options: AskOption[];
-}
-
-/** Parseur défensif : toute forme inattendue est ignorée plutôt que de casser la modale. */
-function parseAskQuestions(toolInput: unknown): AskQuestion[] {
-  const input = asRecord(toolInput);
-  const raw = Array.isArray(input.questions) ? input.questions : [];
-  const questions: AskQuestion[] = [];
-  for (const entry of raw) {
-    const q = asRecord(entry);
-    if (typeof q.question !== "string" || !q.question) continue;
-    const options: AskOption[] = [];
-    for (const optEntry of Array.isArray(q.options) ? q.options : []) {
-      const o = asRecord(optEntry);
-      if (typeof o.label !== "string" || !o.label) continue;
-      options.push({
-        label: o.label,
-        description: typeof o.description === "string" ? o.description : "",
-        ...(typeof o.preview === "string" && o.preview ? { preview: o.preview } : {}),
-      });
-    }
-    questions.push({
-      question: q.question,
-      header: typeof q.header === "string" ? q.header : "",
-      multiSelect: q.multiSelect === true,
-      options,
-    });
-  }
-  return questions;
-}
-
-/** Séparateur des choix au sein d'UNE question à choix multiple. */
-const ANSWER_SEPARATOR = " ; ";
-
-/** Réponses de l'utilisateur, une entrée par question (clé = texte de la
- *  question) — indispensable avec plusieurs questions : chacune garde son
- *  propre choix, sélectionner dans l'une ne touche plus aux autres. */
-type AskAnswers = Record<string, string>;
-
-/**
- * Réponses libres « Autre », une entrée par question. La CLÉ PRÉSENTE (même
- * avec une valeur vide) signifie « cette question est en réponse libre » —
- * distinct de la valeur vide seule, qui ne dirait pas si le champ est ouvert.
- * Le complément libre global (`note`) répond à côté des questions ; ceci
- * répond À une question précise, quand aucune suggestion ne convient.
- */
-type AskCustomAnswers = Record<string, string>;
-
-/**
- * Réponse effective d'une question : la réponse libre remplace les choix
- * (question à choix unique) ou s'y ajoute (choix multiple — les suggestions
- * cochées restent pertinentes, la précision libre les complète).
- */
-function effectiveAnswer(q: AskQuestion, answers: AskAnswers, customs: AskCustomAnswers): string {
-  const picked = answers[q.question] ?? "";
-  if (!(q.question in customs)) return picked;
-  const custom = customs[q.question].trim();
-  if (!q.multiSelect) return custom;
-  return [picked, custom].filter(Boolean).join(ANSWER_SEPARATOR);
-}
-
-/** Réponses effectives de toutes les questions (choix + réponses libres). */
-function effectiveAnswers(
-  questions: AskQuestion[],
-  answers: AskAnswers,
-  customs: AskCustomAnswers,
-): AskAnswers {
-  const out: AskAnswers = {};
-  for (const q of questions) {
-    const value = effectiveAnswer(q, answers, customs);
-    if (value) out[q.question] = value;
-  }
-  return out;
-}
-
-/** Un choix est « sélectionné » s'il figure dans la réponse de SA question. */
-function isPicked(answerForQuestion: string | undefined, label: string, multiSelect: boolean): boolean {
-  if (!answerForQuestion) return false;
-  return multiSelect ? answerForQuestion.split(ANSWER_SEPARATOR).includes(label) : answerForQuestion === label;
-}
-
-/**
- * Message communiqué à l'agent, composé des réponses de chaque question. Une
- * seule question : la réponse brute (comportement historique). Plusieurs :
- * chaque réponse est préfixée du `header` (ou, à défaut, de la question) pour
- * que l'agent sache à quoi elle se rapporte.
- */
-function composeAskMessage(questions: AskQuestion[], answers: AskAnswers): string {
-  const answered = questions
-    .map((q) => ({ q, a: answers[q.question] }))
-    .filter((x): x is { q: AskQuestion; a: string } => Boolean(x.a));
-  if (answered.length === 0) return "";
-  if (questions.length === 1) return answered[0].a;
-  return answered.map(({ q, a }) => `${q.header || q.question} : ${a}`).join("\n");
-}
-
-function AskUserQuestionBody({
-  questions,
-  answers,
-  customs,
-  onPickAnswer,
-  onToggleCustom,
-  onCustomChange,
-}: Readonly<{
-  questions: AskQuestion[];
-  answers: AskAnswers;
-  customs: AskCustomAnswers;
-  onPickAnswer: (question: string, label: string, multiSelect: boolean) => void;
-  /** Ouvre/ferme la réponse libre de CETTE question. */
-  onToggleCustom: (question: string) => void;
-  onCustomChange: (question: string, text: string) => void;
-}>) {
-  return (
-    <div className="ask-question">
-      {questions.map((q) => (
-        <div key={q.question} className="ask-question__block">
-          <div className="ask-question__head">
-            {q.header && <span className="ask-question__chip">{q.header}</span>}
-            {q.multiSelect && <span className="ask-question__multi">plusieurs choix possibles</span>}
-          </div>
-          <p className="ask-question__text">{q.question}</p>
-          <ul className="ask-question__options">
-            {q.options.map((o) => {
-              const picked = isPicked(answers[q.question], o.label, q.multiSelect);
-              return (
-                <li key={o.label}>
-                  <button
-                    type="button"
-                    className={`ask-question__option${picked ? " ask-question__option--picked" : ""}`}
-                    aria-pressed={picked}
-                    onClick={() => onPickAnswer(q.question, o.label, q.multiSelect)}
-                    title={picked ? "Réponse sélectionnée" : "Utiliser cette réponse"}
-                  >
-                    <span className="ask-question__label">
-                      <span className="ask-question__check" aria-hidden="true">
-                        {picked ? "✓" : ""}
-                      </span>
-                      {o.label}
-                    </span>
-                    {o.description && <span className="ask-question__desc">{o.description}</span>}
-                    {o.preview && <pre className="ask-question__preview">{o.preview}</pre>}
-                  </button>
-                </li>
-              );
-            })}
-            {/* Échappatoire systématique : aucune suggestion ne convient
-                toujours, et terminer le tour pour cause de choix inadapté
-                coûte plus cher que d'écrire la réponse ici. */}
-            <li>
-              {(() => {
-                const open = q.question in customs;
-                return (
-                  <button
-                    type="button"
-                    className={`ask-question__option${open ? " ask-question__option--picked" : ""}`}
-                    aria-pressed={open}
-                    onClick={() => onToggleCustom(q.question)}
-                    title={open ? "Abandonner la réponse libre" : "Répondre autre chose"}
-                  >
-                    <span className="ask-question__label">
-                      <span className="ask-question__check" aria-hidden="true">
-                        {open ? "✓" : ""}
-                      </span>
-                      Autre…
-                    </span>
-                    <span className="ask-question__desc">
-                      {q.multiSelect
-                        ? "Ajouter une réponse à vous, en plus des choix cochés"
-                        : "Aucune suggestion ne convient : écrire la réponse"}
-                    </span>
-                  </button>
-                );
-              })()}
-            </li>
-          </ul>
-          {q.question in customs && (
-            <input
-              type="text"
-              className="ask-question__custom"
-              value={customs[q.question]}
-              onChange={(e) => onCustomChange(q.question, e.currentTarget.value)}
-              placeholder="Votre réponse…"
-              aria-label={`Réponse libre — ${q.header || q.question}`}
-              // Le champ vient d'apparaître sur un clic explicite : y placer le
-              // curseur évite un second clic.
-              autoFocus
-            />
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function PermissionBody({
-  item,
-  answers,
-  customs,
-  onPickAnswer,
-  onToggleCustom,
-  onCustomChange,
-}: Readonly<{
-  item: PermissionRequestItem;
-  answers: AskAnswers;
-  customs: AskCustomAnswers;
-  onPickAnswer: (question: string, label: string, multiSelect: boolean) => void;
-  onToggleCustom: (question: string) => void;
-  onCustomChange: (question: string, text: string) => void;
-}>) {
-  const input = asRecord(item.toolInput);
-
-  if (isAskQuestionTool(item.toolName)) {
-    const questions = parseAskQuestions(item.toolInput);
-    // Forme inattendue : on retombe sur le JSON plutôt que d'afficher un vide.
-    if (questions.length > 0) {
-      return (
-        <AskUserQuestionBody
-          questions={questions}
-          answers={answers}
-          customs={customs}
-          onPickAnswer={onPickAnswer}
-          onToggleCustom={onToggleCustom}
-          onCustomChange={onCustomChange}
-        />
-      );
-    }
-  }
-  if (item.toolName === "Edit" || item.toolName === "edit_file") {
-    return <EditDiff oldString={String(input.old_string ?? "")} newString={String(input.new_string ?? "")} />;
-  }
-  if (item.toolName === "Write" || item.toolName === "write_file") {
-    return <DiffLines text={String(input.content ?? "")} prefix="+ " variant="added" />;
-  }
-  if (item.toolName === "Bash" || item.toolName === "bash") {
-    return (
-      <div className="bash-block">
-        {typeof input.description === "string" && input.description && (
-          <p className="bash-block__desc">{input.description}</p>
-        )}
-        <pre className="bash-block__command">{String(input.command ?? "")}</pre>
-      </div>
-    );
-  }
-  return <pre className="pretty-json">{prettyJson(item.toolInput)}</pre>;
-}
-
-function PermissionModal({
-  item,
-  extraCount,
-  onDecide,
-}: Readonly<{
-  item: PermissionRequestItem;
-  extraCount: number;
-  onDecide: (decision: "allow" | "deny", message: string, rememberTool: boolean) => void;
-}>) {
-  const [reason, setReason] = useState("");
-  const [answers, setAnswers] = useState<AskAnswers>({});
-  const [customs, setCustoms] = useState<AskCustomAnswers>({});
-  const [note, setNote] = useState("");
-  const [rememberTool, setRememberTool] = useState(false);
-  const isAskQuestion = isAskQuestionTool(item.toolName);
-  const askQuestions = isAskQuestion ? parseAskQuestions(item.toolInput) : [];
-
-  // Nouvelle demande affichée : on repart d'un état vierge.
-  useEffect(() => {
-    setReason("");
-    setAnswers({});
-    setCustoms({});
-    setNote("");
-    setRememberTool(false);
-  }, [item.permissionId]);
-
-  /** Ouvre/ferme la réponse libre d'une question. À l'ouverture, en choix
-      unique, le choix suggéré est abandonné : les deux se contrediraient. */
-  function handleToggleCustom(question: string) {
-    const q = askQuestions.find((x) => x.question === question);
-    setCustoms((prev) => {
-      if (question in prev) {
-        const { [question]: _removed, ...rest } = prev;
-        return rest;
-      }
-      return { ...prev, [question]: "" };
-    });
-    if (q && !q.multiSelect && !(question in customs)) {
-      setAnswers((prev) => {
-        const { [question]: _removed, ...rest } = prev;
-        return rest;
-      });
-    }
-  }
-
-  function handleCustomChange(question: string, text: string) {
-    setCustoms((prev) => ({ ...prev, [question]: text }));
-  }
-
-  /** Choix cliqué : remplace la réponse de SA question (choix unique) ou l'y bascule (choix multiple). */
-  function handlePickAnswer(question: string, label: string, multiSelect: boolean) {
-    // Choix unique : cliquer une suggestion ferme la réponse libre ouverte —
-    // sinon la modale afficherait deux réponses contradictoires cochées.
-    if (!multiSelect && question in customs) {
-      setCustoms((prev) => {
-        const { [question]: _removed, ...rest } = prev;
-        return rest;
-      });
-    }
-    setAnswers((prev) => {
-      const current = prev[question];
-      if (!multiSelect) {
-        // Re-cliquer le choix retenu le désélectionne.
-        if (current === label) {
-          const { [question]: _removed, ...rest } = prev;
-          return rest;
-        }
-        return { ...prev, [question]: label };
-      }
-      const parts = current ? current.split(ANSWER_SEPARATOR).filter(Boolean) : [];
-      const index = parts.indexOf(label);
-      if (index >= 0) parts.splice(index, 1);
-      else parts.push(label);
-      if (parts.length === 0) {
-        const { [question]: _removed, ...rest } = prev;
-        return rest;
-      }
-      return { ...prev, [question]: parts.join(ANSWER_SEPARATOR) };
-    });
-  }
-
-  // Message final : réponses composées (une par question) + complément libre
-  // éventuel. Hors question (demande de permission), c'est la raison du refus.
-  // Réponses effectives = choix cochés + réponses libres « Autre » (voir
-  // effectiveAnswers) : c'est ce qui part à l'agent ET ce qui compte comme
-  // « répondu », une réponse libre valant une réponse.
-  const finalAnswers = effectiveAnswers(askQuestions, answers, customs);
-  const composed = composeAskMessage(askQuestions, finalAnswers);
-  const askMessage = [composed, note.trim()].filter(Boolean).join("\n");
-  const decisionMessage = isAskQuestion ? askMessage : reason;
-  // Toutes les questions ont-elles reçu une réponse ? (garde-fou avant envoi.)
-  // Un « Autre… » ouvert mais laissé vide ne compte pas : la question reste
-  // sans réponse, et le bouton d'envoi reste bloqué.
-  const allAnswered = askQuestions.every((q) => Boolean(finalAnswers[q.question]));
-
-  return (
-    <div className="permission-overlay">
-      <div className="permission-modal">
-        <div className="permission-modal__head">
-          <h3>{permissionTitle(item)}</h3>
-          {extraCount > 0 && <span className="permission-modal__badge">+{extraCount} en attente</span>}
-        </div>
-        <div className="permission-modal__body">
-          <PermissionBody
-            item={item}
-            answers={answers}
-            customs={customs}
-            onPickAnswer={handlePickAnswer}
-            onToggleCustom={handleToggleCustom}
-            onCustomChange={handleCustomChange}
-          />
-        </div>
-        {isAskQuestion ? (
-          <div className="field">
-            <label htmlFor="permission-note">Complément libre (optionnel)</label>
-            <input
-              id="permission-note"
-              type="text"
-              value={note}
-              onChange={(e) => setNote(e.currentTarget.value)}
-              placeholder="Précision à ajouter à vos choix ci-dessus…"
-            />
-            {askQuestions.length > 1 && !allAnswered && (
-              <p className="field__hint">Répondez à chaque question ci-dessus avant d'envoyer.</p>
-            )}
-          </div>
-        ) : (
-          <div className="field">
-            <label htmlFor="permission-reason">Raison du refus (optionnel)</label>
-            <input
-              id="permission-reason"
-              type="text"
-              value={reason}
-              onChange={(e) => setReason(e.currentTarget.value)}
-              placeholder="Motif communiqué à l'agent…"
-            />
-          </div>
-        )}
-        {/* « Ne plus demander » n'a pas de sens pour une question posée à
-            l'utilisateur : on la masque dans ce cas. */}
-        {!isAskQuestion && (
-          <label
-            className="permission-modal__remember"
-            title="Les prochaines demandes de cet outil seront autorisées automatiquement, jusqu'à la fermeture de l'application."
-          >
-            <input
-              type="checkbox"
-              checked={rememberTool}
-              onChange={(e) => setRememberTool(e.currentTarget.checked)}
-            />
-            Ne plus demander pour « {item.toolName} » (session en cours)
-          </label>
-        )}
-        <div className="permission-modal__actions">
-          <button type="button" className="btn btn--deny" onClick={() => onDecide("deny", decisionMessage, false)}>
-            {isAskQuestion ? "Ignorer la question" : "Refuser"}
-          </button>
-          <button
-            type="button"
-            className="btn btn--allow"
-            // Question à réponses multiples : on n'envoie pas tant qu'une
-            // question reste sans réponse (l'agent recevrait une réponse
-            // partielle sans savoir laquelle manque).
-            disabled={isAskQuestion && askQuestions.length > 1 && !allAnswered}
-            onClick={() => onDecide("allow", decisionMessage, rememberTool)}
-          >
-            {isAskQuestion ? "Répondre" : "Autoriser"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* ---------- En-tête de page ---------- */
 
@@ -896,602 +190,9 @@ function PermissionModal({
  * (voir resolveAutoRoute) — un modèle explicite choisi = comportement
  * strictement inchangé.
  */
-const AUTO_MODEL = "__auto__";
-
-const MODEL_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "(défaut)" },
-  { value: "claude-fable-5", label: "claude-fable-5" },
-  { value: "claude-sonnet-5", label: "claude-sonnet-5" },
-  { value: "claude-opus-4-8", label: "claude-opus-4-8" },
-  { value: "claude-haiku-4-5", label: "claude-haiku-4-5" },
-];
-
-const PERMISSION_MODE_OPTIONS: { value: PermissionMode; label: string }[] = [
-  { value: "default", label: "Valider chaque action" },
-  { value: "acceptEdits", label: "Éditions auto-acceptées" },
-  { value: "plan", label: "Plan (lecture seule)" },
-  { value: "bypassPermissions", label: "⚠ Autonome (aucune validation)" },
-];
 
 /* ---------- État par projet (Lot Sessions : plusieurs sessions/projet) ---------- */
 
-/** Moteur + modèle choisis pour cette session. `providerId: null` = Claude (abonnement). */
-interface EngineConfig {
-  providerId: string | null;
-  model: string;
-}
-
-function claudeEngine(): EngineConfig {
-  return { providerId: null, model: "" };
-}
-
-/** Référence (nom + portée) vers un agent déclaré — voir orchestrationClient.ts. `null` = mode manuel. */
-interface AgentSelection {
-  name: string;
-  scope: AgentScope;
-}
-
-/**
- * Une session de conversation dans un projet donné : c'est le grain
- * persisté/basculé par le panneau « Sessions » (voir `SidebarSection`
- * « sessions » plus bas). `titleCustom` : `true` dès que l'utilisateur a
- * renommé la session — le titre auto (voir `deriveTitleFromText`,
- * sessionStore.ts) n'est alors plus jamais recalculé.
- *
- * `turns`/`sessionId` restent ici la dernière copie CONNUE (utile tant que la
- * conversation n'a jamais été ouverte cette exécution) — dès qu'elle est
- * ouverte, c'est son `ConvRuntime` (voir plus bas) qui fait foi, y compris en
- * arrière-plan ; `buildLiveSessions` recombine les deux à chaque sauvegarde.
- */
-interface ProjectSession {
-  id: string;
-  title: string;
-  titleCustom: boolean;
-  createdAt: string;
-  updatedAt: string;
-  turns: AgentTurn[];
-  sessionId: string | null;
-  engine: EngineConfig;
-  /** Agent sélectionné pour cette session (sélecteur « LLM » → Agent), `null` = manuel. */
-  selectedAgent: AgentSelection | null;
-  /** R7 — plancher de session du mode Auto (relevé à la hausse uniquement) + dernière cible utilisée (`null` sinon). */
-  routedTier: RouteTier | null;
-  routedTarget: RouteTarget | null;
-}
-
-/**
- * État en mémoire d'un projet : toutes ses sessions, laquelle est « active »
- * (celle dont la config LLM s'affiche/s'édite dans le panneau « LLM »), et
- * les onglets affichés dans la barre principale. `openFiles`/`activeTab`
- * sont désormais PROJET (partagés entre toutes les conversations) — voir le
- * commentaire d'en-tête de fichier : la maquette mélange onglets de
- * conversation et onglets de fichier dans une même barre, ce qui n'aurait
- * aucun sens s'ils restaient dupliqués par session. `activeTab` vaut
- * `convTabId(id)` pour une conversation, ou un chemin de fichier.
- */
-interface ProjectState {
-  sessions: ProjectSession[];
-  activeId: string;
-  openConversationIds: string[];
-  openFiles: OpenFileState[];
-  activeTab: string;
-}
-
-/** Préfixe distinguant un onglet de conversation d'un chemin de fichier dans `activeTab`/`openConversationIds`. */
-const CONV_TAB_PREFIX = "conv:";
-function convTabId(sessionId: string): string {
-  return `${CONV_TAB_PREFIX}${sessionId}`;
-}
-function isConvTab(tab: string): boolean {
-  return tab.startsWith(CONV_TAB_PREFIX);
-}
-function convIdOfTab(tab: string): string {
-  return tab.slice(CONV_TAB_PREFIX.length);
-}
-/** Onglet « vide » : dernier onglet de conversation ET dernier onglet fichier fermés (voir `closeConversationTab`). */
-const EMPTY_TAB = "";
-
-/**
- * État VIF d'une conversation ouverte en onglet. Ce qui était mono-valué
- * quand une seule conversation vivait à la fois (`turns`, `sessionId`,
- * `streaming`…) est désormais porté ici, une instance par conversation
- * ouverte : c'est ce qui permet à un onglet d'arrière-plan de continuer à
- * streamer pendant qu'on lit ou qu'on écrit dans un autre.
- *
- * `activeEngine` fige le moteur RÉELLEMENT utilisé par le tour en cours : le
- * sélecteur de moteur peut changer pendant un streaming, l'abandon
- * (`handleAbort`) doit rester routé vers le bon moteur.
- */
-interface ConvRuntime {
-  turns: AgentTurn[];
-  /** Id de session côté serveur Claude (`null` tant qu'aucun tour n'a été envoyé). */
-  sessionId: string | null;
-  streaming: boolean;
-  /** Id de requête protocolaire du tour en cours (permissions/abandon), `null` hors streaming. */
-  activeRequestId: string | null;
-  activeEngine: "claude" | "neutral";
-  /** Brouillon du composeur — par conversation : on peut taper dans l'une pendant que l'autre travaille. */
-  draft: string;
-  /** Prompts mis en file pendant un streaming, envoyés un par un (ordre d'arrivée) à la fin de chaque tour. */
-  queuedPrompts: string[];
-  mcpUsage: Record<string, { calls: number; lastTool: string }>;
-  /** R7 — plancher de session du mode Auto (miroir vif de `ProjectSession.routedTier`/`routedTarget`). */
-  routedTier: RouteTier | null;
-  routedTarget: RouteTarget | null;
-  /** Raisons du classement (infobulle des tours suivants) — non persistées. */
-  routedReasons: string[] | null;
-  /** R3 — bandeau de débord du DERNIER tour envoyé (éphémère, jamais persisté — voir ChatPage.tsx). */
-  debordNotice: DebordNotice | null;
-  /**
-   * « Arrêter » cliqué pendant la phase de PRÉ-ENVOI (routage Auto, lecture
-   * des connaissances — avant tout claude.start/neutral.start) : le point de
-   * contrôle de `handleSend` abandonne alors le tour proprement, sans envoi.
-   */
-  preSendAbort: boolean;
-}
-
-/** R3 — contenu du bandeau de débord (même contrat que ChatPage.tsx). */
-interface DebordNotice {
-  blocked: boolean;
-  fiveHourPct: number | null;
-  /** Modèle payant réellement utilisé quand le débord est actif. */
-  model: string;
-  /** Plafond configuré (affiché quand le débord est bloqué), `null` = sans plafond. */
-  plafondUsdMois: number | null;
-  /** Vrai = cible de débord non déclarée dans la table des fournisseurs : tour resté sur l'abonnement. */
-  unconfigured?: boolean;
-}
-
-function freshRuntime(
-  turns: AgentTurn[] = [],
-  sessionId: string | null = null,
-  routedTier: RouteTier | null = null,
-  routedTarget: RouteTarget | null = null,
-): ConvRuntime {
-  return {
-    turns,
-    sessionId,
-    streaming: false,
-    activeRequestId: null,
-    activeEngine: "claude",
-    draft: "",
-    queuedPrompts: [],
-    mcpUsage: {},
-    routedTier,
-    routedTarget,
-    routedReasons: null,
-    debordNotice: null,
-    preSendAbort: false,
-  };
-}
-
-function freshSession(): ProjectSession {
-  return {
-    ...newSessionMeta(),
-    turns: [],
-    sessionId: null,
-    engine: claudeEngine(),
-    selectedAgent: null,
-    routedTier: null,
-    routedTarget: null,
-  };
-}
-
-function emptyProjectState(): ProjectState {
-  const session = freshSession();
-  return { sessions: [session], activeId: session.id, openConversationIds: [session.id], openFiles: [], activeTab: convTabId(session.id) };
-}
-
-/* ---------- Persistance (Lot 3, étendu Lot Sessions) ---------- */
-
-const CONVERSATIONS_STATE_KEY = "project-conversations";
-/** Dernier projet ouvert : réouvert au démarrage suivant (voir l'effet de sélection initiale). */
-const LAST_PROJECT_STATE_KEY = "last-project";
-const MAX_PERSISTED_TURNS = 200;
-const MAX_SESSIONS_PER_PROJECT = 30;
-const SAVE_DEBOUNCE_MS = 1500;
-
-/** Forme persistée d'une session — les CHEMINS des fichiers ouverts vivent désormais au niveau PROJET, voir `PersistedProjectEntry`. */
-interface PersistedSession {
-  id: string;
-  title: string;
-  titleCustom: boolean;
-  createdAt: string;
-  updatedAt: string;
-  turns: AgentTurn[];
-  sessionId: string | null;
-  /** Absent (sessions antérieures au Lot 6) = Claude (abonnement), voir `sessionStateFromPersisted`. */
-  engine?: EngineConfig;
-  /** Absent (sessions antérieures à la phase O2) = mode manuel, voir `sessionStateFromPersisted`. */
-  selectedAgent?: AgentSelection | null;
-  /** R2 — absents (sessions antérieures) = aucune affinité de routage, voir `sessionStateFromPersisted`. */
-  routedTier?: RouteTier | null;
-  routedTarget?: RouteTarget | null;
-}
-
-/**
- * Forme persistée d'un projet (Lot Onglets multiples) : plusieurs sessions +
- * laquelle est active, plus les onglets réellement affichés — `openFilePaths`/
- * `activeTab` étaient PAR SESSION avant ce lot (voir `OldMultiSessionEntry`
- * ci-dessous, migrée transparemment par `migrateOldMultiSessionEntry`).
- */
-interface PersistedProjectEntry {
-  sessions: PersistedSession[];
-  activeId: string;
-  /** Sessions ouvertes en onglet (voir `openConversationIds` de `ProjectState`). */
-  openConversationIds: string[];
-  openFilePaths: string[];
-  activeTab: string;
-}
-
-type PersistedConversations = Record<string, PersistedProjectEntry>;
-
-/**
- * Ancienne forme (avant le Lot Sessions) : UNE seule conversation par projet,
- * pas de tableau `sessions` — voir `migrateLegacyProjectState`, appelée par
- * `sanitizePersistedConversations` pour migrer transparemment au chargement.
- */
-interface LegacyPersistedProjectState {
-  turns: AgentTurn[];
-  sessionId: string | null;
-  openFilePaths: string[];
-  activeTab: string;
-  updatedAt: string;
-  engine?: EngineConfig;
-}
-
-/**
- * Forme intermédiaire (Lot Sessions, avant le Lot Onglets multiples) :
- * plusieurs sessions, mais `openFilePaths`/`activeTab` PAR SESSION plutôt que
- * par projet — voir `migrateOldMultiSessionEntry`.
- */
-interface OldPersistedSession {
-  id: string;
-  title: string;
-  titleCustom: boolean;
-  createdAt: string;
-  updatedAt: string;
-  turns: AgentTurn[];
-  sessionId: string | null;
-  openFilePaths: string[];
-  activeTab: string;
-  engine?: EngineConfig;
-  selectedAgent?: AgentSelection | null;
-}
-
-interface OldMultiSessionEntry {
-  sessions: OldPersistedSession[];
-  activeId: string;
-}
-
-function isEngineConfig(value: unknown): value is EngineConfig {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (typeof v.providerId === "string" || v.providerId === null) && typeof v.model === "string";
-}
-
-function isAgentSelection(value: unknown): value is AgentSelection {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.name === "string" &&
-    !!v.name &&
-    (v.scope === "project" || v.scope === "global" || v.scope === "claude-code")
-  );
-}
-
-/**
- * Valide une sélection d'agent persistée contre la liste vivante du même
- * projet (bascule ENTRE SESSIONS d'un même projet — `list` déjà à jour dans
- * ce cas, contrairement à une bascule de projet où `loadProjectAgents`
- * s'en charge de façon asynchrone). Agent introuvable → retombe sur `null`.
- */
-function resolveAgentSelection(key: AgentSelection | null, list: AgentInfo[]): AgentSelection | null {
-  if (!key) return null;
-  return list.some((a) => a.name === key.name && a.scope === key.scope) ? key : null;
-}
-
-/** Valeur d'`<option>` encodant portée + nom (un nom peut se répéter entre portées). */
-function agentOptionValue(a: { scope: AgentScope; name: string }): string {
-  return `${a.scope}::${a.name}`;
-}
-
-/** Champs communs id/titre/tours/agent aux trois formes de session persistée (nouvelle et ancienne). */
-function hasCommonSessionFields(v: Record<string, unknown>): boolean {
-  return (
-    typeof v.id === "string" &&
-    typeof v.title === "string" &&
-    typeof v.titleCustom === "boolean" &&
-    typeof v.createdAt === "string" &&
-    typeof v.updatedAt === "string" &&
-    Array.isArray(v.turns) &&
-    (typeof v.sessionId === "string" || v.sessionId === null) &&
-    (v.engine === undefined || isEngineConfig(v.engine)) &&
-    (v.selectedAgent === undefined || v.selectedAgent === null || isAgentSelection(v.selectedAgent)) &&
-    // R2 — affinité de routage : optionnelle, et RÉPARÉE en amont par
-    // `withRoutingRepair` (une valeur hors vocabulaire est retirée avant
-    // d'arriver ici — ces deux lignes ne restent que par défense en
-    // profondeur, elles ne doivent JAMAIS invalider une session réelle).
-    (v.routedTier === undefined || v.routedTier === null || isRouteTier(v.routedTier)) &&
-    (v.routedTarget === undefined || v.routedTarget === null || toRouteTarget(v.routedTarget) !== null)
-  );
-}
-
-function isPersistedSession(value: unknown): value is PersistedSession {
-  if (typeof value !== "object" || value === null) return false;
-  return hasCommonSessionFields(value as Record<string, unknown>);
-}
-
-function isOldPersistedSession(value: unknown): value is OldPersistedSession {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    hasCommonSessionFields(v) &&
-    Array.isArray(v.openFilePaths) &&
-    v.openFilePaths.every((p) => typeof p === "string") &&
-    typeof v.activeTab === "string"
-  );
-}
-
-/** Forme ACTUELLE (Lot Onglets multiples) : onglets au niveau projet, distingués de l'ancienne forme par leur présence. */
-function isPersistedProjectEntry(value: unknown): value is PersistedProjectEntry {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    Array.isArray(v.sessions) &&
-    v.sessions.length > 0 &&
-    v.sessions.every(isPersistedSession) &&
-    typeof v.activeId === "string" &&
-    Array.isArray(v.openConversationIds) &&
-    v.openConversationIds.every((id) => typeof id === "string") &&
-    Array.isArray(v.openFilePaths) &&
-    v.openFilePaths.every((p) => typeof p === "string") &&
-    typeof v.activeTab === "string"
-  );
-}
-
-/** Forme intermédiaire (Lot Sessions) : onglets encore PAR SESSION, pas de champs projet — voir `migrateOldMultiSessionEntry`. */
-function isOldMultiSessionEntry(value: unknown): value is OldMultiSessionEntry {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return Array.isArray(v.sessions) && v.sessions.length > 0 && v.sessions.every(isOldPersistedSession) && typeof v.activeId === "string";
-}
-
-function isLegacyPersistedProjectState(value: unknown): value is LegacyPersistedProjectState {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    Array.isArray(v.turns) &&
-    (typeof v.sessionId === "string" || v.sessionId === null) &&
-    Array.isArray(v.openFilePaths) &&
-    v.openFilePaths.every((p) => typeof p === "string") &&
-    typeof v.activeTab === "string" &&
-    typeof v.updatedAt === "string" &&
-    (v.engine === undefined || isEngineConfig(v.engine))
-  );
-}
-
-/** Titre auto d'une session depuis ses tours (premier message utilisateur, voir sessionStore.ts). */
-function deriveSessionTitle(turns: AgentTurn[]): string {
-  const firstUser = turns.find((t) => t.role === "user");
-  return deriveTitleFromText(firstUser?.displayContent ?? firstUser?.content ?? "");
-}
-
-/** Migre une conversation « ancienne forme » (pré-Lot Sessions) en une session unique, ouverte en onglet — rien n'est perdu. */
-function migrateLegacyProjectState(legacy: LegacyPersistedProjectState): PersistedProjectEntry {
-  const session: PersistedSession = {
-    id: crypto.randomUUID(),
-    title: deriveSessionTitle(legacy.turns),
-    titleCustom: false,
-    createdAt: legacy.updatedAt,
-    updatedAt: legacy.updatedAt,
-    turns: legacy.turns,
-    sessionId: legacy.sessionId,
-    engine: legacy.engine,
-  };
-  return {
-    sessions: [session],
-    activeId: session.id,
-    openConversationIds: [session.id],
-    openFilePaths: legacy.openFilePaths,
-    activeTab: legacy.activeTab === "conversation" ? convTabId(session.id) : legacy.activeTab,
-  };
-}
-
-/**
- * Migre une entrée « Lot Sessions » (onglets fichiers/actif PAR SESSION) vers
- * la forme actuelle (onglets au niveau PROJET) : on reprend les onglets
- * fichiers/l'onglet actif de la session qui était active — les onglets des
- * AUTRES sessions de l'ancienne forme sont perdus (ils dupliquaient de toute
- * façon rarement des fichiers différents en pratique), mais aucun TOUR n'est
- * perdu. Seule la session active rouvre en onglet ; les autres restent
- * consultables depuis le panneau « Sessions ».
- */
-function migrateOldMultiSessionEntry(old: OldMultiSessionEntry): PersistedProjectEntry {
-  const activeSession = old.sessions.find((s) => s.id === old.activeId) ?? old.sessions[0];
-  return {
-    sessions: old.sessions.map(({ openFilePaths: _openFilePaths, activeTab: _activeTab, ...rest }) => rest),
-    activeId: activeSession.id,
-    openConversationIds: [activeSession.id],
-    openFilePaths: activeSession.openFilePaths,
-    activeTab: activeSession.activeTab === "conversation" ? convTabId(activeSession.id) : activeSession.activeTab,
-  };
-}
-
-/**
- * RÉPARE les champs d'affinité de routage (R2) d'une session brute AVANT
- * validation — même principe que `withRoutingDefaults` côté ChatPage.tsx : une
- * valeur hors vocabulaire (document altéré, ancienne version) est simplement
- * RETIRÉE, la session est conservée SANS affinité. Sans cette réparation,
- * `hasCommonSessionFields` invalidait la session, et avec elle l'ENTRÉE
- * PROJET entière (historique perdu) — inacceptable pour des champs purement
- * optionnels.
- */
-function withRoutingRepair(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  const v = value as Record<string, unknown>;
-  if (v.routedTier === undefined && v.routedTarget === undefined) return value;
-  return {
-    ...v,
-    routedTier: isRouteTier(v.routedTier) ? v.routedTier : null,
-    routedTarget: toRouteTarget(v.routedTarget),
-  };
-}
-
-/** Applique `withRoutingRepair` à chaque session d'une entrée projet brute (formes avec tableau `sessions`). */
-function withSessionsRoutingRepair(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  const v = value as Record<string, unknown>;
-  if (!Array.isArray(v.sessions)) return value;
-  return { ...v, sessions: v.sessions.map(withRoutingRepair) };
-}
-
-/**
- * Valide défensivement le document lu du disque (peut être `{}`, absent, ou
- * corrompu) et MIGRE au passage toute entrée encore à une forme antérieure
- * (avant le Lot Sessions, ou avant le Lot Onglets multiples) — voir
- * `migrateLegacyProjectState`/`migrateOldMultiSessionEntry`. Une entrée qui
- * ne correspond à aucune forme connue est silencieusement ignorée (comme
- * avant ce lot). L'ordre des essais compte : la forme actuelle en premier
- * (le cas le plus fréquent une fois ce lot déployé), la plus ancienne en
- * dernier. Les champs d'affinité de routage sont RÉPARÉS avant validation
- * (voir `withRoutingRepair`) : jamais une invalidation d'entrée pour eux.
- */
-/**
- * Réattribue un id frais à tout tour (et bloc) dont l'id est déjà porté par un
- * tour vu AVANT lui — dans la même session ou dans n'importe quelle autre :
- * `seenTurns`/`seenBlocks` sont PARTAGÉS sur tout le document, car les
- * doublons constatés (2026-08-04 : 122 ids partagés entre sessions de rdpl,
- * `u-1`/`a-2` dans presque chaque conversation) sont inter-sessions — le
- * compteur d'ids repartait de zéro à chaque lancement. Or le fil rend toutes
- * les conversations dans le MÊME composant : au changement d'onglet, React
- * réconcilie par clé, et deux tours de conversations différentes portant la
- * même clé se font « réutiliser » — c'est le fantôme d'une ancienne
- * conversation dans un onglet neuf. On répare à la lecture, une fois pour
- * toutes (la prochaine sauvegarde persiste les ids corrigés).
- */
-function dedupeTurnIds(turns: AgentTurn[], seenTurns: Set<string>, seenBlocks: Set<string>): AgentTurn[] {
-  return turns.map((t) => {
-    let turn = seenTurns.has(t.id) ? { ...t, id: nextId(t.role === "user" ? "u" : "a") } : t;
-    seenTurns.add(turn.id);
-    if (turn.blocks) {
-      turn = {
-        ...turn,
-        blocks: turn.blocks.map((b) => {
-          const block = seenBlocks.has(b.id) ? { ...b, id: nextId("blk") } : b;
-          seenBlocks.add(block.id);
-          return block;
-        }),
-      };
-    }
-    return turn;
-  });
-}
-
-/** Applique `dedupeTurnIds` aux sessions d'une entrée, avec les « déjà vus » du document entier. */
-function withDedupedTurnIds(
-  entry: PersistedProjectEntry,
-  seenTurns: Set<string>,
-  seenBlocks: Set<string>,
-): PersistedProjectEntry {
-  return { ...entry, sessions: entry.sessions.map((s) => ({ ...s, turns: dedupeTurnIds(s.turns, seenTurns, seenBlocks) })) };
-}
-
-function sanitizePersistedConversations(raw: unknown): PersistedConversations {
-  if (typeof raw !== "object" || raw === null) return {};
-  const out: PersistedConversations = {};
-  // Unicité GLOBALE des ids de tours/blocs — voir dedupeTurnIds : les
-  // collisions à réparer sont inter-sessions et inter-projets.
-  const seenTurns = new Set<string>();
-  const seenBlocks = new Set<string>();
-  for (const [id, rawValue] of Object.entries(raw as Record<string, unknown>)) {
-    const value = withSessionsRoutingRepair(rawValue);
-    if (isPersistedProjectEntry(value)) {
-      out[id] = withDedupedTurnIds(value, seenTurns, seenBlocks);
-    } else if (isOldMultiSessionEntry(value)) {
-      out[id] = withDedupedTurnIds(migrateOldMultiSessionEntry(value), seenTurns, seenBlocks);
-    } else if (isLegacyPersistedProjectState(value)) {
-      out[id] = withDedupedTurnIds(migrateLegacyProjectState(value), seenTurns, seenBlocks);
-    }
-  }
-  return out;
-}
-
-/**
- * Sérialise une `ProjectSession` en vue de la persistance : borne aux 200
- * derniers tours, et exclut tout tour encore `streaming` (jamais persisté
- * dans cet état — un tour interrompu au milieu perd juste son contenu
- * partiel, les tours précédents restent intacts). Le titre auto est
- * recalculé à chaque sauvegarde tant qu'il n'a pas été personnalisé. Les
- * pièces jointes perdent leur aperçu (`toAttachmentRefs`) : conformément au
- * contrat, seuls `kind`/`name` survivent sur disque.
- */
-function buildPersistedSession(session: ProjectSession): PersistedSession {
-  const persistableTurns = session.turns
-    .filter((t) => t.status !== "streaming")
-    .slice(-MAX_PERSISTED_TURNS)
-    .map((t) => (t.attachments ? { ...t, attachments: toAttachmentRefs(t.attachments) } : t));
-  return {
-    id: session.id,
-    title: session.titleCustom ? session.title : deriveSessionTitle(persistableTurns),
-    titleCustom: session.titleCustom,
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-    turns: persistableTurns,
-    sessionId: session.sessionId,
-    engine: session.engine,
-    selectedAgent: session.selectedAgent,
-    routedTier: session.routedTier,
-    routedTarget: session.routedTarget,
-  };
-}
-
-/**
- * Sérialise un `ProjectState` complet : plafonne le nombre de sessions
- * conservées (voir `capSessions`, sessionStore.ts) — `openConversationIds`
- * est filtré en cohérence (jamais une référence à une session tombée hors
- * plafond), avec un repli sur `[activeId]` si ce filtrage le viderait
- * entièrement (jamais zéro onglet de conversation persisté alors qu'une
- * session active existe).
- */
-function buildPersistedEntry(state: ProjectState): PersistedProjectEntry {
-  const keptSessions = capSessions(state.sessions, state.activeId, MAX_SESSIONS_PER_PROJECT);
-  const keptIds = new Set(keptSessions.map((s) => s.id));
-  const openConversationIds = state.openConversationIds.filter((id) => keptIds.has(id));
-  return {
-    sessions: keptSessions.map(buildPersistedSession),
-    activeId: state.activeId,
-    openConversationIds: openConversationIds.length > 0 ? openConversationIds : [state.activeId],
-    openFilePaths: state.openFiles.map((f) => f.path),
-    activeTab: state.activeTab,
-  };
-}
-
-/** Reconstruit une `ProjectSession` en mémoire depuis une entrée persistée (tours/id de session serveur — plus d'onglets, désormais au niveau projet). */
-function sessionStateFromPersisted(entry: PersistedSession): ProjectSession {
-  return {
-    id: entry.id,
-    title: entry.title,
-    titleCustom: entry.titleCustom,
-    createdAt: entry.createdAt,
-    updatedAt: entry.updatedAt,
-    turns: entry.turns,
-    sessionId: entry.sessionId,
-    engine: entry.engine ?? claudeEngine(),
-    selectedAgent: entry.selectedAgent ?? null,
-    // R2 — assainissement défensif (valeurs corrompues → aucune affinité).
-    routedTier: isRouteTier(entry.routedTier) ? entry.routedTier : null,
-    routedTarget: toRouteTarget(entry.routedTarget),
-  };
-}
-
-/**
- * Reconstruit les onglets FICHIER (niveau projet) depuis leurs chemins
- * persistés : redeviennent des onglets à l'état `loading` (contenu vide, pas
- * encore lu), chemin ajouté à `pendingLazy` — c'est `triggerLazyLoad` (dans
- * le composant) qui déclenchera le `fsReadFile` réel, au moment où l'onglet
- * devient actif.
- */
 function openFilesFromPaths(paths: string[], pendingLazy: Set<string>): OpenFileState[] {
   return paths.map((path) => {
     pendingLazy.add(path);
@@ -1528,93 +229,6 @@ function projectStateFromPersisted(entry: PersistedProjectEntry, pendingLazy: Se
   return { sessions, activeId, openConversationIds, openFiles, activeTab };
 }
 
-/* ---------- Connaissances (documents épinglés par projet) ---------- */
-
-const KNOWLEDGE_STATE_KEY = "project-knowledge";
-const KNOWLEDGE_DOC_MAX_CHARS = 30_000;
-const KNOWLEDGE_TOTAL_MAX_CHARS = 120_000;
-
-/**
- * R5 — mode RAG (docs/spec-r5-rag.md §4) : en mode `connaissances.mode: "rag"`
- * (réglage par projet, voir projectAdmin.ts), AUCUNE injection intégrale au
- * 1er tour — cette ligne système la remplace, et l'outil `search_knowledge`
- * est proposé dans les deux moteurs (palette du moteur neutre ; serveur MCP
- * in-process `mcp__iaction__search_knowledge` côté Claude, activé par le
- * sidecar quand l'index du projet existe).
- */
-const RAG_SYSTEM_LINE = "Des connaissances projet sont indexées — utilise l'outil search_knowledge.";
-
-interface PinnedDoc {
-  path: string;
-  name: string;
-}
-
-type KnowledgeDoc = Record<string, PinnedDoc[]>;
-
-function isPinnedDoc(value: unknown): value is PinnedDoc {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return typeof v.path === "string" && typeof v.name === "string";
-}
-
-/** Valide défensivement le document lu du disque (même esprit que `sanitizePersistedConversations`). */
-function sanitizeKnowledgeDoc(raw: unknown): KnowledgeDoc {
-  if (typeof raw !== "object" || raw === null) return {};
-  const out: KnowledgeDoc = {};
-  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (Array.isArray(value) && value.every(isPinnedDoc)) out[id] = value;
-  }
-  return out;
-}
-
-/**
- * Fusionne le document disque avec l'état local courant (StrictMode-safe) :
- * un épinglage déjà fait localement AVANT que la lecture disque ne se
- * termine ne doit jamais être perdu — le disque ne fait qu'ajouter ce qu'il
- * a de plus, jamais retirer ce qui est déjà affiché.
- */
-function mergeKnowledgeDocs(disk: KnowledgeDoc, local: KnowledgeDoc): KnowledgeDoc {
-  const ids = new Set([...Object.keys(disk), ...Object.keys(local)]);
-  const out: KnowledgeDoc = {};
-  for (const id of ids) {
-    const merged = [...(disk[id] ?? [])];
-    for (const item of local[id] ?? []) {
-      if (!merged.some((d) => d.path === item.path)) merged.push(item);
-    }
-    out[id] = merged;
-  }
-  return out;
-}
-
-/** Chemin d'un document épinglé, relatif à la racine du projet (tel qu'affiché dans le bloc injecté). */
-function relativeToProject(path: string, root: string): string {
-  if (root && path.startsWith(root)) {
-    const rest = path.slice(root.length).replace(/^\/+/, "");
-    return rest || path;
-  }
-  return path;
-}
-
-/**
- * Concatène plusieurs listes de documents en dédoublonnant par `path` (le
- * premier qui apparaît gagne) — utilisé pour fusionner épinglées + auto
- * (`.iaction/connaissances/`) dans une seule liste à injecter/compter, sans
- * jamais injecter deux fois le même fichier s'il est à la fois épinglé et
- * présent dans le dossier auto.
- */
-function dedupDocsByPath(lists: PinnedDoc[][]): PinnedDoc[] {
-  const seen = new Set<string>();
-  const out: PinnedDoc[] = [];
-  for (const list of lists) {
-    for (const doc of list) {
-      if (seen.has(doc.path)) continue;
-      seen.add(doc.path);
-      out.push(doc);
-    }
-  }
-  return out;
-}
-
 /* ---------- Menu contextuel de l'arbre : renommer/supprimer (voir FileTree.tsx) ---------- */
 
 /** `path` égal à `target`, ou situé dedans (`target` renommé/supprimé était un DOSSIER). */
@@ -1627,41 +241,6 @@ function renamedPath(path: string, oldPath: string, newPath: string): string {
   if (path === oldPath) return newPath;
   if (path.startsWith(`${oldPath}/`)) return newPath + path.slice(oldPath.length);
   return path;
-}
-
-/**
- * Construit le bloc « connaissances » préfixé au message ENVOYÉ au premier
- * tour d'une session (voir `handleSend`) — `docs` est la liste déjà fusionnée
- * épinglées + auto (`injectedKnowledge`, voir `dedupDocsByPath`), traitée de
- * façon strictement identique quelle que soit l'origine. Chaque document est
- * tronqué individuellement à `KNOWLEDGE_DOC_MAX_CHARS` ; une fois le budget
- * total `KNOWLEDGE_TOTAL_MAX_CHARS` atteint, les documents suivants ne sont
- * même plus lus (juste listés comme non injectés). Une erreur de lecture
- * n'est jamais fatale : le document est marqué « illisible » et on continue.
- */
-async function buildKnowledgeBlock(docs: PinnedDoc[], root: string): Promise<string> {
-  const sections: string[] = [];
-  let totalUsed = 0;
-  for (const doc of docs) {
-    const rel = relativeToProject(doc.path, root);
-    if (totalUsed >= KNOWLEDGE_TOTAL_MAX_CHARS) {
-      sections.push(`--- ${rel} ---\n[non injecté : budget dépassé]`);
-      continue;
-    }
-    let content: string;
-    try {
-      const fc = await fsReadFile(doc.path);
-      content = fc.kind === "text" ? (fc.text ?? "") : "[illisible]";
-    } catch {
-      content = "[illisible]";
-    }
-    if (content !== "[illisible]" && content.length > KNOWLEDGE_DOC_MAX_CHARS) {
-      content = `${content.slice(0, KNOWLEDGE_DOC_MAX_CHARS)}\n[… tronqué]`;
-    }
-    totalUsed += content.length;
-    sections.push(`--- ${rel} ---\n${content}`);
-  }
-  return `Documents de connaissances du projet :\n\n${sections.join("\n")}\n\n---\n\n`;
 }
 
 /* ---------- Page ---------- */
@@ -1821,12 +400,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
 
   // Modèles du fournisseur neutre actif (pattern de ChatPage.tsx) — non
   // pertinent/vide tant que `engineProviderId` est `null` (Claude).
-  const [neutralModels, setNeutralModels] = useState<ModelInfo[]>([]);
+  const [neutralModels, setNeutralModels] = useState<ModelDetail[]>([]);
   const [neutralModelsState, setNeutralModelsState] = useState<"idle" | "loading" | "error">("idle");
   const [neutralModelsError, setNeutralModelsError] = useState("");
-  // Favoris du fournisseur neutre actif (voir modelCatalog.ts) : remontés en tête
-  // du sélecteur de modèle, préfixés « ★ ». Sans effet côté Claude (abonnement).
-  const [neutralFeaturedIds, setNeutralFeaturedIds] = useState<string[]>([]);
+  // Favoris du fournisseur neutre actif : groupe « Favoris » en tête du
+  // sélecteur. Sans effet côté Claude (abonnement), qui n'a pas de catalogue.
+  const [neutralFeaturedIds, basculerFavoriNeutre] = useFavorisModeles(engineProviderId);
 
   // Sessions du projet COURANT — voir le commentaire détaillé plus bas
   // (juste avant `permissionQueue`) : ces deux déclarations doivent précéder
@@ -1873,21 +452,15 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * le seul bout d'état React de ce mécanisme : il force un nouveau rendu à
    * chaque mutation (n'importe quelle conversation), pour que le point « ● »
    * d'un onglet en arrière-plan et le contenu affiché de la conversation
-   * active restent à jour — la DONNÉE elle-même vit dans `runtimesRef.current`,
+   * active restent à jour — la DONNÉE elle-même vit dans le dépôt de runtimes,
    * lu à chaque rendu (`getRuntime`), jamais dans un `useState` séparé (qui
    * imposerait de recréer la Map entière à chaque delta de streaming).
    */
-  const runtimesRef = useRef<Map<string, ConvRuntime>>(new Map());
-  const [runtimeTick, setRuntimeTick] = useState(0);
+  const { depot: runtimes, tick: runtimeTick } = useConversationRuntime<ConvRuntime>(freshRuntime);
 
   /** Runtime vif d'une conversation — créé vierge à la volée si absent (première fois qu'on le lit). */
   function getRuntime(convId: string): ConvRuntime {
-    let r = runtimesRef.current.get(convId);
-    if (!r) {
-      r = freshRuntime();
-      runtimesRef.current.set(convId, r);
-    }
-    return r;
+    return runtimes.lire(convId);
   }
 
   /**
@@ -1900,18 +473,14 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   function ensureRuntime(
     session: Pick<ProjectSession, "id" | "turns" | "sessionId" | "routedTier" | "routedTarget">,
   ) {
-    if (!runtimesRef.current.has(session.id)) {
-      runtimesRef.current.set(
-        session.id,
-        freshRuntime(session.turns, session.sessionId, session.routedTier, session.routedTarget),
-      );
-    }
+    runtimes.amorcer(session.id, () =>
+      freshRuntime(session.turns, session.sessionId, session.routedTier, session.routedTarget),
+    );
   }
 
   /** Écrit dans le runtime d'UNE conversation précise et force un nouveau rendu (voir le commentaire ci-dessus). */
   function updateRuntime(convId: string, updater: (prev: ConvRuntime) => ConvRuntime) {
-    runtimesRef.current.set(convId, updater(getRuntime(convId)));
-    setRuntimeTick((t) => t + 1);
+    runtimes.ecrire(convId, updater);
   }
 
   /** Variante ciblée sur les tours — remplace l'ancien `updateTurns` mono-conversation, désormais paramétré par `convId`. */
@@ -1978,13 +547,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // rattrapage débouncé, au lieu d'un re-rendu de page par caractère. Déclaré
   // AVANT l'effet de curseur ci-dessous : la valeur doit être poussée dans le
   // DOM avant qu'on y pose `setSelectionRange`.
-  const { onComposerChange, onComposerBlur } = useComposerLiveDraft({
+  const { onComposerChange, brouillonVide } = useComposerLiveDraft({
     textareaRef,
     draft,
     writeDraft: (value) => {
-      if (activeSessionId) runtimesRef.current.set(activeSessionId, { ...getRuntime(activeSessionId), draft: value });
+      if (activeSessionId) runtimes.poser(activeSessionId, { ...getRuntime(activeSessionId), draft: value });
     },
-    tick: () => setRuntimeTick((t) => t + 1),
   });
   // Ctrl+Z/Ctrl+Maj+Z dans le composeur : pile d'annulation maison, le natif
   // étant cassé par les écritures programmatiques du brouillon (voir useComposerUndo.ts).
@@ -2041,7 +609,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // `sessions`/`activeSessionId` sont déclarés PLUS HAUT (le bloc runtime par
   // conversation en dépend). `sessions` porte la dernière copie connue des
   // champs lourds de chaque conversation ; les conversations OUVERTES en
-  // onglet ont, elles, un runtime vif dans `runtimesRef` qui prime — voir
+  // onglet ont, elles, un runtime vif dans le dépôt de runtimes qui prime — voir
   // `buildLiveSessions`, qui recombine les deux à chaque sauvegarde.
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingSessionTitle, setEditingSessionTitle] = useState("");
@@ -2095,53 +663,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       });
   }, []);
 
-  // Connaissances (documents épinglés par projet, panneau latéral) : chargées
-  // une seule fois au montage (StrictMode-safe, même famille de pattern que
-  // le chargement de `project-conversations` ci-dessus) — le document COMPLET
-  // (toutes projets) est gardé en state, la liste du projet courant en étant
-  // simplement dérivée (`knowledgeDoc[selectedProjectId]`), pas de mirroring
-  // supplémentaire à synchroniser au changement de projet.
-  const knowledgeInitRef = useRef(false);
-  const [knowledgeDoc, setKnowledgeDoc] = useState<KnowledgeDoc>({});
-  useEffect(() => {
-    if (knowledgeInitRef.current) return;
-    knowledgeInitRef.current = true;
-    stateRead<unknown>(KNOWLEDGE_STATE_KEY)
-      .then((raw) => {
-        const disk = sanitizeKnowledgeDoc(raw);
-        // Fusion (jamais un écrasement) : voir le commentaire de `mergeKnowledgeDocs`.
-        setKnowledgeDoc((local) => mergeKnowledgeDocs(disk, local));
-      })
-      .catch(() => {
-        // best effort : sans document, la liste reste vide (aucune connaissance épinglée)
-      });
-  }, []);
-
-  const pinnedKnowledge = selectedProjectId ? (knowledgeDoc[selectedProjectId] ?? []) : [];
-
-  function pinKnowledge(path: string, name: string) {
-    if (!selectedProjectId) return;
-    setKnowledgeDoc((prev) => {
-      const list = prev[selectedProjectId] ?? [];
-      if (list.some((d) => d.path === path)) return prev; // pas de doublon (même chemin → ignoré)
-      const next = { ...prev, [selectedProjectId]: [...list, { path, name }] };
-      void stateWrite(KNOWLEDGE_STATE_KEY, next).catch(() => {
-        // best effort : l'épinglage reste visible en mémoire même si l'écriture échoue
-      });
-      return next;
-    });
-  }
-
-  function unpinKnowledge(path: string) {
-    if (!selectedProjectId) return;
-    setKnowledgeDoc((prev) => {
-      const list = prev[selectedProjectId] ?? [];
-      const next = { ...prev, [selectedProjectId]: list.filter((d) => d.path !== path) };
-      void stateWrite(KNOWLEDGE_STATE_KEY, next).catch(() => {});
-      return next;
-    });
-  }
-
   // MCP : le panneau (McpPanel.tsx) interroge `mcp.status` lui-même — la page
   // ne garde que le compteur du badge et un jeton de rafraîchissement, bumpé
   // au chunk `init` de chaque tour (l'état constaté vient d'être réécrit).
@@ -2171,7 +692,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     const demande = ++dernierChargementModeles.current;
     const estPerimee = () => demande !== dernierChargementModeles.current;
     try {
-      const list = await modelsList(providerId);
+      // T-032 — `models.detail` : même requête que `models.list`, lue en entier
+      // (nom, tarifs, contexte) pour que le sélecteur montre autre chose qu'un slug.
+      const list = await modelsDetail(providerId);
       if (estPerimee()) return;
       setNeutralModels(list);
       setNeutralModelsState("idle");
@@ -2196,17 +719,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     return off;
   }, [engineProviderId, loadNeutralModels]);
 
-  useEffect(() => {
-    if (engineProviderId === null) {
-      setNeutralFeaturedIds([]);
-      return;
-    }
-    readFeatured(engineProviderId)
-      .then(setNeutralFeaturedIds)
-      .catch(() => setNeutralFeaturedIds([]));
-  }, [engineProviderId]);
-
-  const neutralFeaturedModels = splitFeatured(neutralModels, neutralFeaturedIds);
 
   // Le mode « plan » n'existe pas côté moteur neutre (voir docs/protocol.md,
   // Lot 6) : bascule de sécurité si un projet neutre est restauré/sélectionné
@@ -2244,6 +756,22 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
   const cwd = selectedProject?.path ?? "";
+
+  // Connaissances du projet : document épinglé, mode injection/RAG, index
+  // d'embeddings — voir useConnaissances.ts (étape 8, 3/3).
+  const {
+    pinnedKnowledge,
+    pinKnowledge,
+    unpinKnowledge,
+    knowledgeMode,
+    changeKnowledgeMode,
+    knowledgeIdx,
+    indexingKnowledge,
+    knowledgeIndexProgress,
+    knowledgeIndexError,
+    handleIndexKnowledge,
+    reecrirePins,
+  } = useConnaissances(selectedProjectId, cwd);
 
   // Connaissances AUTOMATIQUES (piste 1 « flexibilité », docs/plan.md) :
   // tout fichier posé dans `.iaction/connaissances/` (pas de récursion,
@@ -2395,86 +923,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   const autoKnowledgeDocs: PinnedDoc[] = autoKnowledgeFiles.map((e) => ({ path: e.path, name: e.name }));
   const injectedKnowledge = dedupDocsByPath([pinnedKnowledge, autoKnowledgeDocs]);
 
-  // R5 — mode connaissances du projet (injection intégrale / RAG, voir
-  // RAG_SYSTEM_LINE) : relu depuis la config projet à chaque changement de
-  // projet, écrit à la volée par le sélecteur du panneau. Best effort : une
-  // config illisible retombe sur "injection" (comportement historique).
-  const [knowledgeMode, setKnowledgeMode] = useState<KnowledgeMode>("injection");
-  useEffect(() => {
-    setKnowledgeMode("injection");
-    if (!selectedProjectId) return;
-    let cancelled = false;
-    readProjectKnowledgeMode(selectedProjectId)
-      .then((mode) => {
-        if (!cancelled) setKnowledgeMode(mode);
-      })
-      .catch(() => {
-        // config illisible : défaut "injection" déjà posé ci-dessus
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedProjectId]);
-
-  function changeKnowledgeMode(mode: KnowledgeMode) {
-    if (!selectedProjectId) return;
-    setKnowledgeMode(mode);
-    writeProjectKnowledgeMode(selectedProjectId, mode).catch(() => {
-      // écriture config échouée : le mode reste appliqué pour la session en cours
-    });
-  }
-
-  // R5 — état de l'index d'embeddings du projet (`knowledge.status`) +
-  // indexation à la demande (`knowledge.index`, bouton « Indexer maintenant »
-  // avec progression). Les chemins épinglés participent à l'index et au
-  // calcul de `stale` — le sidecar collecte lui-même automatiques/détectées.
-  const [knowledgeIdx, setKnowledgeIdx] = useState<KnowledgeStatus | null>(null);
-  const [indexingKnowledge, setIndexingKnowledge] = useState(false);
-  const [knowledgeIndexProgress, setKnowledgeIndexProgress] = useState<KnowledgeIndexProgress | null>(null);
-  const [knowledgeIndexError, setKnowledgeIndexError] = useState("");
-  const pinnedPathsKey = pinnedKnowledge.map((d) => d.path).join("\n");
-  const refreshKnowledgeStatus = useCallback(async () => {
-    if (!cwd) {
-      setKnowledgeIdx(null);
-      return;
-    }
-    try {
-      const status = await knowledgeStatus(cwd, pinnedPathsKey.split("\n").filter(Boolean));
-      setKnowledgeIdx(status);
-    } catch {
-      // sidecar pas prêt : pas d'état affiché, le prochain changement retentera
-      setKnowledgeIdx(null);
-    }
-  }, [cwd, pinnedPathsKey]);
-  useEffect(() => {
-    void refreshKnowledgeStatus();
-    // Le premier appel peut partir avant que le sidecar soit prêt (même motif
-    // que loadNeutralModels) : re-tenté à chaque « providers poussés ».
-    return subscribeProvidersPushed(() => {
-      void refreshKnowledgeStatus();
-    });
-  }, [refreshKnowledgeStatus]);
-
-  async function handleIndexKnowledge() {
-    if (!cwd || indexingKnowledge) return;
-    setIndexingKnowledge(true);
-    setKnowledgeIndexError("");
-    setKnowledgeIndexProgress(null);
-    try {
-      await knowledgeIndex(
-        cwd,
-        pinnedKnowledge.map((d) => d.path),
-        (progress) => setKnowledgeIndexProgress(progress),
-      );
-      await refreshKnowledgeStatus();
-    } catch (err) {
-      setKnowledgeIndexError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIndexingKnowledge(false);
-      setKnowledgeIndexProgress(null);
-    }
-  }
-
   // Agents déclarés visibles pour le projet courant (portées projet + global
   // + import Claude Code, `invalid` exclus — voir orchestrationClient.ts) :
   // rechargés à chaque changement de `cwd`, plus sur `subscribeProvidersPushed`
@@ -2556,7 +1004,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    */
   function persistBackgroundConversation(projectId: string, convId: string) {
     const stored = projectStatesRef.current.get(projectId);
-    const runtime = runtimesRef.current.get(convId);
+    const runtime = runtimes.consulter(convId);
     if (!stored || !runtime) return;
     const sessions = stored.sessions.map((s) =>
       s.id === convId
@@ -2599,7 +1047,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     // de celle capturée au montage de la closure.
     const activeId = activeSessionIdRef.current;
     return sessionsRef.current.map((s) => {
-      const runtime = runtimesRef.current.get(s.id);
+      const runtime = runtimes.consulter(s.id);
       if (!runtime) return s;
       const merged: ProjectSession = {
         ...s,
@@ -2727,13 +1175,13 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     // conversation dont le runtime a survécu n'est PAS ré-amorcée depuis sa
     // copie persistée (qui serait partielle).
     const kept = new Map<string, ConvRuntime>();
-    for (const [convId, runtime] of runtimesRef.current) {
+    for (const [convId, runtime] of runtimes.entrees()) {
       if (runtime.streaming) kept.set(convId, runtime);
     }
-    runtimesRef.current = kept;
+    runtimes.reinitialiser(kept);
     for (const conv of next.sessions) {
-      if (next.openConversationIds.includes(conv.id) && !runtimesRef.current.has(conv.id)) {
-        runtimesRef.current.set(conv.id, freshRuntime(conv.turns, conv.sessionId, conv.routedTier, conv.routedTarget));
+      if (next.openConversationIds.includes(conv.id) && !runtimes.connait(conv.id)) {
+        runtimes.poser(conv.id, freshRuntime(conv.turns, conv.sessionId, conv.routedTier, conv.routedTarget));
       }
     }
     setSessions(next.sessions);
@@ -2780,7 +1228,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         void stateWrite(CONVERSATIONS_STATE_KEY, next).catch(() => {});
       }
       setSelectedProjectId(null);
-      runtimesRef.current = new Map();
+      runtimes.reinitialiser();
       setSessions([]);
       setActiveSessionId("");
       setOpenConversationIds([]);
@@ -2927,10 +1375,10 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         s.turns.length > 0 ||
         s.titleCustom ||
         openConversationIds.includes(s.id) ||
-        runtimesRef.current.get(s.id)?.streaming === true,
+        runtimes.consulter(s.id)?.streaming === true,
     );
     const nextSessions = [...kept, fresh];
-    runtimesRef.current.set(fresh.id, freshRuntime());
+    runtimes.poser(fresh.id, freshRuntime());
     setSessions(nextSessions);
     setActiveSessionId(fresh.id);
     // Ouverte dans un NOUVEL onglet, à la suite : les conversations déjà
@@ -3012,7 +1460,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   function undoClearConversation() {
     const backup = clearedBackupRef.current;
     if (!backup || !selectedProjectId) return;
-    if (runtimesRef.current.get(backup.convId)?.streaming) return;
+    if (runtimes.consulter(backup.convId)?.streaming) return;
     clearedBackupRef.current = null;
     setClearedNotice(false);
     if (!sessions.some((s) => s.id === backup.convId)) return;
@@ -3078,11 +1526,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   function deleteSession(id: string) {
     // Refus si CETTE conversation a un tour en cours (les autres peuvent
     // continuer de streamer sans que ça pose problème).
-    if (!selectedProjectId || runtimesRef.current.get(id)?.streaming) return;
+    if (!selectedProjectId || runtimes.consulter(id)?.streaming) return;
     const liveSessions = buildLiveSessions();
     const remaining = liveSessions.filter((s) => s.id !== id);
     const finalSessions = remaining.length > 0 ? remaining : [freshSession()];
-    runtimesRef.current.delete(id);
+    runtimes.oublier(id);
     setSessions(finalSessions);
     const nextOpen = openConversationIds.filter((c) => c !== id && finalSessions.some((s) => s.id === c));
     setOpenConversationIds(nextOpen);
@@ -3110,7 +1558,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    */
   function closeConversationTab(id: string) {
     if (!selectedProjectId) return;
-    if (runtimesRef.current.get(id)?.streaming) {
+    if (runtimes.consulter(id)?.streaming) {
       // Refus silencieux inacceptable au clavier (Ctrl+Suppr) : l'utilisateur
       // ne verrait rien se passer. Le bouton « × » est lui déjà désactivé.
       setOpenFilesNotice("Conversation en cours : arrêtez le tour avant de fermer son onglet.");
@@ -3119,7 +1567,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     setOpenFilesNotice(null);
     const liveSessions = buildLiveSessions();
     setSessions(liveSessions);
-    runtimesRef.current.delete(id);
+    runtimes.oublier(id);
     const nextOpen = openConversationIds.filter((c) => c !== id);
     setOpenConversationIds(nextOpen);
 
@@ -3151,10 +1599,10 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         // Purge des sessions vides au passage (celle qu'on vient de fermer si
         // elle n'avait aucun tour), comme le fait `handleNewSession`.
         const kept = liveSessions.filter(
-          (s) => s.turns.length > 0 || s.titleCustom || runtimesRef.current.get(s.id)?.streaming === true,
+          (s) => s.turns.length > 0 || s.titleCustom || runtimes.consulter(s.id)?.streaming === true,
         );
         const withFresh = [...kept, fresh];
-        runtimesRef.current.set(fresh.id, freshRuntime());
+        runtimes.poser(fresh.id, freshRuntime());
         setSessions(withFresh);
         setOpenConversationIds([fresh.id]);
         setActiveSessionId(fresh.id);
@@ -3171,11 +1619,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
 
   /** Conversation suivante/précédente dans la barre d'onglets (Ctrl+Tab / Ctrl+Maj+Tab). */
   function cycleConversation(direction: 1 | -1) {
-    if (openConversationIds.length < 2) return;
-    const idx = openConversationIds.indexOf(activeSessionId);
-    const base = idx === -1 ? 0 : idx;
-    const next = openConversationIds[(base + direction + openConversationIds.length) % openConversationIds.length];
-    selectSession(next);
+    const suivant = prochainOnglet(openConversationIds, activeSessionId, direction);
+    if (suivant) selectSession(suivant);
   }
 
   function startEditSessionTitle(session: ProjectSession) {
@@ -3203,714 +1648,50 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   }
 
 
-  /**
-   * Reconstruit l'historique `messages` pour le moteur neutre depuis les
-   * tours du projet courant : rôle `user` = son contenu ; rôle `assistant` =
-   * concaténation des blocs `text` uniquement (les blocs `thinking`/`tool`
-   * n'ont pas d'équivalent dans le dialecte OpenAI-compatible) ; les tours
-   * `error` sont sautés (contenu potentiellement vide/partiel). Le moteur
-   * neutre n'a pas d'état de session (voir docs/protocol.md, Lot 6) : cet
-   * historique complet est renvoyé à CHAQUE tour.
+  /*
+   * Envoi et moteurs — TOUT le chemin chaud (handleSend, claude.start /
+   * neutral.start, routage Auto descendant, bandeau de débord) vit dans
+   * envoiProjet.ts ; la page ne fournit que son état et ses écritures.
+   * La fabrique est rappelée à chaque rendu, exactement comme l'étaient les
+   * fonctions qu'elle remplace : chaque tour capture l'état du rendu qui l'a
+   * lancé, et écrit ensuite UNIQUEMENT via convId dans les runtimes.
    */
-  function buildNeutralMessages(history: AgentTurn[], newContent: string): ChatMessage[] {
-    const messages: ChatMessage[] = [];
-    for (const turn of history) {
-      if (turn.status === "error") continue;
-      if (turn.role === "user") {
-        messages.push({ role: "user", content: turn.content ?? "" });
-      } else {
-        const text = (turn.blocks ?? [])
-          .filter((b): b is Extract<AgentBlock, { type: "text" }> => b.type === "text")
-          .map((b) => b.content)
-          .join("");
-        messages.push({ role: "assistant", content: text });
-      }
-    }
-    messages.push({ role: "user", content: newContent });
-    return messages;
-  }
-
-  /**
-   * Préfixe `messages` d'un message `system` portant les instructions de
-   * l'agent sélectionné (moteur neutre) — sans effet si l'agent n'en a pas
-   * (chaîne vide) ou si un message `system` est déjà en tête (jamais le cas
-   * ici, `buildNeutralMessages` n'en produit pas, mais reste défensif comme
-   * demandé par la spec O2).
-   */
-  function withAgentSystemPrompt(messages: ChatMessage[], instructions: string | undefined): ChatMessage[] {
-    if (!instructions || messages[0]?.role === "system") return messages;
-    return [{ role: "system", content: instructions }, ...messages];
-  }
-
-  /**
-   * R5 — instructions système effectives du tour : celles de l'agent
-   * sélectionné, plus la ligne RAG quand le mode connaissances du projet est
-   * `rag` (voir RAG_SYSTEM_LINE — remplace l'injection intégrale au 1er tour).
-   * `undefined` = aucune instruction (comportement historique inchangé).
-   */
-  function composeSystemInstructions(): string | undefined {
-    const parts = [
-      selectedAgent?.instructions,
-      // La ligne RAG n'est injectée que si l'index EXISTE réellement
-      // (`knowledge.status`) : sans index, promettre `search_knowledge` au
-      // modèle ne mènerait qu'à des appels d'outil vides.
-      knowledgeMode === "rag" && knowledgeIdx?.exists ? RAG_SYSTEM_LINE : undefined,
-    ].filter((p): p is string => typeof p === "string" && p.length > 0);
-    return parts.length > 0 ? parts.join("\n\n") : undefined;
-  }
-
-  /** Lance le tour via le moteur Claude (Agent SDK) — `systemPrompt` armé par l'agent sélectionné, s'il y en a un.
-   * R2 — `modelId`/`meta` figés par `handleSend` (modèle du sélecteur, ou cible routée en mode Auto + routeTier). */
-  function sendViaClaudeEngine(
-    content: string,
-    /**
-     * S3 — bulle assistant qui reçoit le flux, MUTABLE : une demande injectée
-     * en cours de tour (claude.push) en ouvre une nouvelle, et la suite du
-     * streaming doit atterrir dedans, pas dans celle d'avant l'injection.
-     */
-    target: { id: string },
-    common: {
-      onText: (delta: string) => void;
-      onToolUse: (toolUseId: string, toolName: string, toolInput: unknown) => void;
-      onToolResult: (toolUseId: string, isError: boolean, summary: string) => void;
-    },
-    attachments: ChatAttachment[] | undefined,
-    /** Conversation propriétaire du tour — voir `handleSend` : tous les callbacks écrivent ici, pas dans « l'active ». */
-    convId: string,
-    modelId: string | null,
-    meta: RequestMeta,
-  ) {
-    const handle = claudeStart(
-      {
-        cwd,
-        prompt: content,
-        // Session serveur de CETTE conversation (le `sessionId` dérivé de
-        // l'active serait le mauvais si l'utilisateur a changé d'onglet).
-        sessionId: getRuntime(convId).sessionId,
-        model: modelId,
-        permissionMode,
-        // Page ouverte devant l'utilisateur : l'agent peut poser ses questions
-        // dans une modale à choix cliquables (outil mcp__studio__ask_user).
-        interactive: true,
-        // R5 — instructions de l'agent + ligne RAG éventuelle (mode `rag`).
-        systemPrompt: composeSystemInstructions() ?? null,
-        // T-003 — allowlist `tools:` de l'agent (voir sendViaNeutralEngine).
-        tools: selectedAgent?.tools ?? null,
-        attachments,
-        meta,
-      },
-      {
-        onInit: (sid) => updateRuntime(convId, (r) => ({ ...r, sessionId: sid })),
-        // Le sidecar vient de réécrire l'état constaté des serveurs MCP
-        // (.iaction/mcp.runtime.json) : le panneau se rafraîchit pour montrer
-        // ce qui s'est VRAIMENT connecté à ce tour.
-        onMcpInit: () => setMcpReloadToken((n) => n + 1),
-        onText: common.onText,
-        onThinking: (delta) =>
-          updateTurnsFor(convId, (prev) => withBlocks(prev, target.id, (b) => appendToLastBlock(b, "thinking", delta))),
-        onToolUse: common.onToolUse,
-        onToolResult: common.onToolResult,
-        onBackgroundTasks: (count, descriptions) =>
-          updateTurnsFor(convId, (prev) =>
-            prev.map((t) =>
-              t.id === target.id
-                ? {
-                    ...t,
-                    backgroundTasks:
-                      count > 0
-                        ? { count, descriptions, waiting: t.backgroundTasks?.waiting === true }
-                        : undefined,
-                  }
-                : t,
-            ),
-          ),
-        onBackgroundWait: (count, descriptions) =>
-          updateTurnsFor(convId, (prev) =>
-            prev.map((t) => (t.id === target.id ? { ...t, backgroundTasks: { count, descriptions, waiting: true } } : t)),
-          ),
-        onCompact: (trigger, preTokens) =>
-          updateTurnsFor(convId, (prev) =>
-            prev.map((t) => (t.id === target.id ? { ...t, compacted: { trigger, preTokens } } : t)),
-          ),
-        onPermissionRequest: (permissionId, toolName, toolInput) => {
-          // Outil mémorisé (« ne plus demander ») : auto-autorisation sans modale.
-          if (autoAllowToolsRef.current.has(toolName)) {
-            void claudePermission(handle.id, permissionId, "allow");
-            return;
-          }
-          setPermissionQueue((prev) => [...prev, { targetId: handle.id, permissionId, toolName, toolInput, engine: "claude" }]);
-        },
-      },
-    );
-    return handle;
-  }
-
-  /** Lance le tour via le moteur neutre (Ollama/OpenRouter/custom) — même contrat de chunks que Claude, sans état de session. `maxTurns` armé par l'agent sélectionné, s'il y en a un.
-   * R2 — `modelId`/`meta` figés par `handleSend` (modèle du sélecteur, ou cible routée en mode Auto + routeTier). */
-  function sendViaNeutralEngine(
-    providerId: string,
-    historyMessages: ChatMessage[],
-    common: {
-      onText: (delta: string) => void;
-      onToolUse: (toolUseId: string, toolName: string, toolInput: unknown) => void;
-      onToolResult: (toolUseId: string, isError: boolean, summary: string) => void;
-    },
-    modelId: string,
-    meta: RequestMeta,
-  ) {
-    // Le mode « plan » n'existe pas côté neutre (garde-fou : le sélecteur le
-    // désactive déjà pour ce moteur, mais un état résiduel est possible).
-    const neutralPermissionMode = permissionMode === "plan" ? "default" : permissionMode;
-    const handle = neutralStart(
-      {
-        providerId,
-        model: modelId,
-        cwd,
-        messages: historyMessages,
-        permissionMode: neutralPermissionMode,
-        maxTurns: selectedAgent?.maxTurns ?? undefined,
-        // T-003 — allowlist `tools:` de l'agent : appliquée ici comme en
-        // orchestration (jusqu'au 2026-08-07 le champ n'était transmis à
-        // personne, donc purement décoratif).
-        tools: selectedAgent?.tools ?? null,
-        meta,
-      },
-      {
-        onText: common.onText,
-        onToolUse: common.onToolUse,
-        onToolResult: common.onToolResult,
-        onPermissionRequest: (permissionId, toolName, toolInput) => {
-          if (autoAllowToolsRef.current.has(toolName)) {
-            void neutralPermission(handle.id, permissionId, "allow");
-            return;
-          }
-          setPermissionQueue((prev) => [...prev, { targetId: handle.id, permissionId, toolName, toolInput, engine: "neutral" }]);
-        },
-      },
-    );
-    return handle;
-  }
-
-  /** R2 — cible utilisable : moteur Claude (toujours disponible) ou fournisseur déclaré. */
-  function isUsableTarget(target: RouteTarget): boolean {
-    return target.engine === "claude" || providers.some((p) => p.id === target.providerId);
-  }
-
-  /** R3 — libellé court de l'état de débord, ajouté aux raisons (infobulle du badge). */
-  function debordReason(debord: RouteDebord): string {
-    return debord.active
-      ? `débord : fenêtre 5 h à ${Math.round(debord.fiveHourPct ?? 0)} %`
-      : "plafond débord atteint : repli local";
-  }
-
-  /**
-   * R2/R7 — résout la cible d'un tour « Auto » de la page Projets, stratégie
-   * DESCENDANTE (spec-r7-topdown §C) : PAS de classification du prompt. Le
-   * premier tour d'une session Auto part au SOMMET de la table — tier
-   * `complexe` IMPOSÉ à `router.route` (mécanique R3), avec le `cwd` du
-   * projet pour que la surcharge `.iaction/routage.yaml` s'applique ;
-   * débord et plafond s'appliquent normalement. Les tours suivants
-   * réutilisent l'affinité de session : la session RESTE au sommet, AUCUNE
-   * descente automatique (descendre = choix manuel du sélecteur) — le
-   * plancher montant du Chat (§B) ne s'applique pas ici. Pour une cible
-   * abonnement, l'état de débord est re-vérifié à CHAQUE tour via
-   * `router.route` à tier IMPOSÉ (aucune re-classification) ; un tour
-   * débordé/bloqué ne fixe JAMAIS l'affinité. Repli si la cible neutre
-   * référence un fournisseur absent de la table déclarée : tier supérieur,
-   * premier utilisable (sans objet au sommet `complexe` — gardé par symétrie
-   * avec ChatPage) ; si aucun ne l'est, la cible d'origine est gardée et
-   * l'erreur habituelle du moteur s'affichera.
-   */
-  async function resolveAutoRoute(
-    convId: string,
-    content: string,
-  ): Promise<{
-    tier: RouteTier;
-    target: RouteTarget;
-    reasons: string[];
-    debord: RouteDebord | null;
-    /** Affinité à mémoriser au PREMIER signe de succès du tour (voir `handleSend`) — jamais posée ici. */
-    pendingAffinity: boolean;
-    /** Débord annulé : sa cible référence un fournisseur non déclaré (bandeau dédié, tour sur l'abonnement). */
-    debordUnconfigured: boolean;
-  }> {
-    const runtime = getRuntime(convId);
-    if (runtime.routedTier && runtime.routedTarget) {
-      const affinityReasons =
-        runtime.routedReasons ?? ["affinité de session (cible mémorisée au premier envoi)"];
-      // R3 — cible abonnement : re-vérification du débord à CHAQUE tour, tier
-      // IMPOSÉ (aucune re-classification).
-      if (runtime.routedTarget.engine === "claude") {
-        try {
-          const check = await routerRoute({ text: content, tier: runtime.routedTier, ...(cwd ? { cwd } : {}) });
-          if (check.debord) {
-            // Cible de débord jamais validée jusqu'ici : si son fournisseur
-            // n'est PAS déclaré, on n'envoie pas vers un provider inconnu —
-            // le tour reste sur la cible abonnement d'origine, sans débord.
-            if (check.debord.active && !isUsableTarget(check.target)) {
-              return {
-                tier: runtime.routedTier,
-                target: runtime.routedTarget,
-                reasons: [...affinityReasons, "cible de débord non configurée : envoi sur l'abonnement"],
-                debord: null,
-                pendingAffinity: false,
-                debordUnconfigured: true,
-              };
-            }
-            return {
-              tier: runtime.routedTier,
-              target: check.target,
-              reasons: [...affinityReasons, debordReason(check.debord)],
-              debord: check.debord,
-              pendingAffinity: false,
-              debordUnconfigured: false,
-            };
-          }
-        } catch {
-          // Sidecar antérieur à R3 ou injoignable : affinité telle quelle.
-        }
-      }
-      return {
-        tier: runtime.routedTier,
-        target: runtime.routedTarget,
-        reasons: affinityReasons,
-        debord: null,
-        pendingAffinity: false,
-        debordUnconfigured: false,
-      };
-    }
-
-    // R7 §C — premier tour d'une session Auto : tier `complexe` IMPOSÉ
-    // (aucune classification du prompt), le sommet de la table.
-    const routed = await routerRoute({
-      text: content,
-      tier: "complexe",
-      ...(cwd ? { cwd } : {}),
-    });
-
-    let tier = routed.tier;
-    let target = routed.target;
-    let debord = routed.debord;
-    // Raison lisible du badge : la mention protocolaire du tier imposé est
-    // remplacée par l'explication de la stratégie.
-    const reasons = [
-      "stratégie descendante : premier tour au sommet de la table (complexe)",
-      ...routed.reasons.filter((r) => r !== "tier imposé par l'appelant"),
-    ];
-    let debordUnconfigured = false;
-    // Débord actif vers un fournisseur NON déclaré : jamais d'envoi vers un
-    // provider inconnu — repli sur la cible abonnement d'origine (table du
-    // tier), débord annulé, bandeau dédié.
-    if (debord?.active && !isUsableTarget(target)) {
-      target = mergeRoutingTable(await readRoutingTable())[tier];
-      reasons.push("cible de débord non configurée : envoi sur l'abonnement");
-      debord = null;
-      debordUnconfigured = true;
-    }
-    // R3 — cible de débord/repli plafond : pas de repli tier supérieur (elle
-    // ne vient pas de la table), l'erreur moteur habituelle s'afficherait.
-    if (!debord && !isUsableTarget(target)) {
-      const table = mergeRoutingTable(await readRoutingTable());
-      for (let i = ROUTE_TIERS.indexOf(routed.tier) + 1; i < ROUTE_TIERS.length; i++) {
-        const candidate = table[ROUTE_TIERS[i]];
-        if (isUsableTarget(candidate)) {
-          reasons.push(`repli : fournisseur « ${target.providerId ?? "?"} » absent`);
-          tier = ROUTE_TIERS[i];
-          target = candidate;
-          break;
-        }
-      }
-    }
-
-    // R3 — un tour débordé/bloqué ne mémorise PAS d'affinité : la conversation
-    // re-route normalement dès que la fenêtre d'abonnement se rouvre. Un tour
-    // normal, lui, ne la mémorise plus ICI mais au premier signe de succès
-    // (`pendingAffinity`, voir `handleSend`) — un tour routé qui échoue
-    // (cible éteinte…) ne doit jamais verrouiller la conversation dessus.
-    return { tier, target, reasons, debord, pendingAffinity: !debord, debordUnconfigured };
-  }
-
-  /**
-   * R3 — pose/efface le bandeau de débord de la conversation d'après la
-   * résolution du tour qui part (même contrat que ChatPage.tsx).
-   * `unconfigured` : cible de débord non déclarée — bandeau dédié, le tour
-   * part sur l'abonnement (voir `resolveAutoRoute`).
-   */
-  async function applyDebordNotice(
-    convId: string,
-    debord: RouteDebord | null,
-    model: string,
-    unconfigured = false,
-  ): Promise<void> {
-    if (unconfigured) {
-      updateRuntime(convId, (r) => ({
-        ...r,
-        debordNotice: { blocked: false, fiveHourPct: null, model, plafondUsdMois: null, unconfigured: true },
-      }));
-      return;
-    }
-    if (!debord) {
-      updateRuntime(convId, (r) => (r.debordNotice ? { ...r, debordNotice: null } : r));
-      return;
-    }
-    let plafondUsdMois: number | null = null;
-    if (debord.blocked) {
-      // `null` = bascule payante désactivée (le sidecar ne devrait alors
-      // jamais signaler de débord, mais on reste défensif).
-      plafondUsdMois = await readRoutingDebord()
-        .then((d) => d?.plafondUsdMois ?? null)
-        .catch(() => null);
-    }
-    updateRuntime(convId, (r) => ({
-      ...r,
-      debordNotice: { blocked: debord.blocked, fiveHourPct: debord.fiveHourPct, model, plafondUsdMois },
-    }));
-  }
-
-  async function handleSend(overrideContent?: string) {
-    // Conversation À LAQUELLE ce tour appartient, figée ici : tout ce qui suit
-    // (callbacks de streaming, fin de tour, sauvegarde) écrit dans CETTE
-    // conversation via `convId`, jamais dans « l'active ». C'est ce qui permet
-    // à l'utilisateur de changer d'onglet pendant qu'un tour tourne sans que
-    // la réponse n'atterrisse dans la mauvaise conversation.
-    const convId = activeSessionId;
-    if (!convId) return;
-    // Brouillon VIF du runtime — jamais `draft` (valeur de rendu) : la frappe
-    // n'est répercutée au rendu que par un rattrapage débouncé (voir
-    // useComposerLiveDraft.ts), un Entrée immédiat lirait un texte tronqué.
-    const liveDraft = getRuntime(convId).draft;
-
-    // Pendant un tour en cours : jamais de second envoi. Deux issues —
-    // S3, moteur Claude : la demande est GLISSÉE dans le tour en cours
-    // (claude.push), prise en compte au prochain retour d'outil sans rien
-    // couper ; c'est ce qui permet d'interroger l'agent pendant qu'il attend
-    // ses tâches de fond. Sinon (moteur neutre, tour déjà fini côté sidecar) :
-    // mise en file automatique, envoyée à la fin du tour (voir l'effet
-    // d'auto-envoi) — un seul bouton « Envoyer », le repli est transparent.
-    // L'auto-envoi rappelle handleSend avec `overrideContent` une fois
-    // `streaming` repassé à false — ce chemin-là ne re-file jamais.
-    if (streaming && overrideContent === undefined) {
-      const pending = liveDraft.trim();
-      if (!pending) return;
-      setSlashMenu((m) => ({ ...m, open: false }));
-      // Ni une demande glissée (claude.push) ni la file ne transportent de
-      // pièces jointes : on le DIT et on les garde dans le tiroir pour le
-      // prochain message complet, plutôt que de les laisser partir en fumée.
-      if (attachments.length > 0) {
-        setAttachmentsError(
-          "Pièces jointes conservées : elles ne partent pas avec un message envoyé pendant un tour — elles seront jointes à votre prochain message complet.",
-        );
-      }
-      const runtime = getRuntime(convId);
-      const inject = injectorsRef.current.get(convId);
-      if (inject && runtime.activeEngine === "claude" && runtime.activeRequestId) {
-        // Le brouillon part tout de suite : si le sidecar refuse (tour déjà
-        // clos), il est reposé en file juste en dessous — jamais perdu.
-        updateRuntime(convId, (r) => ({ ...r, draft: "" }));
-        const pushed = await claudePush(runtime.activeRequestId, pending).catch(() => false);
-        if (pushed) {
-          inject(pending);
-          return;
-        }
-        updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, pending] }));
-        return;
-      }
-      updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, pending], draft: "" }));
-      return;
-    }
-
-    // Chemin « file » (overrideContent) : texte seul, pas de pièces jointes.
-    const usesComposer = overrideContent === undefined;
-    const rawContent = (overrideContent ?? liveDraft).trim();
-    if ((!rawContent && (!usesComposer || attachments.length === 0)) || streaming || !cwd) return;
-    // Une image collée est encore en cours d'encodage : on attend plutôt que
-    // d'envoyer une pièce jointe sans données.
-    if (usesComposer && attachmentsPending) {
-      setAttachmentsError("Image en cours de chargement… réessayez dans un instant.");
-      return;
-    }
-
-    const engineSelected: "claude" | "neutral" = engineProviderId !== null ? "neutral" : "claude";
-    // R2 — tour « Auto (routeur) » : le moteur/modèle réels ne sont connus
-    // qu'après résolution de la cible, juste en dessous.
-    const isAutoTurn = model === AUTO_MODEL;
-    // Pièces jointes : non supportées par `neutral.start` (voir le contrat), et
-    // le mode Auto peut y router — `attachmentsSupported`/les bascules de
-    // moteur les vident déjà en amont, mais on reste défensif ici plutôt que
-    // de risquer un envoi silencieux vers le mauvais moteur. Capturées avant
-    // tout envoi : le brouillon n'est purgé qu'en cas de succès (voir le
-    // `try`/`catch` plus bas).
-    const attachmentsAllowed = usesComposer && engineSelected === "claude" && !isAutoTurn;
-    const contractAttachments = attachmentsAllowed ? toContractAttachments(attachments) : [];
-    const sentAttachments = attachmentsAllowed ? toSentAttachments(attachments) : [];
-    // Brouillons d'origine, gardés pour les reposer si le tour échoue (voir le
-    // `catch`) : le tiroir, lui, est vidé dès l'envoi.
-    const sentDrafts = attachmentsAllowed ? attachments : [];
-
-    // Verrouille l'envoi tout de suite (avant les résolutions asynchrones
-    // ci-dessous — routage Auto, lecture des documents épinglés) : sans ça, un
-    // second Entrée pendant ces attentes pourrait déclencher un double envoi.
-    // `preSendAbort` repart de zéro : c'est le drapeau de CE tour (voir
-    // `handleAbort` et le point de contrôle plus bas). Chemin « file » : ne
-    // pas toucher au brouillon (l'utilisateur a pu recommencer à taper un
-    // message suivant pendant que le tour finissait).
-    updateRuntime(convId, (r) => ({
-      ...r,
-      streaming: true,
-      preSendAbort: false,
-      activeEngine: engineSelected,
-      ...(usesComposer ? { draft: "" } : {}),
-    }));
-
-    // R2/R7 — mode Auto : résolution de la cible AVANT le reste (le moteur
-    // réel conditionne l'injection de connaissances et l'historique neutre).
-    // Stratégie DESCENDANTE : premier tour au sommet de la table (`complexe`
-    // imposé), affinité de session ensuite (voir `resolveAutoRoute`).
-    let engine = engineSelected;
-    let turnProviderId: string | null = engineProviderId;
-    let turnModel = model;
-    let autoRoute: Awaited<ReturnType<typeof resolveAutoRoute>> | null = null;
-    if (isAutoTurn) {
-      try {
-        autoRoute = await resolveAutoRoute(convId, rawContent);
-      } catch (err) {
-        // Échec du routage (sidecar injoignable…) : tour marqué en erreur,
-        // comme n'importe quel échec de moteur.
-        const message = err instanceof Error ? err.message : String(err);
-        updateRuntime(convId, (r) => ({
-          ...r,
-          streaming: false,
-          turns: [
-            ...r.turns,
-            { id: nextId("u"), role: "user", content: rawContent, displayContent: rawContent, status: "done" },
-            { id: nextId("a"), role: "assistant", blocks: [], status: "error", errorMessage: message },
-          ],
-        }));
-        return;
-      }
-      engine = autoRoute.target.engine === "neutral" ? "neutral" : "claude";
-      turnProviderId = autoRoute.target.engine === "neutral" ? (autoRoute.target.providerId ?? "") : null;
-      turnModel = autoRoute.target.model;
-      // Moteur réel du tour, pour un abandon correctement routé.
-      updateRuntime(convId, (r) => ({ ...r, activeEngine: engine }));
-      // R3 — bandeau de débord : posé au tour concerné, effacé au tour normal.
-      await applyDebordNotice(convId, autoRoute.debord, autoRoute.target.model, autoRoute.debordUnconfigured);
-    } else {
-      // R3 — tour à moteur/modèle choisis MANUELLEMENT : jamais bloqué ni
-      // bandeau-isé — un éventuel bandeau de débord précédent s'efface.
-      updateRuntime(convId, (r) => (r.debordNotice ? { ...r, debordNotice: null } : r));
-    }
-
-    // Injection des connaissances (épinglées + auto `.iaction/connaissances/`,
-    // voir `injectedKnowledge`) SEULEMENT au premier tour de la session :
-    // Claude via `sessionId` (encore `null` = pas de session serveur
-    // existante) ; moteur neutre via l'historique (pas d'état de session côté
-    // serveur, voir `buildNeutralMessages` — l'historique encore vide EST le
-    // premier tour). R5 — mode `rag` : PAS d'injection intégrale, la ligne
-    // système RAG_SYSTEM_LINE la remplace (via composeSystemInstructions) et
-    // l'outil search_knowledge prend le relais dans les deux moteurs.
-    const isFirstTurn = engine === "claude" ? sessionId === null : turns.length === 0;
-    const docsToInject = isFirstTurn && knowledgeMode !== "rag" ? injectedKnowledge : [];
-
-    let sentContent = rawContent;
-    if (docsToInject.length > 0) {
-      sentContent = `${await buildKnowledgeBlock(docsToInject, cwd)}${rawContent}`;
-    }
-
-    const historyMessages =
-      engine === "neutral"
-        ? withAgentSystemPrompt(buildNeutralMessages(turns, sentContent), composeSystemInstructions())
-        : [];
-
-    // « Arrêter » cliqué pendant la phase de PRÉ-ENVOI ci-dessus (routage
-    // Auto ≤ 3 s, lecture des connaissances) : abandon propre AVANT tout
-    // envoi — rien n'est parti vers un moteur, le message est simplement
-    // reposé dans le composeur (devant ce que l'utilisateur a pu retaper).
-    if (getRuntime(convId).preSendAbort) {
-      updateRuntime(convId, (r) => ({
-        ...r,
-        streaming: false,
-        preSendAbort: false,
-        draft: r.draft ? `${rawContent}\n${r.draft}` : rawContent,
-      }));
-      return;
-    }
-
-    const userTurn: AgentTurn = {
-      id: nextId("u"),
-      role: "user",
-      content: sentContent,
-      displayContent: rawContent,
-      injectedKnowledgeCount: docsToInject.length || undefined,
-      status: "done",
-      ...(sentAttachments.length > 0 ? { attachments: sentAttachments } : {}),
-    };
-    const assistantId = nextId("a");
-    // Le message part MAINTENANT : le tiroir de pièces jointes se vide ici, pas
-    // à la fin du tour — les vignettes figurent désormais dans le tour affiché,
-    // les garder en bas laissait croire qu'elles restaient à envoyer. Reposées
-    // par le `catch` si le tour échoue. Vidage conditionné à ce qui est
-    // RÉELLEMENT parti : rien n'est retiré si le moteur n'en accepte pas
-    // (neutre, mode Auto), où le tiroir n'a de toute façon pas à être touché.
-    if (sentDrafts.length > 0) clearAttachments();
-    // S3 — bulle assistant courante du tour (voir sendViaClaudeEngine) :
-    // remplacée à chaque demande injectée pour préserver l'ordre de lecture.
-    const streamTarget = { id: assistantId };
-    updateTurnsFor(convId, (prev) => [
-      ...prev,
-      userTurn,
-      {
-        id: assistantId,
-        role: "assistant",
-        blocks: [],
-        status: "streaming",
-        // R2 — badge « ⚡ auto : tier → modèle » porté par le tour assistant
-        // (persisté avec lui — l'infobulle liste les raisons du classement).
-        ...(autoRoute
-          ? { routeTier: autoRoute.tier, routeModel: autoRoute.target.model, routeReasons: autoRoute.reasons }
-          : {}),
-      },
-    ]);
-    collerEnBas();
-
-    // R2/R6 — affinité de session EN ATTENTE : mémorisée au PREMIER signe de
-    // succès du tour (premier texte reçu, ou `done` sans erreur) — un tour
-    // routé qui échoue (cible Ollama éteinte…) ne verrouille jamais la
-    // conversation sur une cible morte. R7 §C — la session reste ensuite au
-    // sommet (aucune descente automatique) : le plancher montant du Chat (§B)
-    // ne s'applique pas à ce flux.
-    let commitAffinity: (() => void) | null = null;
-    if (autoRoute?.pendingAffinity) {
-      const { tier: routedTier, target: routedTarget, reasons: routedReasons } = autoRoute;
-      commitAffinity = () => {
-        commitAffinity = null;
-        updateRuntime(convId, (r) => ({ ...r, routedTier, routedTarget, routedReasons }));
-      };
-    }
-
-    const common = {
-      onText: (delta: string) => {
-        commitAffinity?.();
-        updateTurnsFor(convId, (prev) => withBlocks(prev, streamTarget.id, (b) => appendToLastBlock(b, "text", delta)));
-      },
-      onToolUse: (toolUseId: string, toolName: string, toolInput: unknown) => {
-        updateTurnsFor(convId, (prev) => withBlocks(prev, streamTarget.id, (b) => addToolBlock(b, toolUseId, toolName, toolInput)));
-        // Compteur d'usage MCP (section « MCP ») : porté par le runtime de
-        // CETTE conversation, donc juste même si l'onglet affiché a changé.
-        const server = mcpServerFromToolName(toolName);
-        if (server) {
-          const tool = toolName.split("__").slice(2).join("__") || toolName;
-          updateRuntime(convId, (r) => ({
-            ...r,
-            mcpUsage: { ...r.mcpUsage, [server]: { calls: (r.mcpUsage[server]?.calls ?? 0) + 1, lastTool: tool } },
-          }));
-        }
-      },
-      onToolResult: (toolUseId: string, isError: boolean, summary: string) =>
-        updateTurnsFor(convId, (prev) => withBlocks(prev, streamTarget.id, (b) => setToolResult(b, toolUseId, isError, summary))),
-    };
-
-    // R2 — meta commun aux deux moteurs : routeTier quand le tour a été routé
-    // (persisté dans events.jsonl, voir docs/protocol.md § S1).
-    const meta: RequestMeta = { source: "projet", conversationId: convId };
-    // S2 — imputation du tour au projet ouvert (encart « Usage par projet »).
-    if (selectedProjectId) meta.projectId = selectedProjectId;
-    if (cwd) meta.projectPath = cwd;
-    if (autoRoute) meta.routeTier = autoRoute.tier;
-    // R3 — tour réellement débordé : marqué pour le plafond mensuel (events.jsonl).
-    if (autoRoute?.debord?.active) meta.routeDebord = true;
-
-    const { id, done } =
-      engine === "neutral"
-        ? sendViaNeutralEngine(turnProviderId as string, historyMessages, common, turnModel, meta)
-        : sendViaClaudeEngine(sentContent, streamTarget, common, contractAttachments, convId, turnModel || null, meta);
-    updateRuntime(convId, (r) => ({ ...r, activeRequestId: id }));
-
-    // S3 — injecteur de CE tour : appelé par le composeur quand le sidecar a
-    // accepté la demande (claude.push). Il ouvre la bulle utilisateur puis une
-    // nouvelle bulle assistant, et redirige le flux vers elle — la suite de la
-    // réponse s'affiche donc APRÈS la demande, comme dans Claude Code.
-    if (engine === "claude") {
-      injectorsRef.current.set(convId, (text: string) => {
-        const nextAssistantId = nextId("a");
-        // La bulle en cours est close (`continued`) avant la redirection :
-        // plus rien ne la repassera à « done » ensuite (le `done` du tour ne
-        // patche que la DERNIÈRE cible) — laissée en streaming, elle
-        // clignotait à vie et disparaissait à la persistance.
-        updateTurnsFor(convId, (prev) => [
-          ...prev.map((t) =>
-            t.id === streamTarget.id && t.status === "streaming" ? { ...t, status: "done" as const, continued: true } : t,
-          ),
-          { id: nextId("u"), role: "user", content: text, displayContent: text, status: "done", injected: true },
-          { id: nextAssistantId, role: "assistant", blocks: [], status: "streaming" },
-        ]);
-        streamTarget.id = nextAssistantId;
-        collerEnBas();
-      });
-    }
-
-    try {
-      const data = await done;
-      // Tour terminé sans erreur (même sans texte reçu) : second signe de
-      // succès qui fixe l'affinité en attente (no-op si déjà fixée).
-      commitAffinity?.();
-      const parsed = engine === "neutral" ? parseNeutralDone(data) : parseClaudeDone(data);
-      if (engine === "claude" && parsed.sessionId) {
-        updateRuntime(convId, (r) => ({ ...r, sessionId: parsed.sessionId }));
-      }
-      if (engine === "claude") {
-        // Compteur local « conso hebdo Fable » (encart conso) — avant le
-        // notifyUsageChanged() du finally, pour que l'encart lise à jour.
-        // R2 — `turnModel` : le modèle réellement utilisé (cible routée en Auto).
-        await recordModelUsage(turnModel, parsed.usage);
-      }
-      updateTurnsFor(convId, (prev) => withTurnDone(prev, streamTarget.id, parsed));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      updateTurnsFor(convId, (prev) => withTurnError(prev, streamTarget.id, message));
-      // Tour échoué : les pièces jointes reviennent dans le composeur (elles
-      // avaient été retirées à l'envoi) — pas question de les rejoindre à la
-      // main pour réessayer.
-      restoreAttachments(sentDrafts);
-    } finally {
-      injectorsRef.current.delete(convId);
-      // Filet de sécurité : après la fin du tour (done, erreur ou abort),
-      // aucune bulle de cette conversation ne doit rester « streaming » —
-      // sinon curseur clignotant à vie et bulle perdue à la persistance.
-      updateTurnsFor(convId, (prev) =>
-        prev.map((t) => (t.status === "streaming" ? { ...t, status: "done" as const } : t)),
-      );
-      // Un tour a pu écrire dans `.iaction/connaissances/` (guide déposé,
-      // document produit par l'agent) : relecture de la liste automatique.
-      setAutoKnowledgeTick((t) => t + 1);
-      updateRuntime(convId, (r) => ({ ...r, streaming: false, activeRequestId: null }));
-      // Sécurité : purge les demandes de permission orphelines de ce tour
-      // (le sidecar les refuse déjà normalement à l'abort/fin de tour).
-      setPermissionQueue((prev) => prev.filter((p) => p.targetId !== id));
-      // Fin de tour : la conso a pu changer (Claude uniquement pour l'instant).
-      notifyUsageChanged();
-      // Fin de tour : sauvegarde immédiate (pas d'attente du debounce). Les
-      // tours/sessionId sont relus dans le RUNTIME de cette conversation (et
-      // non dans l'état React fermé à l'appel, périmé après tout ce
-      // streaming) — l'utilisateur a pu changer d'onglet entre-temps, donc on
-      // ne peut plus supposer que cette conversation est encore l'active.
-      if (selectedProjectId) {
-        if (selectedProjectIdRef.current === selectedProjectId) {
-          const liveSessions = buildLiveSessions();
-          setSessions(liveSessions);
-          persistProject(selectedProjectId, liveSessions);
-        } else {
-          // Le projet AFFICHÉ a changé pendant ce tour d'arrière-plan :
-          // `buildLiveSessions`/`persistProject` liraient les refs du nouveau
-          // projet et écriraient ses sessions sous la clé de l'ancien
-          // (contamination croisée du document persisté). On reporte le
-          // résultat du tour dans l'état du projet d'ORIGINE, sans toucher à
-          // l'affichage.
-          persistBackgroundConversation(selectedProjectId, convId);
-        }
-      }
-    }
-  }
+  const { handleSend } = creerEnvoiProjet({
+    activeSessionId,
+    cwd,
+    selectedProjectId,
+    selectedProjectIdRef,
+    fournisseurs: providers,
+    streaming,
+    sessionId,
+    turns,
+    model,
+    engineProviderId,
+    permissionMode,
+    selectedAgent,
+    attachments,
+    attachmentsPending,
+    knowledgeMode,
+    indexConnaissancesPret: knowledgeIdx?.exists === true,
+    injectedKnowledge,
+    getRuntime,
+    updateRuntime,
+    updateTurnsFor,
+    autoAllowToolsRef,
+    injectorsRef,
+    setPermissionQueue,
+    fermerMenuSlash: () => setSlashMenu((m) => ({ ...m, open: false })),
+    signalerMcpInit: () => setMcpReloadToken((n) => n + 1),
+    rafraichirConnaissancesAuto: () => setAutoKnowledgeTick((t) => t + 1),
+    setAttachmentsError,
+    clearAttachments,
+    restoreAttachments,
+    collerEnBas,
+    buildLiveSessions,
+    setSessions,
+    persistProject,
+    persistBackgroundConversation,
+  });
 
   // Fin de tour : si des messages ont été mis en file pendant que l'agent
   // travaillait, on envoie le PREMIER automatiquement — les suivants partiront
@@ -4045,7 +1826,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         ? neutralPermission(item.targetId, item.permissionId, dec, msg)
         : claudePermission(item.targetId, item.permissionId, dec, msg);
     if (decision === "allow" && rememberTool) {
-      autoAllowToolsRef.current.add(current.toolName);
+      // Étape 11 — clé PAR PROJET du tour (voir permissions.ts) : un Bash
+      // autorisé ici ne s'applique plus en silence aux autres projets.
+      autoAllowToolsRef.current.add(cleAutoAllow(current.projectId ?? null, current.toolName));
       // Autorise aussi d'un coup les demandes déjà en file pour le même outil.
       for (const item of permissionQueue.slice(1)) {
         if (item.toolName === current.toolName) {
@@ -4373,10 +2156,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       }),
     );
     setActiveTab((prev) => renamedPath(prev, oldPath, newPath));
-    if (!selectedProjectId) return;
-    setKnowledgeDoc((prev) => {
-      const list = prev[selectedProjectId];
-      if (!list) return prev;
+    reecrirePins((list) => {
       let changed = false;
       const nextList = list.map((d) => {
         const path = renamedPath(d.path, oldPath, newPath);
@@ -4384,10 +2164,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         changed = true;
         return { path, name: path.slice(path.lastIndexOf("/") + 1) || path };
       });
-      if (!changed) return prev;
-      const next = { ...prev, [selectedProjectId]: nextList };
-      void stateWrite(KNOWLEDGE_STATE_KEY, next).catch(() => {});
-      return next;
+      return changed ? nextList : null;
     });
   }
 
@@ -4399,15 +2176,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   function handleFileDeleted(path: string) {
     setOpenFiles((prev) => prev.filter((f) => !isUnderPath(f.path, path)));
     setActiveTab((prev) => (isUnderPath(prev, path) ? "conversation" : prev));
-    if (!selectedProjectId) return;
-    setKnowledgeDoc((prev) => {
-      const list = prev[selectedProjectId];
-      if (!list) return prev;
+    reecrirePins((list) => {
       const nextList = list.filter((d) => !isUnderPath(d.path, path));
-      if (nextList.length === list.length) return prev;
-      const next = { ...prev, [selectedProjectId]: nextList };
-      void stateWrite(KNOWLEDGE_STATE_KEY, next).catch(() => {});
-      return next;
+      return nextList.length === list.length ? null : nextList;
     });
   }
 
@@ -4688,7 +2459,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
               if (!conv) return null;
               const tabId = convTabId(convId);
               const isActive = activeTab === tabId;
-              const convStreaming = runtimesRef.current.get(convId)?.streaming === true;
+              const convStreaming = runtimes.consulter(convId)?.streaming === true;
               return (
                 <div
                   key={convId}
@@ -4794,11 +2565,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
               routage redevient normal (voir applyDebordNotice). */}
           {debordNotice && (
             <div className={`agent-tabs__notice debord-notice${debordNotice.blocked ? " debord-notice--blocked" : ""}`}>
-              {debordNotice.unconfigured
-                ? "⚠ Cible de débord non configurée — tour envoyé sur l'abonnement"
-                : debordNotice.blocked
-                  ? `⛔ Plafond débord atteint (${debordNotice.plafondUsdMois ?? "?"} $/mois) — repli sur le modèle local`
-                  : `⚠ Mode débord : abonnement saturé (fenêtre 5 h à ${Math.round(debordNotice.fiveHourPct ?? 0)} %) — tour envoyé sur ${debordNotice.model}`}
+              {libelleDebordNotice(debordNotice)}
             </div>
           )}
 
@@ -4930,7 +2697,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                         onComposerChange(value);
                         updateSlashMenu(value, e.currentTarget.selectionStart ?? value.length);
                       }}
-                      onBlur={onComposerBlur}
                       onKeyDown={handleKeyDown}
                       onPaste={(e) => {
                         // Moteur neutre : les pièces jointes ne passent pas par
@@ -4987,7 +2753,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                             type="button"
                             className="btn"
                             onClick={() => void handleSend()}
-                            disabled={!draft.trim() || !cwd}
+                            disabled={brouillonVide || !cwd}
                             title={
                               canInject
                                 ? "Glisser la demande dans le tour en cours (prise en compte au prochain outil)"
@@ -5005,7 +2771,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                           type="button"
                           className="btn"
                           onClick={() => void handleSend()}
-                          disabled={(!draft.trim() && attachments.length === 0) || attachmentsPending || !cwd}
+                          disabled={(brouillonVide && attachments.length === 0) || attachmentsPending || !cwd}
                           title={attachmentsPending ? "Image en cours de chargement…" : undefined}
                         >
                           Envoyer
@@ -5063,470 +2829,72 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         </div>
 
         <aside className="agent-sidebar agent-sidebar--right">
-          <SidebarSection
-            id="sessions"
-            title="Sessions"
-            defaultOpen={false}
-            badge={sessions.length > 0 ? <span className="sidebar-section__count">{sessions.length}</span> : undefined}
-          >
-            {/* Bouton de création DANS la section Sessions : « Nouvelle session »
-                existait aussi dans la section LLM, mais inaccessible quand celle-ci
-                est repliée — le geste doit vivre là où l'on voit les sessions. */}
-            <button
-              type="button"
-              className="btn btn--ghost session-list__new"
-              onClick={handleNewSession}
-              disabled={streaming}
-            >
-              + Nouvelle session
-            </button>
-            {sessions.length === 0 ? (
-              <p className="empty-hint">Aucune session.</p>
-            ) : (
-              <ul
-                className="session-list"
-                ref={sessionsRoving.containerRef}
-                onKeyDown={sessionsRoving.onKeyDown}
-                onFocus={sessionsRoving.onFocus}
-              >
-                {sortedSessions.map((s) => (
-                  <li key={s.id} className={`session-item${s.id === activeSessionId ? " session-item--active" : ""}`}>
-                    {editingSessionId === s.id ? (
-                      <input
-                        className="session-item__title-input"
-                        value={editingSessionTitle}
-                        autoFocus
-                        onFocus={(e) => e.currentTarget.select()}
-                        onChange={(e) => setEditingSessionTitle(e.currentTarget.value)}
-                        onBlur={commitEditSessionTitle}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            commitEditSessionTitle();
-                          } else if (e.key === "Escape") {
-                            e.preventDefault();
-                            cancelEditSessionTitle();
-                          }
-                        }}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        className="session-item__title"
-                        title={s.title}
-                        disabled={streaming}
-                        tabIndex={s.id === tabbableSessionId ? 0 : -1}
-                        onClick={() => selectSession(s.id)}
-                      >
-                        {s.title}
-                      </button>
-                    )}
-                    <div className="session-item__meta">
-                      <span className="session-item__date">{formatRelativeDate(s.updatedAt)}</span>
-                      <span className="session-item__engine">
-                        {s.engine.providerId ? (providers.find((p) => p.id === s.engine.providerId)?.label ?? s.engine.providerId) : "Claude"}
-                      </span>
-                    </div>
-                    {confirmDeleteSessionId === s.id ? (
-                      <div className="session-item__confirm">
-                        Supprimer ?
-                        <button type="button" className="btn btn--ghost" onClick={() => setConfirmDeleteSessionId(null)}>
-                          Non
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn--deny"
-                          onClick={() => {
-                            setConfirmDeleteSessionId(null);
-                            deleteSession(s.id);
-                          }}
-                        >
-                          Oui
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="session-item__actions">
-                        <button
-                          type="button"
-                          className="session-item__action"
-                          title="Renommer"
-                          aria-label={`Renommer ${s.title}`}
-                          onClick={() => startEditSessionTitle(s)}
-                        >
-                          ✎
-                        </button>
-                        <button
-                          type="button"
-                          className="session-item__action"
-                          title="Supprimer"
-                          aria-label={`Supprimer ${s.title}`}
-                          disabled={streaming}
-                          onClick={() => setConfirmDeleteSessionId(s.id)}
-                        >
-                          🗑
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </SidebarSection>
+          <SessionsSection
+            sessions={sessions}
+            sortedSessions={sortedSessions}
+            activeSessionId={activeSessionId}
+            tabbableSessionId={tabbableSessionId}
+            streaming={streaming}
+            providers={providers}
+            editingSessionId={editingSessionId}
+            editingSessionTitle={editingSessionTitle}
+            setEditingSessionTitle={setEditingSessionTitle}
+            commitEditSessionTitle={commitEditSessionTitle}
+            cancelEditSessionTitle={cancelEditSessionTitle}
+            startEditSessionTitle={startEditSessionTitle}
+            confirmDeleteSessionId={confirmDeleteSessionId}
+            setConfirmDeleteSessionId={setConfirmDeleteSessionId}
+            deleteSession={deleteSession}
+            selectSession={selectSession}
+            handleNewSession={handleNewSession}
+            sessionsRoving={sessionsRoving}
+          />
 
-          <SidebarSection id="llm" title="LLM" defaultOpen={!isCompactViewport}>
-            <div className="field agent-preset">
-              <label htmlFor="agent-preset-select">Agent</label>
-              <select
-                id="agent-preset-select"
-                value={selectedAgentKey ? agentOptionValue(selectedAgentKey) : ""}
-                disabled={streaming}
-                onChange={(e) => handleAgentSelectChange(e.currentTarget.value)}
-              >
-                <option value="">Aucun (manuel)</option>
-                {projectAgentsByScope.project.length > 0 && (
-                  <optgroup label="Projet">
-                    {projectAgentsByScope.project.map((a) => (
-                      <option key={agentOptionValue(a)} value={agentOptionValue(a)}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {projectAgentsByScope.global.length > 0 && (
-                  <optgroup label="Global">
-                    {projectAgentsByScope.global.map((a) => (
-                      <option key={agentOptionValue(a)} value={agentOptionValue(a)}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {projectAgentsByScope.claudeCode.length > 0 && (
-                  <optgroup label="Claude Code">
-                    {projectAgentsByScope.claudeCode.map((a) => (
-                      <option key={agentOptionValue(a)} value={agentOptionValue(a)}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-              {selectedAgent && (
-                <div className="agent-preset__applied">
-                  <span>Configuré par l'agent {selectedAgent.name}</span>
-                  <button
-                    type="button"
-                    className="agent-preset__clear"
-                    disabled={streaming}
-                    aria-label="Revenir au mode manuel"
-                    title="Revenir au mode manuel"
-                    onClick={clearAgentSelection}
-                  >
-                    ✕
-                  </button>
-                </div>
-              )}
-            </div>
+          <LlmSection
+            selectedAgentKey={selectedAgentKey}
+            projectAgentsByScope={projectAgentsByScope}
+            handleAgentSelectChange={handleAgentSelectChange}
+            selectedAgent={selectedAgent}
+            clearAgentSelection={clearAgentSelection}
+            streaming={streaming}
+            engineProviderId={engineProviderId}
+            providers={providers}
+            handleEngineChange={handleEngineChange}
+            permissionMode={permissionMode}
+            setPermissionMode={setPermissionMode}
+            model={model}
+            setModel={setModel}
+            clearRoutedAffinity={clearRoutedAffinity}
+            clearAttachments={clearAttachments}
+            neutralModelsState={neutralModelsState}
+            neutralModels={neutralModels}
+            neutralFeaturedIds={neutralFeaturedIds}
+            basculerFavoriNeutre={basculerFavoriNeutre}
+            neutralModelsError={neutralModelsError}
+            sessionId={sessionId}
+            isCompactViewport={isCompactViewport}
+          />
 
-            <div className="field">
-              <label htmlFor="agent-engine">Moteur</label>
-              <select
-                id="agent-engine"
-                value={engineProviderId ?? ""}
-                disabled={streaming || selectedAgent !== null}
-                onChange={(e) => handleEngineChange(e.currentTarget.value)}
-              >
-                <option value="">Claude (abonnement)</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="field">
-              <label htmlFor="agent-permission-mode">Mode de permission</label>
-              <select
-                id="agent-permission-mode"
-                value={permissionMode}
-                disabled={selectedAgent !== null}
-                onChange={(e) => setPermissionMode(e.currentTarget.value as PermissionMode)}
-              >
-                {/* Le mode « plan » n'existe pas côté moteur neutre (docs/protocol.md, Lot 6). */}
-                {PERMISSION_MODE_OPTIONS.filter((o) => o.value !== "plan" || engineProviderId === null).map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="field">
-              <label htmlFor="agent-model">Modèle</label>
-              <select
-                id="agent-model"
-                value={model}
-                onChange={(e) => {
-                  const value = e.currentTarget.value;
-                  setModel(value);
-                  // R2 — choisir un modèle explicite efface l'affinité de
-                  // session (override) ; revenir sur « Auto » re-route au
-                  // prochain envoi (routedTarget redevenu null). Bascule vers
-                  // Auto : pièces jointes purgées (moteur réel inconnu, voir
-                  // `attachmentsSupported`).
-                  if (value !== AUTO_MODEL) {
-                    clearRoutedAffinity();
-                  } else {
-                    clearAttachments();
-                  }
-                }}
-                // R2 — « Auto (routeur) » restant toujours proposé, le
-                // sélecteur n'est plus verrouillé quand la liste neutre est
-                // vide (seulement pendant son chargement). Verrouillé pendant
-                // le streaming (comme ChatPage) : changer de modèle en plein
-                // tour effacerait l'affinité de routage sous le tour en cours.
-                disabled={
-                  streaming ||
-                  (engineProviderId !== null && neutralModelsState === "loading") ||
-                  (selectedAgent !== null && selectedAgent.model !== null)
-                }
-              >
-                {/* R2 — sentinelle opt-in : jamais défaut, toujours proposée. */}
-                <option value={AUTO_MODEL} title="Démarre sur le modèle le plus fort de la table ; descendre est un choix manuel.">Auto (descendant)</option>
-                {engineProviderId === null &&
-                  MODEL_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                {engineProviderId !== null && neutralModels.length === 0 && model !== AUTO_MODEL && (
-                  <option value="">—</option>
-                )}
-                {engineProviderId !== null && neutralModels.length > 0 && neutralFeaturedModels.length === 0 &&
-                  neutralModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.id}
-                    </option>
-                  ))}
-                {engineProviderId !== null && neutralModels.length > 0 && neutralFeaturedModels.length > 0 && (
-                  <>
-                    <optgroup label="Mis en avant">
-                      {neutralFeaturedModels.map((m) => (
-                        <option key={`fav-${m.id}`} value={m.id}>
-                          ★ {m.id}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Tous les modèles">
-                      {neutralModels.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.id}
-                        </option>
-                      ))}
-                    </optgroup>
-                  </>
-                )}
-              </select>
-            </div>
-
-            {engineProviderId !== null && (
-              <OllamaPanel providerId={engineProviderId} selectedModel={model} />
-            )}
-
-            {engineProviderId !== null && neutralModelsState === "error" && (
-              <div className="result-line result-line--error">Erreur modèles : {neutralModelsError}</div>
-            )}
-
-            {/* « Nouvelle session » vit désormais en tête de la section Sessions
-                (toujours accessible) — plus de doublon ici. */}
-
-            <div className="sidebar-indicators">
-              <span
-                className={`agent-engine-indicator${engineProviderId ? " agent-engine-indicator--neutral" : " agent-engine-indicator--claude"}`}
-                title="Moteur de l'agent"
-              >
-                {engineProviderId ? (providers.find((p) => p.id === engineProviderId)?.label ?? engineProviderId) : "Claude"}
-              </span>
-              <span className={`agent-session-indicator${sessionId ? " agent-session-indicator--active" : ""}`}>
-                {sessionId ? `Session ${sessionId.slice(0, 8)}` : "Aucune session"}
-              </span>
-            </div>
-          </SidebarSection>
-
-          <SidebarSection
-            id="knowledge"
-            title="Connaissances"
-            defaultOpen={false}
-            badge={injectedKnowledge.length > 0 ? <span className="sidebar-section__count">{injectedKnowledge.length}</span> : undefined}
-          >
-            {/* R5 — bascule injection/RAG + index d'embeddings local (docs/spec-r5-rag.md §4). */}
-            <div className="knowledge-rag">
-              <div className="field">
-                <label htmlFor="knowledge-mode-select">Mode</label>
-                <select
-                  id="knowledge-mode-select"
-                  value={knowledgeMode}
-                  disabled={!selectedProjectId || streaming}
-                  title="Injection : documents recopiés en préambule du 1er tour. RAG : l'agent interroge l'index local via l'outil search_knowledge."
-                  onChange={(e) => changeKnowledgeMode(e.currentTarget.value === "rag" ? "rag" : "injection")}
-                >
-                  <option value="injection">Injection intégrale (défaut)</option>
-                  <option value="rag">RAG — outil search_knowledge</option>
-                </select>
-              </div>
-              <div className="knowledge-rag__status">
-                {knowledgeIdx?.exists ? (
-                  <>
-                    <span>
-                      Index : {knowledgeIdx.files} fichier{knowledgeIdx.files > 1 ? "s" : ""} ·{" "}
-                      {knowledgeIdx.chunks} chunk{knowledgeIdx.chunks > 1 ? "s" : ""}
-                      {knowledgeIdx.model ? ` · ${knowledgeIdx.model}` : ""}
-                      {knowledgeIdx.builtAt ? ` · ${formatRelativeDate(knowledgeIdx.builtAt)}` : ""}
-                    </span>
-                    {knowledgeIdx.stale && (
-                      <span
-                        className="knowledge-rag__stale"
-                        title="Un document source a changé depuis la dernière indexation — relancer « Indexer maintenant »."
-                      >
-                        ⚠ index obsolète
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <span>Aucun index — indexer pour activer l'outil search_knowledge.</span>
-                )}
-              </div>
-              <button
-                type="button"
-                className="btn btn--ghost knowledge-rag__index"
-                disabled={!cwd || indexingKnowledge}
-                onClick={() => void handleIndexKnowledge()}
-              >
-                {indexingKnowledge
-                  ? knowledgeIndexProgress
-                    ? `Indexation… ${knowledgeIndexProgress.done}/${knowledgeIndexProgress.total}`
-                    : "Indexation…"
-                  : "Indexer maintenant"}
-              </button>
-              {knowledgeIndexError && <p className="knowledge-rag__error">{knowledgeIndexError}</p>}
-            </div>
-
-            {pinnedKnowledge.length === 0 &&
-            autoKnowledgeDocs.length === 0 &&
-            !projectBadges.claudeMdPath &&
-            claudeMemoryFiles.length === 0 ? (
-              <p className="empty-hint">
-                Clic droit sur un fichier dans « Fichiers » → « Épingler comme connaissance », ou déposez des
-                fichiers dans .iaction/connaissances/.
-              </p>
-            ) : (
-              <>
-                {pinnedKnowledge.length > 0 && (
-                  <div className="knowledge-group">
-                    <p className="knowledge-group__title">Épinglées</p>
-                    <ul className="knowledge-list">
-                      {pinnedKnowledge.map((doc) => (
-                        <li key={doc.path} className="knowledge-item">
-                          <button
-                            type="button"
-                            className="knowledge-item__open"
-                            title={doc.path}
-                            onClick={() => handleOpenFile(doc.path, doc.name)}
-                          >
-                            {doc.name}
-                          </button>
-                          <button
-                            type="button"
-                            className="knowledge-item__remove"
-                            aria-label={`Retirer ${doc.name}`}
-                            title="Retirer"
-                            onClick={() => unpinKnowledge(doc.path)}
-                          >
-                            ×
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {autoKnowledgeDocs.length > 0 && (
-                  <div className="knowledge-group">
-                    <p
-                      className="knowledge-group__title"
-                      title="Retirer un fichier = le supprimer du dossier .iaction/connaissances/"
-                    >
-                      Automatiques (.iaction/connaissances)
-                    </p>
-                    <ul className="knowledge-list">
-                      {autoKnowledgeDocs.map((doc) => (
-                        <li key={doc.path} className="knowledge-item">
-                          <button
-                            type="button"
-                            className="knowledge-item__open"
-                            title={`${doc.path} — retrait : supprimer le fichier du dossier .iaction/connaissances/`}
-                            onClick={() => handleOpenFile(doc.path, doc.name)}
-                          >
-                            {doc.name}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {(projectBadges.claudeMdPath || claudeMemoryFiles.length > 0) && (
-                  <div className="knowledge-group">
-                    <p className="knowledge-group__title">Détectées</p>
-                    <ul className="knowledge-list">
-                      {projectBadges.claudeMdPath && (
-                        <li className="knowledge-item">
-                          <button
-                            type="button"
-                            className="knowledge-item__open"
-                            title="Instructions projet — chargée automatiquement par le moteur Claude ; non ré-injectée par iaction"
-                            onClick={() => handleOpenFile(projectBadges.claudeMdPath as string, "CLAUDE.md")}
-                          >
-                            CLAUDE.md
-                          </button>
-                          <span className="knowledge-item__tag">chargée par le moteur Claude</span>
-                        </li>
-                      )}
-                      {claudeMemoryFiles.map((f) => {
-                        const alreadyPinned = pinnedKnowledge.some((d) => d.path === f.path);
-                        return (
-                          <li key={f.path} className="knowledge-item">
-                            <button
-                              type="button"
-                              className="knowledge-item__open"
-                              title={`${f.path} — mémoire Claude Code`}
-                              onClick={() => handleOpenFile(f.path, f.name)}
-                            >
-                              {f.name}
-                            </button>
-                            <button
-                              type="button"
-                              className="knowledge-item__pin"
-                              disabled={alreadyPinned}
-                              title={
-                                alreadyPinned
-                                  ? "Déjà épinglée (injectée au 1er tour)"
-                                  : "Épingler comme connaissance (l'ajoute aux épinglées, injectée au 1er tour — utile pour le moteur neutre)"
-                              }
-                              onClick={() => pinKnowledge(f.path, f.name)}
-                            >
-                              {alreadyPinned ? "Épinglée" : "Épingler"}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                )}
-              </>
-            )}
-          </SidebarSection>
+          <ConnaissancesSection
+            injectedKnowledge={injectedKnowledge}
+            knowledgeMode={knowledgeMode}
+            changeKnowledgeMode={changeKnowledgeMode}
+            selectedProjectId={selectedProjectId}
+            streaming={streaming}
+            knowledgeIdx={knowledgeIdx}
+            cwd={cwd}
+            indexingKnowledge={indexingKnowledge}
+            knowledgeIndexProgress={knowledgeIndexProgress}
+            knowledgeIndexError={knowledgeIndexError}
+            handleIndexKnowledge={handleIndexKnowledge}
+            pinnedKnowledge={pinnedKnowledge}
+            autoKnowledgeDocs={autoKnowledgeDocs}
+            claudeMdPath={projectBadges.claudeMdPath}
+            claudeMemoryFiles={claudeMemoryFiles}
+            handleOpenFile={handleOpenFile}
+            unpinKnowledge={unpinKnowledge}
+            pinKnowledge={pinKnowledge}
+          />
 
           <SidebarSection
             id="mcp"

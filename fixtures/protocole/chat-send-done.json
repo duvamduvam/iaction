@@ -1,0 +1,28 @@
+{
+  "quoi": "done d'un chat.send (moteur neutre) avec usage étendu R0 : coût réel et tokens cachés remontés par le fournisseur. C'est le champ dont l'absence d'affichage est passée inaperçue pendant des semaines.",
+  "parseur": "parseChatDone",
+  "evenement": {
+    "id": "temoin-chat-1",
+    "event": "done",
+    "data": {
+      "finishReason": "stop",
+      "usage": {
+        "promptTokens": 6,
+        "completionTokens": 2,
+        "costUsd": 0.000123,
+        "cachedTokens": 4
+      },
+      "modelUsed": null
+    }
+  },
+  "attendu": {
+    "finishReason": "stop",
+    "usage": {
+      "promptTokens": 6,
+      "completionTokens": 2,
+      "costUsd": 0.000123,
+      "cachedTokens": 4
+    },
+    "modelUsed": null
+  }
+}

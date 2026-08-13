@@ -19,14 +19,14 @@
  * transcription, chacune avec son runtime vif (`ConvRuntime`) — un tour peut
  * ainsi continuer de streamer dans un onglet d'arrière-plan pendant qu'on
  * lit ou écrit dans un autre. Voir le commentaire détaillé au-dessus de
- * `runtimesRef` dans le composant.
+ * le dépôt de runtimes dans le composant.
  */
 import {
   forwardRef,
-  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -36,7 +36,6 @@ import {
   AttachmentTray,
   filesFromClipboard,
   filesFromDrop,
-  SentAttachments,
   toAttachmentRefs,
   toContractAttachments,
   toSentAttachments,
@@ -44,9 +43,10 @@ import {
   type SentAttachment,
 } from "./Attachments";
 import { readClipboardImage } from "./clipboardClient";
-import { closeDanglingFence, Markdown } from "./Markdown";
+import { TranscriptionChat } from "./chatTranscript";
 import { Modal } from "./Modal";
-import { readFeatured, splitFeatured } from "./modelCatalog";
+import { useFavorisModeles } from "./useFavorisModeles";
+import { ModelPicker, type OptionEpinglee } from "./ModelPicker";
 import { OllamaPanel } from "./OllamaPanel";
 import { capSessions, deriveTitleFromText, formatRelativeDate, newSessionMeta, sortByRecent } from "./sessionStore";
 import { SidebarSection } from "./SidebarSection";
@@ -62,7 +62,6 @@ import {
   readRoutingDebord,
   readRoutingSummarizer,
   readRoutingTable,
-  ROUTE_TIERS,
 } from "./routerAdmin";
 import {
   chatAbort,
@@ -73,23 +72,24 @@ import {
   contextCompact,
   isRouteTier,
   modelsDetail,
-  modelsList,
   parseChatDone,
   parseClaudeDone,
   routerRoute,
   toRouteTarget,
   type ChatAttachment,
   type ChatMessage,
+  type AvancementWeb,
   type ChatUsage,
-  type ModelInfo,
+  type ModelDetail,
   type RequestMeta,
   type RouteDebord,
   type RouteTarget,
   type RouteTier,
 } from "./sidecar";
+import { libelleAvancementWeb } from "./rechercheWeb";
 import type { ProviderConfig } from "./providerAdmin";
 import { stateRead, stateWrite } from "./stateClient";
-import { TtsButton, VoiceButtons, VoiceStatus } from "./VoiceControls";
+import { VoiceButtons, VoiceStatus } from "./VoiceControls";
 import {
   DEFAULT_CONVERSATION_SETTINGS,
   useVoiceComposer,
@@ -99,6 +99,11 @@ import { recordModelUsage } from "./fableUsage";
 import { subscribeProvidersPushed } from "./providersBus";
 import { publishContext, registerCompactHandler } from "./contextBus";
 import { notifyUsageChanged } from "./usageBus";
+import { useConversationRuntime } from "./useConversationRuntime";
+import { appliquerDebordNotice, libelleDebordNotice, type DebordNotice } from "./debordNotice";
+import { prochainOnglet } from "./onglets";
+import { resoudreFournisseur } from "./choixFournisseur";
+import { estCibleUtilisable, resoudreRouteMontante } from "./routageAuto";
 
 /*
  * Fournisseur spécial « Claude (abonnement) » : il ne passe pas par le moteur
@@ -107,7 +112,7 @@ import { notifyUsageChanged } from "./usageBus";
  * L'historique vit dans la session SDK (resume), pas dans le payload.
  */
 const CLAUDE_PROVIDER_ID = "claude-abonnement";
-const CLAUDE_MODELS: ModelInfo[] = [
+const CLAUDE_MODELS: ModelDetail[] = [
   { id: "claude-fable-5" },
   { id: "claude-sonnet-5" },
   { id: "claude-opus-4-8" },
@@ -181,7 +186,8 @@ function shouldCompactChat(
 
 type EntryStatus = "streaming" | "done" | "error" | "aborted";
 
-interface ChatEntry {
+/** Exportée pour le fil, extrait dans chatTranscript.tsx (import de TYPE seul : pas de cycle à l'exécution). */
+export interface ChatEntry {
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -202,6 +208,8 @@ interface ChatEntry {
   /** R1 — modèle cible du routage (badge) et raisons du classement (infobulle). */
   routeModel?: string;
   routeReasons?: string[];
+  /** R9 — sources web citées par cette réponse (`[1]`, `[2]`…). Persistées avec l'entrée. */
+  sourcesWeb?: { n: number; titre: string; url: string }[];
 }
 
 /**
@@ -381,19 +389,15 @@ interface ConvRuntime {
    * de `handleSend` abandonne alors le tour proprement, sans envoi.
    */
   preSendAbort: boolean;
+  /**
+   * R9 — avancement de la recherche web du tour EN COURS (éphémère, jamais
+   * persisté, effacé au tour suivant). Les sources restent attachées à la
+   * réponse, elles : voir `ChatEntry.sourcesWeb`.
+   */
+  avancementWeb: AvancementWeb | null;
 }
 
 /** R3 — contenu du bandeau de débord (voir docs/spec-r3-debord.md §3). */
-interface DebordNotice {
-  blocked: boolean;
-  fiveHourPct: number | null;
-  /** Modèle payant réellement utilisé quand le débord est actif. */
-  model: string;
-  /** Plafond configuré (affiché quand le débord est bloqué), `null` = sans plafond. */
-  plafondUsdMois: number | null;
-  /** Vrai = cible de débord non déclarée dans la table des fournisseurs : tour resté sur l'abonnement. */
-  unconfigured?: boolean;
-}
 
 function freshRuntime(
   entries: ChatEntry[] = [],
@@ -416,6 +420,7 @@ function freshRuntime(
     compaction,
     debordNotice: null,
     preSendAbort: false,
+    avancementWeb: null,
   };
 }
 
@@ -429,8 +434,15 @@ function freshChatSession(providerId: string): ChatSession {
     model: AUTO_MODEL,
     systemPrompt: "",
     claudeSessionId: null,
-    // Défaut activé pour les nouvelles conversations (voir docs/protocol.md `claude.start`).
-    webSearch: true,
+    /*
+     * R9 — le défaut dépend du moteur, et c'est délibéré. Côté Claude la
+     * recherche passe par les outils du SDK : le modèle ne cherche QUE s'il
+     * juge que c'est utile, donc l'activer par défaut ne coûte rien (défaut
+     * historique conservé). Côté neutre, l'injection cherche à CHAQUE tour :
+     * l'imposer ajouterait plusieurs secondes et une requête au moteur même
+     * pour « bonjour ». L'utilisateur coche quand il en a besoin.
+     */
+    webSearch: providerId === CLAUDE_PROVIDER_ID,
     routedTier: null,
     routedTarget: null,
     compaction: null,
@@ -624,47 +636,6 @@ function buildPersistedChatState(state: PersistedChatState): PersistedChatState 
   };
 }
 
-/** Mémoïsé : seules les entrées dont l'objet change re-rendent (le brouillon
-    du composeur vit dans l'état de la page — sans memo, chaque frappe
-    re-rendait toutes les bulles, markdown compris). */
-const ChatBubble = memo(function ChatBubble({ entry }: Readonly<{ entry: ChatEntry }>) {
-  const roleClass = entry.role === "user" ? "chat-bubble--user" : "chat-bubble--assistant";
-  return (
-    <div className={`chat-bubble ${roleClass}`}>
-      <div className="chat-bubble__content">
-        {/* Rendu Markdown pour l'assistant uniquement — l'utilisateur reste en
-            texte brut pre-wrap. En streaming, une fence de code encore ouverte
-            est refermée pour le rendu (stabilité du parse — voir Markdown.tsx). */}
-        {entry.role === "assistant" ? (
-          <Markdown content={entry.status === "streaming" ? closeDanglingFence(entry.content) : entry.content} />
-        ) : (
-          entry.content
-        )}
-        {entry.status === "streaming" && <span className="cursor" />}
-      </div>
-      {entry.attachments && entry.attachments.length > 0 && <SentAttachments items={entry.attachments} />}
-      {entry.status === "error" && (
-        <div className="chat-bubble__error">Erreur : {entry.errorMessage}</div>
-      )}
-      {entry.status === "aborted" && <div className="chat-bubble__note">Réponse interrompue.</div>}
-      {entry.status === "done" && entry.usage && (
-        <div className="chat-bubble__usage">
-          {entry.usage.promptTokens ?? "?"} + {entry.usage.completionTokens ?? "?"} tokens
-        </div>
-      )}
-      {/* R1 — badge des tours envoyés en « Auto » : tier → modèle, raisons en infobulle. */}
-      {entry.routeTier && entry.routeModel && (
-        <div className="chat-bubble__route" title={(entry.routeReasons ?? []).join(" · ")}>
-          ⚡ auto : {entry.routeTier} → {entry.routeModel}
-        </div>
-      )}
-      {entry.role === "assistant" && entry.status === "done" && entry.content.trim() && (
-        <TtsButton text={entry.content} />
-      )}
-    </div>
-  );
-});
-
 export interface ChatPageHandle {
   /**
    * Raccourci global Ctrl+N (voir App.tsx) : nouvelle conversation. Renvoie
@@ -716,13 +687,20 @@ export const ChatPage = forwardRef<
   // `selectChatSession`), verrouillée pendant que SA conversation streame —
   // les autres onglets restent librement consultables/éditables.
   const [providerId, setProviderId] = useState("");
+  // T-018 — dernier fournisseur DÉLIBÉRÉMENT posé (sélecteur, bascule/fermeture
+  // d'onglet, suppression, restauration de session) : c'est lui qu'on rétablit
+  // quand la liste des fournisseurs revient après une éclipse. Poser un
+  // fournisseur passe donc TOUJOURS par `choisirFournisseur` — sauf le repli
+  // automatique, qui effacerait l'intention qu'il est censé protéger.
+  const choixFournisseurRef = useRef("");
+  const choisirFournisseur = useCallback((id: string) => {
+    choixFournisseurRef.current = id;
+    setProviderId(id);
+  }, []);
   const [model, setModel] = useState("");
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [models, setModels] = useState<ModelDetail[]>([]);
   const [modelsState, setModelsState] = useState<"idle" | "loading" | "error">("idle");
   const [modelsError, setModelsError] = useState("");
-  // Favoris du fournisseur courant (fournisseurs neutres uniquement, voir modelCatalog.ts) :
-  // remontés en tête du sélecteur de modèle, préfixés « ★ ».
-  const [featuredIds, setFeaturedIds] = useState<string[]>([]);
 
   const [systemPrompt, setSystemPrompt] = useState("");
   // Recherche web (fournisseur Claude (abonnement) uniquement) — activée par
@@ -751,7 +729,7 @@ export const ChatPage = forwardRef<
 
   // Historique de sessions (Lot Sessions) : `sessions` porte la dernière
   // copie CONNUE des champs lourds de chaque conversation ; les conversations
-  // OUVERTES en onglet ont, elles, un runtime vif dans `runtimesRef` qui
+  // OUVERTES en onglet ont, elles, un runtime vif dans le dépôt de runtimes qui
   // prime — voir `buildLiveSessions`, qui recombine les deux à chaque
   // sauvegarde.
   const [sessions, setSessionsState] = useState<ChatSession[]>([]);
@@ -795,21 +773,15 @@ export const ChatPage = forwardRef<
    * d'état React de ce mécanisme : il force un nouveau rendu à chaque
    * mutation (n'importe quelle conversation), pour que le point « ● » d'un
    * onglet en arrière-plan et le contenu affiché de la conversation active
-   * restent à jour — la DONNÉE elle-même vit dans `runtimesRef.current`, lue
+   * restent à jour — la DONNÉE elle-même vit dans le dépôt de runtimes, lue
    * à chaque rendu (`getRuntime`), jamais dans un `useState` séparé (qui
    * imposerait de recréer la Map entière à chaque delta de streaming).
    */
-  const runtimesRef = useRef<Map<string, ConvRuntime>>(new Map());
-  const [runtimeTick, setRuntimeTick] = useState(0);
+  const { depot: runtimes, tick: runtimeTick } = useConversationRuntime<ConvRuntime>(freshRuntime);
 
   /** Runtime vif d'une conversation — créé vierge à la volée si absent (première fois qu'on le lit). */
   function getRuntime(convId: string): ConvRuntime {
-    let r = runtimesRef.current.get(convId);
-    if (!r) {
-      r = freshRuntime();
-      runtimesRef.current.set(convId, r);
-    }
-    return r;
+    return runtimes.lire(convId);
   }
 
   /**
@@ -825,24 +797,20 @@ export const ChatPage = forwardRef<
       "id" | "entries" | "claudeSessionId" | "routedTier" | "routedTarget" | "compaction"
     >,
   ) {
-    if (!runtimesRef.current.has(session.id)) {
-      runtimesRef.current.set(
-        session.id,
-        freshRuntime(
-          session.entries,
-          session.claudeSessionId,
-          session.routedTier,
-          session.routedTarget,
-          session.compaction,
-        ),
-      );
-    }
+    runtimes.amorcer(session.id, () =>
+      freshRuntime(
+        session.entries,
+        session.claudeSessionId,
+        session.routedTier,
+        session.routedTarget,
+        session.compaction,
+      ),
+    );
   }
 
   /** Écrit dans le runtime d'UNE conversation précise et force un nouveau rendu (voir le commentaire ci-dessus). */
   function updateRuntime(convId: string, updater: (prev: ConvRuntime) => ConvRuntime) {
-    runtimesRef.current.set(convId, updater(getRuntime(convId)));
-    setRuntimeTick((t) => t + 1);
+    runtimes.ecrire(convId, updater);
   }
 
   /** Variante ciblée sur les entrées — remplace l'ancien `setEntries` mono-conversation, désormais paramétré par `convId`. */
@@ -865,6 +833,8 @@ export const ChatPage = forwardRef<
   const queuedPrompts = activeRuntime.queuedPrompts;
   // R3 — bandeau de débord de la conversation ACTIVE (voir DebordNotice).
   const debordNotice = activeRuntime.debordNotice;
+  /** R9 — avancement de la recherche web du tour en cours (éphémère). */
+  const avancementWeb = activeRuntime.avancementWeb;
   // R4 — compaction de la conversation ACTIVE (indicateur + modale du résumé).
   const activeCompaction = activeRuntime.compaction;
 
@@ -878,13 +848,12 @@ export const ChatPage = forwardRef<
   }
   // Frappe fluide : écriture silencieuse dans le runtime + re-rendu de
   // rattrapage débouncé, au lieu d'un re-rendu de page par caractère.
-  const { onComposerChange, onComposerBlur } = useComposerLiveDraft({
+  const { onComposerChange, brouillonVide } = useComposerLiveDraft({
     textareaRef,
     draft,
     writeDraft: (value) => {
-      if (activeSessionId) runtimesRef.current.set(activeSessionId, { ...getRuntime(activeSessionId), draft: value });
+      if (activeSessionId) runtimes.poser(activeSessionId, { ...getRuntime(activeSessionId), draft: value });
     },
-    tick: () => setRuntimeTick((t) => t + 1),
   });
   // Ctrl+Z/Ctrl+Maj+Z dans le composeur : pile d'annulation maison, le natif
   // étant cassé par les écritures programmatiques du brouillon (voir useComposerUndo.ts).
@@ -929,6 +898,9 @@ export const ChatPage = forwardRef<
   // R4 — modale du résumé de compaction (conversation ACTIVE uniquement) et
   // verrou du bouton « Recompacter » pendant qu'un résumé est en cours.
   const [compactionModalOpen, setCompactionModalOpen] = useState(false);
+  // Rappel STABLE : passé au fil mémoïsé (chatTranscript.tsx), une fonction
+  // recréée à chaque rendu ferait tomber la mémoïsation qu'on vient de poser.
+  const ouvrirResumeCompaction = useCallback(() => setCompactionModalOpen(true), []);
   const [recompacting, setRecompacting] = useState(false);
 
   // R4 — cache mémoire des `contextLength` connus, par fournisseur puis par
@@ -979,7 +951,7 @@ export const ChatPage = forwardRef<
     // cette fonction doit repartir de la liste À JOUR.
     const activeId = activeSessionIdRef.current;
     return sessionsRef.current.map((s) => {
-      const runtime = runtimesRef.current.get(s.id);
+      const runtime = runtimes.consulter(s.id);
       if (!runtime) return s;
       const merged: ChatSession = {
         ...s,
@@ -1023,7 +995,7 @@ export const ChatPage = forwardRef<
     chatInitRef.current = true;
     const startFresh = () => {
       const fresh = freshChatSession(providerId);
-      runtimesRef.current.set(fresh.id, freshRuntime());
+      runtimes.poser(fresh.id, freshRuntime());
       setSessions([fresh]);
       setActiveSessionId(fresh.id);
       setOpenConversationIds([fresh.id]);
@@ -1041,7 +1013,7 @@ export const ChatPage = forwardRef<
           setSessions(restored.sessions);
           setActiveSessionId(activeSession.id);
           setOpenConversationIds(restored.openConversationIds);
-          setProviderId(activeSession.providerId);
+          choisirFournisseur(activeSession.providerId);
           setModel(activeSession.model);
           setSystemPrompt(activeSession.systemPrompt);
           setWebSearch(activeSession.webSearch);
@@ -1072,14 +1044,17 @@ export const ChatPage = forwardRef<
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, entries, providerId, model, systemPrompt, webSearch, openConversationIds]);
 
-  // Sélectionne (ou re-sélectionne si le fournisseur courant a disparu) un
-  // fournisseur par défaut dès que la liste est disponible. « Claude
-  // (abonnement) » est toujours proposé, même sans fournisseur configuré.
+  // Sélectionne un fournisseur par défaut dès que la liste est connue, replie
+  // si le courant a disparu, et RÉTABLIT le choix de l'utilisateur quand son
+  // fournisseur réapparaît (T-018 : un redémarrage du sidecar vidait la liste
+  // le temps d'un rendu, et le repli sur Claude devenait définitif). La règle
+  // vit dans choixFournisseur.ts, testable sans monter React ; la liste vide
+  // n'est délibérément PAS complétée par « Claude (abonnement) », sinon on ne
+  // la distinguerait plus de « fournisseurs pas encore chargés ».
   useEffect(() => {
-    const ids = [...providers.map((p) => p.id), CLAUDE_PROVIDER_ID];
-    if (!ids.includes(providerId)) {
-      setProviderId(ids[0]);
-    }
+    const disponibles = providers.length === 0 ? [] : [...providers.map((p) => p.id), CLAUDE_PROVIDER_ID];
+    const suivant = resoudreFournisseur({ choisi: choixFournisseurRef.current, courant: providerId, disponibles });
+    if (suivant !== null) setProviderId(suivant);
   }, [providers, providerId]);
 
   /** Numéro du dernier chargement de modèles lancé — voir `loadModels`. */
@@ -1107,7 +1082,11 @@ export const ChatPage = forwardRef<
     const demande = ++dernierChargementModeles.current;
     const estPerimee = () => demande !== dernierChargementModeles.current;
     try {
-      const list = await modelsList(pid);
+      // `models.detail` plutôt que `models.list` : MÊME requête au fournisseur,
+      // simplement lue en entier (nom, tarifs, contexte). Le sélecteur en a
+      // besoin pour afficher autre chose que des slugs, et un fournisseur muet
+      // (Ollama) renvoie toujours au moins les ids.
+      const list = await modelsDetail(pid);
       if (estPerimee()) return;
       setModels(list);
       setModelsState("idle");
@@ -1132,18 +1111,29 @@ export const ChatPage = forwardRef<
     return off;
   }, [providerId, loadModels]);
 
-  // Favoris : indépendant du fournisseur Claude (abonnement), qui n'a pas de favoris.
-  useEffect(() => {
-    if (!providerId || isClaude) {
-      setFeaturedIds([]);
-      return;
-    }
-    readFeatured(providerId)
-      .then(setFeaturedIds)
-      .catch(() => setFeaturedIds([]));
-  }, [providerId, isClaude]);
+  // Favoris : indépendant du fournisseur Claude (abonnement), qui n'a pas de catalogue.
+  const [featuredIds, basculerFavori] = useFavorisModeles(isClaude ? null : providerId);
 
-  const featuredModels = splitFeatured(models, featuredIds);
+  /*
+   * T-032 — le catalogue ne se pré-calcule plus ici : ModelPicker ne construit
+   * ses lignes que quand la liste est OUVERTE (le popover est démonté sinon).
+   * Le souci de T-031 — reconstruire plusieurs centaines d'options à chaque
+   * rattrapage de frappe et à chaque image du streaming — disparaît donc de
+   * lui-même, sans mémo à entretenir.
+   */
+
+  /* R1/R7 — la sentinelle « Auto » n'est pas un modèle du catalogue : épinglée
+     en tête, elle survit à tous les filtres. */
+  const epinglesModeles = useMemo<OptionEpinglee[]>(
+    () => [
+      {
+        value: AUTO_MODEL,
+        label: "Auto (montant)",
+        title: "Commence bas et monte selon la complexité ; la session ne redescend jamais.",
+      },
+    ],
+    [],
+  );
 
   // Recollage en bas du fil : voir useStickToBottom.ts (logique partagée avec
   // AgentPage — l'intention de l'utilisateur prime sur la position).
@@ -1200,85 +1190,32 @@ export const ChatPage = forwardRef<
     return handle;
   }
 
-  /** R1 — cible utilisable : moteur Claude (toujours disponible) ou fournisseur déclaré. */
-  function isUsableTarget(target: RouteTarget): boolean {
-    return target.engine === "claude" || providers.some((p) => p.id === target.providerId);
-  }
-
   /**
-   * R1/R7 — résout la cible d'un tour « Auto » : CHAQUE tour est routé par
-   * `router.route` (heuristique, ~0 ms), avec pour `minTier` le PLANCHER DE
-   * SESSION (`routedTier`, absent au premier tour) — le tier effectif ne
-   * descend jamais, il ne peut que monter (spec-r7-topdown §B). Le plancher
-   * n'est relevé qu'au premier signe de succès du tour (`commitAffinity`,
-   * voir `handleSend`). Repli si la cible neutre référence un fournisseur
-   * absent de la table déclarée : tier supérieur (trivial→simple→moyen→
-   * complexe), premier utilisable ; si aucun ne l'est, la cible d'origine est
-   * gardée et l'erreur habituelle du moteur s'affichera dans la bulle.
-   *
-   * R3 — débord d'abonnement : re-vérifié à CHAQUE tour, par ce même appel
-   * `router.route`. Un tour débordé/bloqué ne relève JAMAIS le plancher : la
-   * conversation re-route normalement dès que la fenêtre se rouvre.
+   * R1/R7 §B — stratégie MONTANTE : la règle vit dans `routageAuto.ts` (avec
+   * sa jumelle descendante des Projets, et ses tests). Ne reste ici que le
+   * branchement : plancher de session lu dans le runtime, fournisseurs et
+   * table injectés.
    */
   async function resolveAutoRoute(
     convId: string,
     content: string,
     historyEntries: ChatEntry[],
     attachmentsCount: number,
-  ): Promise<{
-    tier: RouteTier;
-    target: RouteTarget;
-    reasons: string[];
-    debord: RouteDebord | null;
-    /** Plancher à relever au PREMIER signe de succès du tour (voir `handleSend`) — jamais posé ici. */
-    pendingAffinity: boolean;
-    /** Débord annulé : sa cible référence un fournisseur non déclaré (bandeau dédié, tour sur l'abonnement). */
-    debordUnconfigured: boolean;
-  }> {
-    // R7 — plancher de session : appliqué côté sidecar via `minTier`.
-    const floorTier = getRuntime(convId).routedTier;
-    const historyTurns = historyEntries.filter((e) => e.role === "user").length;
-    const routed = await routerRoute({
-      text: content,
-      ...(historyTurns > 0 ? { historyTurns } : {}),
-      ...(attachmentsCount > 0 ? { attachmentsCount } : {}),
-      ...(floorTier ? { minTier: floorTier } : {}),
-    });
-
-    let tier = routed.tier;
-    let target = routed.target;
-    let debord = routed.debord;
-    const reasons = [...routed.reasons];
-    let debordUnconfigured = false;
-    // Débord actif vers un fournisseur NON déclaré : jamais d'envoi vers un
-    // provider inconnu — repli sur la cible abonnement d'origine (table du
-    // tier), débord annulé, bandeau dédié.
-    if (debord?.active && !isUsableTarget(target)) {
-      target = mergeRoutingTable(await readRoutingTable())[tier];
-      reasons.push("cible de débord non configurée : envoi sur l'abonnement");
-      debord = null;
-      debordUnconfigured = true;
-    }
-    // R3 — cible de débord/repli plafond : pas de repli tier supérieur (elle
-    // ne vient pas de la table), l'erreur moteur habituelle s'afficherait.
-    if (!debord && !isUsableTarget(target)) {
-      const table = mergeRoutingTable(await readRoutingTable());
-      for (let i = ROUTE_TIERS.indexOf(routed.tier) + 1; i < ROUTE_TIERS.length; i++) {
-        const candidate = table[ROUTE_TIERS[i]];
-        if (isUsableTarget(candidate)) {
-          reasons.push(`repli : fournisseur « ${target.providerId ?? "?"} » absent`);
-          tier = ROUTE_TIERS[i];
-          target = candidate;
-          break;
-        }
-      }
-    }
-
-    // R3/R7 — un tour débordé/bloqué ne relève PAS le plancher de session.
-    // Un tour normal, lui, ne le relève pas ICI mais au premier signe de
-    // succès (`pendingAffinity`, voir `handleSend`) — un tour routé qui
-    // échoue (cible éteinte…) ne doit jamais relever le plancher pour rien.
-    return { tier, target, reasons, debord, pendingAffinity: !debord, debordUnconfigured };
+  ) {
+    return resoudreRouteMontante(
+      {
+        texte: content,
+        // R7 — plancher de session : appliqué côté sidecar via `minTier`.
+        plancher: getRuntime(convId).routedTier,
+        toursHistorique: historyEntries.filter((e) => e.role === "user").length,
+        nbPiecesJointes: attachmentsCount,
+      },
+      {
+        router: routerRoute,
+        estUtilisable: (t) => estCibleUtilisable(t, providers),
+        lireTable: async () => mergeRoutingTable(await readRoutingTable()),
+      },
+    );
   }
 
   /**
@@ -1288,35 +1225,23 @@ export const ChatPage = forwardRef<
    * débord non déclarée — bandeau dédié, le tour part sur l'abonnement
    * (voir `resolveAutoRoute`).
    */
+  /**
+   * Bandeau de débord — les règles vivent dans `debordNotice.ts`, partagé avec
+   * l'autre page. Ne reste ici que le branchement : où écrire, et comment lire
+   * le plafond.
+   */
   async function applyDebordNotice(
     convId: string,
     debord: RouteDebord | null,
     model: string,
     unconfigured = false,
   ): Promise<void> {
-    if (unconfigured) {
-      updateRuntime(convId, (r) => ({
-        ...r,
-        debordNotice: { blocked: false, fiveHourPct: null, model, plafondUsdMois: null, unconfigured: true },
-      }));
-      return;
-    }
-    if (!debord) {
-      updateRuntime(convId, (r) => (r.debordNotice ? { ...r, debordNotice: null } : r));
-      return;
-    }
-    let plafondUsdMois: number | null = null;
-    if (debord.blocked) {
-      // `null` = bascule payante désactivée (le sidecar ne devrait alors
-      // jamais signaler de débord, mais on reste défensif).
-      plafondUsdMois = await readRoutingDebord()
-        .then((d) => d?.plafondUsdMois ?? null)
-        .catch(() => null);
-    }
-    updateRuntime(convId, (r) => ({
-      ...r,
-      debordNotice: { blocked: debord.blocked, fiveHourPct: debord.fiveHourPct, model, plafondUsdMois },
-    }));
+    await appliquerDebordNotice<ConvRuntime>((majeur) => runtimes.ecrire(convId, majeur), {
+      debord,
+      model,
+      unconfigured,
+      lirePlafond: () => readRoutingDebord().then((d) => d?.plafondUsdMois ?? null),
+    });
   }
 
   /* ---------- R4 — économie de contexte du moteur neutre ---------- */
@@ -1643,8 +1568,26 @@ export const ChatPage = forwardRef<
             toApiMessages(historyEntries, systemPrompt, content, compaction),
             {},
             onDelta,
-            contractAttachments,
-            meta,
+            {
+              attachments: contractAttachments,
+              meta,
+              // R9 — la recherche web n'est plus réservée à Claude : c'est une
+              // capacité de l'application, identique sur tous les fournisseurs.
+              web: {
+                actif: webSearch,
+                onWeb: (avancement) => {
+                  updateRuntime(convId, (r) => ({ ...r, avancementWeb: avancement }));
+                  // Les sources s'attachent à la RÉPONSE (et sont persistées
+                  // avec elle), comme le badge de routage R1 — l'avancement,
+                  // lui, est éphémère.
+                  if (avancement.sources.length > 0) {
+                    updateEntriesFor(convId, (prev) =>
+                      prev.map((e) => (e.id === assistantId ? { ...e, sourcesWeb: avancement.sources } : e)),
+                    );
+                  }
+                },
+              },
+            },
           );
       updateRuntime(convId, (r) => ({ ...r, activeRequestId: id }));
 
@@ -1672,7 +1615,7 @@ export const ChatPage = forwardRef<
       // à l'envoi) — pas question de les rejoindre à la main pour réessayer.
       restoreAttachments(sentDrafts);
     } finally {
-      updateRuntime(convId, (r) => ({ ...r, streaming: false, activeRequestId: null }));
+      updateRuntime(convId, (r) => ({ ...r, streaming: false, activeRequestId: null, avancementWeb: null }));
       // Fin de tour : la conso (Claude et/ou OpenRouter) a pu changer.
       notifyUsageChanged();
       // Fin de tour : sauvegarde immédiate (pas d'attente du debounce). Les
@@ -1823,10 +1766,10 @@ export const ChatPage = forwardRef<
         s.entries.length > 0 ||
         s.titleCustom ||
         openConversationIds.includes(s.id) ||
-        runtimesRef.current.get(s.id)?.streaming === true,
+        runtimes.consulter(s.id)?.streaming === true,
     );
     const nextSessions = [...kept, fresh];
-    runtimesRef.current.set(fresh.id, freshRuntime());
+    runtimes.poser(fresh.id, freshRuntime());
     setSessions(nextSessions);
     setActiveSessionId(fresh.id);
     // R1 — nouvelle conversation = « Auto (routeur) » par défaut (le reste de
@@ -1900,7 +1843,7 @@ export const ChatPage = forwardRef<
   function undoClearChatConversation() {
     const backup = clearedBackupRef.current;
     if (!backup) return;
-    if (runtimesRef.current.get(backup.sessionUiId)?.streaming) return;
+    if (runtimes.consulter(backup.sessionUiId)?.streaming) return;
     clearedBackupRef.current = null;
     setClearedNotice(false);
     if (!sessions.some((s) => s.id === backup.sessionUiId)) return;
@@ -1952,7 +1895,7 @@ export const ChatPage = forwardRef<
     ensureRuntime(target);
     setActiveSessionId(id);
     setOpenConversationIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
-    setProviderId(target.providerId);
+    choisirFournisseur(target.providerId);
     setModel(target.model);
     setSystemPrompt(target.systemPrompt);
     setWebSearch(target.webSearch);
@@ -1974,7 +1917,7 @@ export const ChatPage = forwardRef<
    * en cours serait perdu de vue, donc on refuse tant qu'il streame.
    */
   function closeConversationTab(id: string) {
-    if (runtimesRef.current.get(id)?.streaming) {
+    if (runtimes.consulter(id)?.streaming) {
       // Refus silencieux inacceptable au clavier (Ctrl+Suppr) : l'utilisateur
       // ne verrait rien se passer. Le bouton « × » est lui déjà désactivé.
       setTabsNotice("Conversation en cours : arrêtez le tour avant de fermer son onglet.");
@@ -1983,7 +1926,7 @@ export const ChatPage = forwardRef<
     setTabsNotice(null);
     const liveSessions = buildLiveSessions();
     setSessions(liveSessions);
-    runtimesRef.current.delete(id);
+    runtimes.oublier(id);
     const nextOpen = openConversationIds.filter((c) => c !== id);
     setOpenConversationIds(nextOpen);
 
@@ -2001,7 +1944,7 @@ export const ChatPage = forwardRef<
         ensureRuntime(target);
         nextActiveId = target.id;
         setActiveSessionId(target.id);
-        setProviderId(target.providerId);
+        choisirFournisseur(target.providerId);
         setModel(target.model);
         setSystemPrompt(target.systemPrompt);
         setWebSearch(target.webSearch);
@@ -2015,10 +1958,10 @@ export const ChatPage = forwardRef<
         // Purge des sessions vides au passage (celle qu'on vient de fermer si
         // elle n'avait aucun message), comme le fait `handleNewConversation`.
         const kept = liveSessions.filter(
-          (s) => s.entries.length > 0 || s.titleCustom || runtimesRef.current.get(s.id)?.streaming === true,
+          (s) => s.entries.length > 0 || s.titleCustom || runtimes.consulter(s.id)?.streaming === true,
         );
         const withFresh = [...kept, fresh];
-        runtimesRef.current.set(fresh.id, freshRuntime());
+        runtimes.poser(fresh.id, freshRuntime());
         setSessions(withFresh);
         setOpenConversationIds([fresh.id]);
         setActiveSessionId(fresh.id);
@@ -2035,11 +1978,8 @@ export const ChatPage = forwardRef<
 
   /** Conversation suivante/précédente dans la barre d'onglets (Ctrl+Tab / Ctrl+Maj+Tab). */
   function cycleConversation(direction: 1 | -1) {
-    if (openConversationIds.length < 2) return;
-    const idx = openConversationIds.indexOf(activeSessionId);
-    const base = idx === -1 ? 0 : idx;
-    const next = openConversationIds[(base + direction + openConversationIds.length) % openConversationIds.length];
-    selectChatSession(next);
+    const suivant = prochainOnglet(openConversationIds, activeSessionId, direction);
+    if (suivant) selectChatSession(suivant);
   }
 
   // Raccourcis d'ONGLETS de conversation, écouteur LOCAL à cette page —
@@ -2090,11 +2030,11 @@ export const ChatPage = forwardRef<
   function deleteChatSession(id: string) {
     // Refus si CETTE conversation a un tour en cours (les autres peuvent
     // continuer de streamer sans que ça pose problème).
-    if (runtimesRef.current.get(id)?.streaming) return;
+    if (runtimes.consulter(id)?.streaming) return;
     const liveSessions = buildLiveSessions();
     const remaining = liveSessions.filter((s) => s.id !== id);
     const finalSessions = remaining.length > 0 ? remaining : [freshChatSession(providerId)];
-    runtimesRef.current.delete(id);
+    runtimes.oublier(id);
     setSessions(finalSessions);
     const nextOpen = openConversationIds.filter((c) => c !== id && finalSessions.some((s) => s.id === c));
     setOpenConversationIds(nextOpen);
@@ -2107,7 +2047,7 @@ export const ChatPage = forwardRef<
       ensureRuntime(nextActive);
       setActiveSessionId(nextActive.id);
       setOpenConversationIds(nextOpen.includes(nextActive.id) ? nextOpen : [...nextOpen, nextActive.id]);
-      setProviderId(nextActive.providerId);
+      choisirFournisseur(nextActive.providerId);
       setModel(nextActive.model);
       setSystemPrompt(nextActive.systemPrompt);
       setWebSearch(nextActive.webSearch);
@@ -2207,7 +2147,7 @@ export const ChatPage = forwardRef<
                 id="chat-provider"
                 value={providerId}
                 disabled={streaming}
-                onChange={(e) => setProviderId(e.currentTarget.value)}
+                onChange={(e) => choisirFournisseur(e.currentTarget.value)}
               >
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -2220,11 +2160,20 @@ export const ChatPage = forwardRef<
 
             <div className="field">
               <label htmlFor="chat-model">Modèle</label>
-              <select
+              <ModelPicker
                 id="chat-model"
                 value={model}
-                onChange={(e) => {
-                  const value = e.currentTarget.value;
+                models={models}
+                epingles={epinglesModeles}
+                // Le fournisseur Claude (abonnement) n'a pas de favoris : sans
+                // callback, ModelPicker n'affiche simplement pas d'étoile.
+                favoris={featuredIds}
+                onToggleFavori={isClaude ? undefined : basculerFavori}
+                // R1 — « Auto (routeur) » restant toujours proposé, le
+                // sélecteur n'est plus verrouillé quand la liste est vide.
+                disabled={streaming}
+                chargement={modelsState === "loading"}
+                onChange={(value) => {
                   setModel(value);
                   // R1/R7 — choisir un modèle explicite efface plancher et
                   // cible de session (override) ; revenir sur « Auto »
@@ -2238,55 +2187,29 @@ export const ChatPage = forwardRef<
                     }));
                   }
                 }}
-                // R1 — « Auto (routeur) » restant toujours proposé, le
-                // sélecteur n'est plus verrouillé quand la liste est vide.
-                disabled={streaming || modelsState === "loading"}
-              >
-                <option value={AUTO_MODEL} title="Commence bas et monte selon la complexité ; la session ne redescend jamais.">Auto (montant)</option>
-                {models.length === 0 && model !== AUTO_MODEL && <option value="">—</option>}
-                {featuredModels.length > 0 ? (
-                  <>
-                    <optgroup label="Mis en avant">
-                      {featuredModels.map((m) => (
-                        <option key={`fav-${m.id}`} value={m.id}>
-                          ★ {m.id}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Tous les modèles">
-                      {models.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.id}
-                        </option>
-                      ))}
-                    </optgroup>
-                  </>
-                ) : (
-                  models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.id}
-                    </option>
-                  ))
-                )}
-              </select>
+              />
             </div>
 
             {providerId && providerId !== CLAUDE_PROVIDER_ID && (
               <OllamaPanel providerId={providerId} selectedModel={model} />
             )}
 
-            {isClaude && (
-              <label className="field field--checkbox" htmlFor="chat-web-search">
-                <input
-                  id="chat-web-search"
-                  type="checkbox"
-                  checked={webSearch}
-                  disabled={streaming}
-                  onChange={(e) => setWebSearch(e.currentTarget.checked)}
-                />
-                <span>Recherche web</span>
-              </label>
-            )}
+            {/*
+              R9 — plus de condition sur le fournisseur : la recherche web est
+              une capacité de l'application. Côté Claude elle passe par les
+              outils natifs du SDK, côté neutre par l'injection de contexte —
+              deux chemins, un seul contrat (des sources citées).
+            */}
+            <label className="field field--checkbox" htmlFor="chat-web-search">
+              <input
+                id="chat-web-search"
+                type="checkbox"
+                checked={webSearch}
+                disabled={streaming}
+                onChange={(e) => setWebSearch(e.currentTarget.checked)}
+              />
+              <span>Recherche web</span>
+            </label>
 
             <button
               type="button"
@@ -2438,7 +2361,7 @@ export const ChatPage = forwardRef<
               const conv = sessions.find((s) => s.id === convId);
               if (!conv) return null;
               const isActive = convId === activeSessionId;
-              const convStreaming = runtimesRef.current.get(convId)?.streaming === true;
+              const convStreaming = runtimes.consulter(convId)?.streaming === true;
               return (
                 <div
                   key={convId}
@@ -2514,35 +2437,24 @@ export const ChatPage = forwardRef<
               routage redevient normal (voir applyDebordNotice). */}
           {debordNotice && (
             <div className={`agent-tabs__notice debord-notice${debordNotice.blocked ? " debord-notice--blocked" : ""}`}>
-              {debordNotice.unconfigured
-                ? "⚠ Cible de débord non configurée — tour envoyé sur l'abonnement"
-                : debordNotice.blocked
-                  ? `⛔ Plafond débord atteint (${debordNotice.plafondUsdMois ?? "?"} $/mois) — repli sur le modèle local`
-                  : `⚠ Mode débord : abonnement saturé (fenêtre 5 h à ${Math.round(debordNotice.fiveHourPct ?? 0)} %) — tour envoyé sur ${debordNotice.model}`}
+              {libelleDebordNotice(debordNotice)}
             </div>
           )}
+          {/* R9 — discret et non bloquant : le tour a lieu dans TOUS les cas,
+              y compris quand le moteur est injoignable. Un échec de recherche
+              n'est pas une erreur de tour, c'est une information. */}
+          {avancementWeb && (
+            <div className="agent-tabs__notice">{libelleAvancementWeb(avancementWeb)}</div>
+          )}
           <div className="chat-log" ref={scrollRef} {...scrollProps}>
-            {/* R4 — indicateur discret en tête de transcription : le résumé
-                remplace les anciens tours À L'ENVOI seulement, la transcription
-                affichée reste intégrale. Clic → modale (résumé consultable). */}
-            {activeCompaction && (
-              <button
-                type="button"
-                className="chat-compaction"
-                onClick={() => setCompactionModalOpen(true)}
-                title="Les anciens tours sont envoyés sous forme de résumé — cliquez pour le consulter"
-              >
-                {/* `upToIndex` compte des ENTRÉES de transcription (messages
-                    utilisateur + assistant), pas des tours complets. */}
-                historique compacté ({activeCompaction.upToIndex} messages résumés)
-              </button>
-            )}
-            {entries.length === 0 && (
-              <p className="empty-hint">Aucun message. Écrivez ci-dessous pour démarrer.</p>
-            )}
-            {entries.map((entry) => (
-              <ChatBubble key={entry.id} entry={entry} />
-            ))}
+            {/* Fil mémoïsé (chatTranscript.tsx) : un rendu de la page qui ne
+                touche pas la transcription — le rattrapage du composeur, quatre
+                fois par seconde — ne le traverse plus du tout (T-031). */}
+            <TranscriptionChat
+              entries={entries}
+              messagesResumes={activeCompaction ? activeCompaction.upToIndex : null}
+              onOuvrirResume={ouvrirResumeCompaction}
+            />
           </div>
 
           <div
@@ -2615,7 +2527,6 @@ export const ChatPage = forwardRef<
                 rows={5}
                 defaultValue={draft}
                 onChange={(e) => onComposerChange(e.currentTarget.value)}
-                onBlur={onComposerBlur}
                 onKeyDown={handleKeyDown}
                 onPaste={(e) => {
                   const files = filesFromClipboard(e);
@@ -2651,7 +2562,7 @@ export const ChatPage = forwardRef<
                       type="button"
                       className="btn"
                       onClick={() => void handleSend()}
-                      disabled={!draft.trim() || !providerId || !model}
+                      disabled={brouillonVide || !providerId || !model}
                       title="Mettre en file : envoyé automatiquement à la fin du tour en cours"
                     >
                       Envoyer
@@ -2665,7 +2576,7 @@ export const ChatPage = forwardRef<
                     type="button"
                     className="btn"
                     onClick={() => void handleSend()}
-                    disabled={(!draft.trim() && attachments.length === 0) || attachmentsPending || !providerId || !model}
+                    disabled={(brouillonVide && attachments.length === 0) || attachmentsPending || !providerId || !model}
                     title={attachmentsPending ? "Image en cours de chargement…" : undefined}
                   >
                     Envoyer

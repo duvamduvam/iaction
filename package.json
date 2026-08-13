@@ -1,7 +1,7 @@
 {
   "name": "iaction",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.1",
   "type": "module",
   "workspaces": [
     "ui",
@@ -19,7 +19,20 @@
     "build:windows": "tauri build --bundles nsis",
     "lint": "eslint .",
     "ui:test": "npm run test -w ui",
-    "verif": "npm run lint && npm run test -w ui && npm run sidecar:test && cargo test --quiet --manifest-path src-tauri/Cargo.toml"
+    "verif": "npm run lint && npm run cliquet:test && npm run cliquet && npm run casse:test && npm run casse && npm run audit:test && npm run audit && npm run tickets:test && npm run version:test && npm run version:verifier && npm run test -w ui && npm run sidecar:test && cargo test --quiet --manifest-path src-tauri/Cargo.toml",
+    "cliquet": "node scripts/cliquet-taille.mjs",
+    "casse": "node scripts/collisions-casse.mjs",
+    "casse:test": "node scripts/collisions-casse.test.mjs",
+    "cliquet:maj": "node scripts/cliquet-taille.mjs --maj",
+    "cliquet:test": "node scripts/cliquet-taille.test.mjs",
+    "audit": "node scripts/audit-publication.mjs",
+    "audit:test": "node scripts/audit-publication.test.mjs",
+    "tickets:test": "node scripts/refleter-tickets.test.mjs",
+    "version:verifier": "node scripts/versionner.mjs",
+    "version:test": "node scripts/versionner.test.mjs",
+    "version:poser": "node scripts/versionner.mjs",
+    "tickets:miroir": "node scripts/refleter-tickets.mjs",
+    "publier": "bash scripts/publier-instantane.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

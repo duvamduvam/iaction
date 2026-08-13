@@ -1,12 +1,14 @@
 {
   "name": "@iaction/sidecar",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.1",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "test": "npm run build && node test/appPaths.test.js && node test/protocol.test.js && node test/speech.test.js && node test/logs.test.js && node test/tickets.test.js && node test/runner.test.js"
+    "build": "tsc && node scripts/empreinte.mjs dist",
+    "build:dev": "tsc --outDir dist-dev && node scripts/empreinte.mjs dist-dev",
+    "build:verif": "tsc --outDir dist-verif && node scripts/empreinte.mjs dist-verif",
+    "test": "npm run build:verif && node test/tous.mjs"
   },
   "devDependencies": {
     "@types/node": "^22",

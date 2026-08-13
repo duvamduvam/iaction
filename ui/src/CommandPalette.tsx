@@ -17,36 +17,13 @@
  * ni AgentPage ni le ref, seulement ce callback synchrone.
  */
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { fuzzyScore } from "./fuzzy";
 import type { ProjectConfig } from "./projectAdmin";
 
 interface CommandPaletteProps {
   projects: ProjectConfig[];
   /** Tente la bascule ; renvoie `false` si refusée (run en cours). */
   onSelectProject: (id: string) => boolean;
-}
-
-/**
- * Sous-séquence insensible à la casse : `query` doit apparaître, dans
- * l'ordre, dans `text` (caractères non forcément contigus). Renvoie
- * l'étendue (indice de fin − indice de début) du match le plus compact
- * trouvé par un simple parcours glouton, ou `null` si aucun match — sert de
- * score de pertinence (plus petit = meilleur).
- */
-function fuzzyScore(text: string, query: string): number | null {
-  const t = text.toLowerCase();
-  const q = query.toLowerCase();
-  let ti = 0;
-  let qi = 0;
-  let start = -1;
-  while (ti < t.length && qi < q.length) {
-    if (t[ti] === q[qi]) {
-      if (start === -1) start = ti;
-      qi += 1;
-    }
-    ti += 1;
-  }
-  if (qi < q.length) return null;
-  return ti - start;
 }
 
 function filterProjects(projects: ProjectConfig[], query: string): ProjectConfig[] {

@@ -77,6 +77,26 @@ Appelé par l'UI au démarrage et à chaque modification de l'admin.
   Validation souple : un champ mal formé (pas un tableau de chaînes non
   vides, pas un booléen) est ignoré sans erreur. Effet sur les requêtes :
   voir `chat.send`.
+- `traits` (R8-A, opt-in, absent par défaut) — les écarts DÉCLARÉS de cette
+  plateforme par rapport au dialecte OpenAI standard. Un fournisseur sans
+  `traits` se comporte exactement comme avant R8, à l'octet près :
+  - `catalogUrl: string` — URL absolue du catalogue, à la place de
+    `{baseUrl}/models` (voir `models.list`) ;
+  - `catalogShape: "openai" | "slugs"` — forme de la réponse du catalogue,
+    défaut implicite `"openai"` ;
+  - `usageTrustworthy: boolean` — `false` : un compteur de jetons à `0` vaut
+    « pas de mesure » (`null`) et non « zéro consommé » (voir `chat.send`) ;
+  - `bodyExtras: {}` — champs non standard à fusionner dans le corps de
+    `chat.send`.
+  Validation souple, comme ci-dessus : `catalogUrl` gardé seulement s'il
+  commence par `http://` ou `https://`, `catalogShape` seulement s'il vaut
+  l'une des deux formes, `bodyExtras` seulement si c'est un objet simple — et
+  les clés `model`, `messages`, `stream` et `stream_options` en sont
+  **retirées** : un profil décrit une passerelle, il ne détourne pas le cœur
+  de la requête. Un `traits` dont il ne reste rien de valide est traité comme
+  absent.
+  Le sidecar ne porte **aucune table de marques** : il applique ce qu'on lui
+  pousse. La liste des profils connus est une aide de saisie de l'interface.
 - Le sidecar garde tout **en mémoire uniquement** (jamais écrit sur disque — les
   secrets persistent dans le trousseau OS côté Rust, la config non-secrète dans
   le store JSON, voir « Commandes Tauri »).
@@ -91,6 +111,22 @@ Appelé par l'UI au démarrage et à chaque modification de l'admin.
 GET `{baseUrl}/models` (+ `Authorization: Bearer <apiKey>` si présent).
 Réponse : `done` avec `data: {models: [{"id":"qwen3.5:4b"}, …]}`.
 Fournisseur inconnu ou erreur HTTP/réseau → `error` (`data.message` explicite).
+
+R8-A — l'URL et la forme de la réponse suivent les `traits` du fournisseur
+(voir `providers.set`) :
+
+| | URL interrogée | Entrée acceptée | Normalisation |
+|---|---|---|---|
+| sans `traits` | `{baseUrl}/models` | `{data:[…]}` ou `[…]` | entrées sans `id` non vide ignorées |
+| `catalogUrl` | cette URL, telle quelle | idem | idem |
+| `catalogShape: "slugs"` | idem | `[…]` | `id ← slug`, `name ← name`, et **seules les entrées `isChatLMM === true`** sont gardées |
+
+Le filtre `isChatLMM` n'est pas cosmétique : une plateforme peut servir, sous
+le même champ `model`, des entrées qui ne sont pas des modèles de chat
+(export tableur, transcription, vidéo). Interrogées par
+`/v1/chat/completions`, elles répondent comme un chatbot générique — leur
+fonction a disparu, sans erreur. Une entrée sans `slug` non vide est ignorée,
+exactement comme une entrée sans `id`.
 
 ### `models.detail`
 
@@ -126,6 +162,11 @@ Les prix OpenRouter arrivent en $/token (chaînes) → convertis en $/million
     fonctionner) ;
   - `priceSort: true` → `body.provider = {"sort": "price"}` ;
   - `usageAccounting: true` → `body.usage = {"include": true}`.
+- `traits.bodyExtras` (R8-A) est fusionné dans le corps **après** sa
+  construction et **avant** les réglages R0 ci-dessus : un profil ne peut donc
+  pas écraser un réglage explicite du même fournisseur, et les clés
+  structurantes ont déjà été retirées à la validation. Exemple mesuré :
+  `{"stateless": true}`, envoyé par le client officiel d'une passerelle.
 - Chaque delta de contenu → `chunk` avec `data: {delta: "texte"}`.
 - Fin de stream → `done` avec `data: {finishReason: "stop"|"length"|"aborted"|…,
   "usage": {promptTokens, completionTokens, costUsd, cachedTokens} | null,
@@ -133,11 +174,45 @@ Les prix OpenRouter arrivent en $/token (chaînes) → convertis en $/million
   - `costUsd` (`usage.cost` OpenRouter, avec la comptabilité d'usage) et
     `cachedTokens` (`usage.prompt_tokens_details.cached_tokens`) : `null` si
     le fournisseur ne les envoie pas.
+  - `promptTokens`/`completionTokens` : `null` quand le fournisseur ne fournit
+    pas de comptabilité. Avec `traits.usageTrustworthy: false` (R8-A), un
+    compteur annoncé à `0` est traité comme `null` — « zéro mesuré » et
+    « pas de mesure » cessent d'être le même chiffre, et le sidecar journalise
+    un `warn` une fois par fournisseur et par processus. Sans le trait, un
+    zéro reste un zéro, comme avant.
   - `modelUsed` : slug du modèle réellement servi (dernier champ `model` vu
     dans le flux SSE — peut différer du demandé quand `models` a joué),
     `null` si jamais vu. Le cas `aborted` le porte aussi (`usage: null`
     inchangé).
 - Erreur HTTP (statut ≠ 2xx, corps lu et résumé), réseau ou SSE malformé → `error`.
+- **Recherche web (R9)** — paramètre `"webSearch": true`, opt-in STRICT :
+  absent ou `false`, le tour est identique à celui d'avant R9 (aucune requête
+  sortante supplémentaire, aucun message ajouté).
+  - Le sidecar interroge le moteur configuré (`router.set`, champ
+    `webSearch`), récupère quelques pages, et **préfixe un message `system`
+    éphémère** aux `messages` du SEUL tour en cours. Ce bloc n'est jamais
+    persisté : c'est le client qui tient l'historique, et il ne doit pas y
+    voir passer des résultats périmés.
+  - Avant le premier `delta`, un ou deux `chunk` portent `web` :
+
+    ```json
+    {"event":"chunk","id":"req-4","data":{"web":{
+      "etat":"recherche"|"ok"|"vide"|"echec",
+      "sources":[{"n":1,"titre":"Titre","url":"https://…"}],
+      "message":"cause de l'échec"}}}
+    ```
+
+    `sources` est vide hors de l'état `ok` ; `message` n'est présent qu'en
+    `echec`. Un client qui ignore ce chunk (il n'a pas de `delta`) reste
+    fonctionnel — la compatibilité ascendante est acquise.
+  - **Un échec ne fait jamais échouer le tour.** Moteur injoignable ou zéro
+    résultat : le bloc injecté ORDONNE au modèle de le dire, et le `chunk`
+    `web` porte l'état. Une réponse produite de mémoire ne doit jamais
+    ressembler à une réponse vérifiée.
+  - Les pages sont récupérées sous garde : schémas `http`/`https` seulement,
+    et refus des adresses locales ou privées (`localhost`, `127.0.0.0/8`,
+    `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `::1`), **avant** tout
+    accès réseau puis après résolution DNS.
 - `messages` : rôles `system|user|assistant`, transmis tels quels.
 - **Ordre des messages (R4, cache-friendly)** : le sidecar transmet
   `messages` tel quel — c'est le CLIENT qui garantit un ordre STABLE, les
@@ -222,7 +297,7 @@ par `sessionId` : le SDK recharge tout le contexte via `resume`).
   "prompt":"Corrige le bug de …",
   "sessionId":"uuid-sdk|null",
   "model":"claude-sonnet-5|null",
-  "permissionMode":"default|acceptEdits|plan",
+  "permissionMode":"default|acceptEdits|plan|bypassPermissions",
   "systemPrompt":null,
   "chatOnly":false,
   "interactive":false,
@@ -400,9 +475,50 @@ tâches) ; (2) un `result` `success` à 0 token sans le moindre contenu
 assistant est un micro-tour interne du CLI (ex. livraison de notifications de
 tâches sur un `resume`) : ignoré (2 max, garde-fou 30 s), le vrai tour suit.
 Le `done` reprend le DERNIER `result` connu ; l'usage n'est journalisé qu'une
-fois, sur ce résultat final.
+fois, sur ce résultat final. Un `subtype` autre que `success` écrit AUSSI une
+ligne de journal `error` (scope `claude`, message `tour Claude terminé en
+erreur`, champs `subtype`, `sessionId`, `model`) : le magasin d'usage ne se lit
+pas depuis la page Système. Une exception remontée du flux SDK écrit de même
+`exception pendant le tour Claude`, avec sa pile.
 Erreur de spawn/auth → `error` (`data.message` doit rester lisible : suggérer
 `claude login` ou une clé API si l'auth échoue).
+
+**Tour terminé SANS `result`** — le flux du SDK se referme sans le moindre
+message `result` (processus CLI disparu, par exemple). Deux issues, jamais le
+silence (voir `sidecar/src/claudeFinDeTour.ts`) :
+
+- arrêt demandé par l'utilisateur (`claude.abort`) → `done`
+  `{subtype:"aborted", result:null, usage:null}`, usage `aborted` ;
+- sinon → **`error`** (« Le tour s'est terminé sans résultat… »), usage
+  `error`, et une ligne de journal `error` (scope `claude`, message
+  `tour Claude terminé sans résultat`, champs `sessionId`, `model`,
+  `sortieAssistant`).
+
+**Plafond de SILENCE au démarrage** — si le flux du SDK ne rend AUCUN message,
+pas même le `system:init`, dans les **120 s** qui suivent le départ de
+`query()`, le tour est déclaré en échec : ligne de journal `error` (scope
+`claude`, message `tour Claude sans aucun message du SDK`, champs `sessionId`,
+`model`, `attenteMs`, `plafondMs`), puis **`error`** vers l'interface, puis
+interruption du flux. Constante
+`SILENCE_DEMARRAGE_TIMEOUT_MS` (`sidecar/src/claudeFinDeTour.ts`),
+surchargeable par `IACTION_SILENCE_DEMARRAGE_MS` (tests).
+
+Ce plafond ne surveille que le PREMIER message : il est désarmé dès qu'un
+message arrive, et ne peut donc jamais couper un tour long qui produit
+normalement. Il ne recouvre aucun autre garde-fou (abort utilisateur, attente
+des tâches de fond, micro-tour vide), qui supposent tous qu'un message est
+déjà arrivé. Le seuil est délibérément large — le `system:init` arrive
+normalement en quelques secondes, et l'UI pose déjà son témoin d'attente à
+10 s : il ne s'agit pas de borner le temps de réponse du modèle, mais de
+transformer une attente INFINIE en échec daté.
+
+Auparavant ce second cas rendait un `done` vide, et un flux qui ne rendait
+jamais rien n'était couvert par rien du tout : l'interface restait sur
+« Aucune donnée reçue du fournisseur » et le journal ne contenait rien
+(ticket T-015). Tout tour qui échoue laisse désormais TROIS traces — événement
+d'usage, ligne de journal `error`, message à l'interface. Le `result` lui-même
+(corps de la réponse) n'entre jamais dans le journal : seul le `subtype` du
+SDK y figure comme cause.
 
 ### `claude.permission`
 
@@ -1202,7 +1318,9 @@ abandon), écrit par les moteurs :
 ```
 
 - `promptTokens`/`completionTokens` : `null` si le fournisseur ne les donne
-  pas. `status` : `done|error|aborted`.
+  pas — y compris quand il annonce `0` sur un fournisseur déclaré
+  `usageTrustworthy: false` (R8-A, voir `chat.send`). `status` :
+  `done|error|aborted`.
 - `errorMessage` (L4) : message d'échec du tour, rempli par les moteurs quand
   `status: "error"` (tronqué à 500 caractères, sauts de ligne compactés),
   `null` sinon — et `null` aussi sur les lignes écrites par un sidecar
@@ -1272,7 +1390,7 @@ génériques que le snapshot usage.claude).
  "routage":{"parTier":{"trivial":{"tours":10},"simple":{"tours":25}},
   "toursAuto":35,"partCoutNulPct":78,
   "mixAbo":[{"model":"claude-haiku-4-5","tours":20}],
-  "debordMoisUsd":1.25},
+  "debordMoisUsd":1.25,"coutPeriodeUsd":3.40,"coutInconnuTours":2},
  "parProjet":[{"projectId":"orgai","name":"OrgAI","tours":40,
   "totalTokens":300000,"partTokensPct":33,"autonomeTours":12,
   "autonomeTokens":120000,"autonomePct":40},
@@ -1296,6 +1414,16 @@ génériques que le snapshot usage.claude).
   courant** (indépendant de `from`/`to` — c'est la valeur comparée au
   plafond ; R6-A : inclut le fichier de rotation `events.jsonl.1`, où des
   événements du mois courant peuvent avoir basculé).
+- `coutPeriodeUsd`/`coutInconnuTours` (S3) — la dépense **réelle** de la
+  période `from`/`to` : somme de TOUS les `costUsd` remontés, que le tour ait
+  été débordé automatiquement ou que la cible payante ait été choisie à la
+  main. À ne pas confondre avec `debordMoisUsd`, qui ne compte que la fraction
+  routée automatiquement du mois calendaire : un tour OpenRouter lancé
+  manuellement n'y figure pas, et la supervision n'affichait alors **aucune**
+  dépense (T-035). `coutInconnuTours` = tours sur une cible payante dont le
+  fournisseur n'a remonté aucun coût : tant qu'il est non nul, `coutPeriodeUsd`
+  est un **minorant**, et l'UI doit le dire plutôt que de laisser lire un
+  total.
 - `parProjet` (S2, encart « Usage par projet » de Supervision) — même période
   `from`/`to` que le reste. Une entrée par projet, **le Chat compris**
   (`projectId: "chat"`, pseudo-projet dérivé de `source: "chat"`) :
@@ -1446,10 +1574,76 @@ La coquille Rust écrit donc AUSSI, directement sur le disque, dans un fichier
   de 1 Mo ;
 - y sont écrits : les niveaux `fatal` et `error` de `log_app`, **et** une ligne
   `info` au démarrage de la supervision portant les chemins résolus du runtime
-  Node et de l'entrypoint. Cette ligne de démarrage exerce le mécanisme à
+  Node et de l'entrypoint (`node`, `entry`) ainsi que l'**`origine`** de la
+  boucle — `premier démarrage de l'application` ou `relance demandée après
+  mort du sidecar`. Cette ligne de démarrage exerce le mécanisme à
   chaque lancement : un journal de secours qui ne servirait qu'aux
   catastrophes serait un journal dont personne ne sait s'il fonctionne encore
   le jour de la catastrophe.
+
+#### Jalons de démarrage — lignes `jalon de démarrage`
+
+Le premier horodatage d'une session était celui de `setup()` : tout ce qui le
+précède (chargement des bibliothèques par `ld.so`, init Tauri/GTK) et tout ce
+qui le suit côté webview n'avait aucune trace. Devant la question « pourquoi le
+démarrage est-il si long ? » (2026-08-11, T-029), les seuls étages mesurables
+répondaient tous en moins de 0,3 s — le suspect était le segment non mesuré.
+
+Quatre lignes `info` par session, écrites dans `coquille.jsonl` :
+
+| `etape`                  | ce que le jalon clôt                              |
+|--------------------------|---------------------------------------------------|
+| `rust:setup`             | ld.so + init Tauri/GTK, jusqu'à l'entrée du `setup()` |
+| `rust:boucle-evenements` | construction de l'application et de la fenêtre    |
+| `ui:script`              | webview + chargement/parse du JS de l'interface   |
+| `ui:premier-rendu`       | premier dessin effectif de React                  |
+
+Champs : `avantMainMs` (avant la première ligne de `main()` — lu dans `/proc`,
+**null hors Linux** plutôt qu'un zéro rassurant), `depuisMainMs`, `totalMs`
+= la somme, seule valeur comparable à un chronomètre, et `pageMs` (jalons `ui:`
+seulement) = l'âge de la page. Ce dernier partage le segment de la webview en
+deux : `totalMs − pageMs` est ce que coûte le moteur web AVANT que la page
+n'existe, `pageMs` ce que coûte le chargement de l'interface. Chaque étape n'est
+écrite qu'une fois par session, des deux côtés : sinon un rechargement à chaud
+réécrirait un « premier rendu » sans rapport avec un démarrage.
+
+Les deux jalons `ui:` remontent par la commande Tauri
+`demarrage_jalon(etape: String, pageMs: Option<u64>) -> Result<(), String>`,
+dont le vocabulaire est **fermé** (`ui:script`, `ui:premier-rendu`) : un journal
+de démarrage exposé au JS ne doit pas pouvoir devenir un canal d'écriture libre
+sur le disque.
+
+#### Mort du sidecar — ligne `sidecar terminé`
+
+La supervision notait la naissance et jamais la mort : devant huit
+redémarrages dans une journée, rien ne disait s'il s'agissait d'un plantage ou
+d'une relance volontaire (ticket T-017). Chaque fin du process surveillé écrit
+donc une ligne de niveau `error` — donc sur le disque, ce qui est tout
+l'enjeu : à cet instant, le sidecar est mort et la porte `app:log` →
+`log.append` ne mène plus nulle part.
+
+```json
+{"ts":"2026-08-09T12:33:07.902Z","level":"error","scope":"rust",
+ "msg":"sidecar terminé",
+ "fields":{"pid":48213,"cause":"tué par le signal 9 (SIGKILL)","code":null,
+           "signal":9,"uptimeMs":41530,"stderrLignes":30,
+           "stderr":"INFO sidecar prêt ⏎ ERROR claude tour interrompu"}}
+```
+
+- `cause` : mise en mots de `code`/`signal` (`code de sortie 1`, `tué par le
+  signal 15 (SIGTERM)`, `sortie normale (code 0)`, ou `fin sans code ni signal
+  (cause inconnue)` quand l'OS n'a rien rendu) ;
+- `uptimeMs` : durée de vie du process — c'est elle qui distingue un
+  mort-né d'un sidecar tombé après des heures ;
+- `stderr` : les **30 dernières lignes** de sa stderr, tronquées à 300
+  caractères chacune et 2 000 au total, séparées par `⏎` (une entrée de
+  journal reste une ligne). Un arrêt demandé (fermeture de l'application)
+  n'écrit rien : ce n'est pas une mort.
+
+C'est le SEUL endroit où du stderr sidecar entre dans `app:log`, et c'est
+volontairement borné à UN événement par process, émis quand le process est
+déjà mort : le relais ligne à ligne, lui, doit s'en abstenir absolument, sous
+peine de la boucle stderr → `app:log` → `log.append` → stderr.
 
 ### Forme d'une entrée
 
@@ -1564,7 +1758,8 @@ Supprime `app.jsonl` et `app.jsonl.1`. `done` : `{"purged": true}`.
 ### Event Tauri `app:log`
 
 Émis par la coquille Rust pour ses PROPRES messages (échec de spawn du
-sidecar, crash, backoff, redémarrage, réglages WebKit). Payload :
+sidecar, mort du process surveillé, backoff, redémarrage, réglages WebKit).
+Payload :
 
 ```json
 {"level":"fatal","scope":"rust","msg":"échec du spawn (node …)","fields":{"attempts":3}}
@@ -1651,6 +1846,13 @@ validation souple que le classificateur, absent ou invalide = retour au
 défaut `{"providerId":"ollama","model":"nomic-embed-text"}`. Pas de forme
 « désactivé » : l'indexation n'a lieu que sur action explicite
 (`knowledge.index`).
+
+`webSearch` (R9) — moteur de recherche web du Chat (voir `chat.send`) :
+`{"baseUrl": "http://127.0.0.1:8081"}`, une instance SearXNG exposant
+`GET {baseUrl}/search?q=…&format=json`. Validation souple : absent, mal
+formé, ou schéma autre que `http`/`https` → retour au défaut
+`http://127.0.0.1:8081`. Pas de forme « désactivé » : c'est la case
+« Recherche web » du Chat qui décide, tour par tour.
 
 ### `router.route`
 
@@ -2354,10 +2556,21 @@ Persistance d'état UI par clé (conversations par projet, etc.) dans
   x-terminal-emulator, xterm (répertoire via `current_dir`, spawn détaché,
   env nettoyée du piège Snap). Renvoie le répertoire retenu.
 - `system_stats() -> SystemStats` — instantané
-  `{cpuPct, memUsedMb, memTotalMb, gpuPct, gpuMemUsedMb, gpuMemTotalMb}`.
+  `{cpuPct, memUsedMb, memTotalMb, gpuPct, gpuMemUsedMb, gpuMemTotalMb,
+  gpuTempC, cpuTempC, ramTempC}`.
   `cpuPct` est un delta entre deux appels (null au premier) ; GPU via
-  `nvidia-smi` (null si absent). Jamais d'erreur : les champs indisponibles
-  sont null/0.
+  `nvidia-smi` (null si absent), `gpuTempC` venant de la même requête
+  (colonne `temperature.gpu`) — elle est lue seulement SI la colonne est
+  présente, pour qu'un pilote qui l'ignorerait ne fasse pas perdre
+  l'utilisation et la mémoire. `cpuTempC` et `ramTempC` sont des °C lus
+  dans `/sys/class/hwmon` (valeurs du noyau en millidegrés, divisées par
+  1000, rejetées hors de ]0, 150[) : puce `coretemp` / `k10temp` /
+  `zenpower`, à défaut `acpitz`, en préférant l'entrée étiquetée « Package
+  id 0 » ou « Tctl » pour le processeur ; puce `spd5118` / `jc42` ou
+  étiquette « DIMM » pour la mémoire. **Règle : null si aucun capteur** —
+  hors Linux, ou faute de matériel de mesure (l'absence de capteur de
+  barrette est le cas courant), et l'indicateur n'est alors pas affiché.
+  Jamais d'erreur : les champs indisponibles sont null/0.
 
 ## Commandes Tauri hors relais (Lot 1)
 

@@ -16,7 +16,7 @@
 
 import { asRecord } from "./base";
 import type { SentAttachment } from "./Attachments";
-import type { ClaudeUsage, RouteTier } from "./sidecar";
+import type { ChatMessage, ClaudeUsage, RouteTier } from "./sidecar";
 
 export type AgentBlock =
   | { type: "text"; id: string; content: string }
@@ -79,6 +79,17 @@ export interface AgentTurn {
    * « résultat vide » si la bulle a été scindée avant tout contenu.
    */
   continued?: boolean;
+  /**
+   * T-027 — bulle assistant ouverte au MILIEU d'un tour déjà vivant (revers de
+   * `continued` : elle est la cible vers laquelle le flux a été redirigé).
+   *
+   * Elle reste vide tant que le modèle n'a pas atteint son prochain outil, ce
+   * qui peut prendre plusieurs minutes — sans que rien n'aille mal, puisque le
+   * fournisseur a déjà répondu plus haut dans le même tour. L'avis « aucune
+   * donnée reçue » ne concerne donc QUE le démarrage d'un tour, jamais ces
+   * bulles-là (voir useAttenteFournisseur.ts).
+   */
+  suiteDeTour?: boolean;
   /**
    * Pièces jointes du tour utilisateur (voir Attachments.tsx). Uniquement
    * porté par le moteur Claude (voir le contrat, docs/protocol.md — ni
@@ -286,4 +297,43 @@ export function mcpServerFromToolName(toolName: string): string | null {
   if (!toolName.startsWith("mcp__")) return null;
   const server = toolName.split("__")[1];
   return server || null;
+}
+
+/**
+ * Reconstruit l'historique `messages` pour le moteur neutre depuis les
+ * tours du projet courant : rôle `user` = son contenu ; rôle `assistant` =
+ * concaténation des blocs `text` uniquement (les blocs `thinking`/`tool`
+ * n'ont pas d'équivalent dans le dialecte OpenAI-compatible) ; les tours
+ * `error` sont sautés (contenu potentiellement vide/partiel). Le moteur
+ * neutre n'a pas d'état de session (voir docs/protocol.md, Lot 6) : cet
+ * historique complet est renvoyé à CHAQUE tour.
+ */
+export function buildNeutralMessages(history: AgentTurn[], newContent: string): ChatMessage[] {
+  const messages: ChatMessage[] = [];
+  for (const turn of history) {
+    if (turn.status === "error") continue;
+    if (turn.role === "user") {
+      messages.push({ role: "user", content: turn.content ?? "" });
+    } else {
+      const text = (turn.blocks ?? [])
+        .filter((b): b is Extract<AgentBlock, { type: "text" }> => b.type === "text")
+        .map((b) => b.content)
+        .join("");
+      messages.push({ role: "assistant", content: text });
+    }
+  }
+  messages.push({ role: "user", content: newContent });
+  return messages;
+}
+
+/**
+ * Préfixe `messages` d'un message `system` portant les instructions de
+ * l'agent sélectionné (moteur neutre) — sans effet si l'agent n'en a pas
+ * (chaîne vide) ou si un message `system` est déjà en tête (jamais le cas
+ * ici, `buildNeutralMessages` n'en produit pas, mais reste défensif comme
+ * demandé par la spec O2).
+ */
+export function withAgentSystemPrompt(messages: ChatMessage[], instructions: string | undefined): ChatMessage[] {
+  if (!instructions || messages[0]?.role === "system") return messages;
+  return [{ role: "system", content: instructions }, ...messages];
 }
