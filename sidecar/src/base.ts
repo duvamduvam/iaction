@@ -50,3 +50,33 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
 export function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+/**
+ * Message d'une panne réseau, AVEC le code de cause quand il existe.
+ *
+ * ── Pourquoi ce détour pour trois mots ──────────────────────────────────
+ * Le `fetch` de Node rend toujours le même message — « fetch failed » — et
+ * range la vraie cause dans `err.cause.code`. Sans elle, le journal ne
+ * distingue pas un proxy d'un certificat, d'un DNS ou d'un service éteint :
+ * quatre pannes, quatre remèdes, un seul message.
+ *
+ * Le 2026-08-13, sur un poste d'entreprise à egress contrôlé, l'application
+ * affichait « erreur réseau: fetch failed » sur chaque fournisseur. Il a fallu
+ * piloter la machine à distance pour obtenir `UND_ERR_CONNECT_TIMEOUT` —
+ * c'est-à-dire un mot que le journal avait sous la main et n'a pas écrit
+ * (T-044). Un message d'erreur qui ne permet pas de choisir le remède est un
+ * échec muet qui s'ignore.
+ */
+export function avecCause(err: unknown): string {
+  const base = errMessage(err);
+  const cause: unknown = err instanceof Error ? err.cause : undefined;
+  const code =
+    (isPlainObject(cause) && isNonEmptyString(cause.code) ? cause.code : null) ??
+    (isPlainObject(err) && isNonEmptyString(err.code) ? err.code : null);
+  return code && !base.includes(code) ? `${base} (${code})` : base;
+}
+
+/** Idem, préfixé — pour les points d'appel dont on sait qu'ils sortent du réseau. */
+export function messageReseau(err: unknown): string {
+  return `erreur réseau: ${avecCause(err)}`;
+}

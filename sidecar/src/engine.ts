@@ -16,7 +16,7 @@ import {
   validateAttachments,
   type Attachment,
 } from "./attachments.js";
-import { isNonEmptyString, isPlainObject } from "./base.js";
+import { avecCause, isNonEmptyString, isPlainObject, messageReseau } from "./base.js";
 import { cibleCatalogue, normaliserCatalogue, toDetailedModel } from "./catalogue.js";
 import {
   appliquerBodyExtras,
@@ -216,8 +216,7 @@ async function fetchRawModels(
     }
     return normaliserCatalogue(await res.json(), cible.forme);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    emitter.error(id, `erreur réseau: ${message}`);
+    emitter.error(id, messageReseau(err));
     return undefined;
   }
 }
@@ -588,7 +587,10 @@ export async function handleChatSend(
       recordChatSendUsage(id, params, providerId, model, "aborted", usage, modelUsed);
       emitter.done(id, { finishReason: "aborted", usage: null, modelUsed });
     } else {
-      const message = err instanceof Error ? err.message : String(err);
+      // La cause (`UND_ERR_CONNECT_TIMEOUT`, `ENOTFOUND`…) part avec le
+      // message : c'est le tour de Chat qui échoue le plus visiblement, et
+      // « fetch failed » tout seul ne dit pas quoi corriger (T-044).
+      const message = avecCause(err);
       recordChatSendUsage(id, params, providerId, model, "error", usage, modelUsed, message);
       emitter.error(id, message);
     }
@@ -645,8 +647,7 @@ export async function handleUsageOpenrouter(
     const totalUsage = data.total_usage;
     emitter.done(id, { totalCredits, totalUsage, remaining: totalCredits - totalUsage });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    emitter.error(id, `erreur réseau: ${message}`);
+    emitter.error(id, messageReseau(err));
   }
 }
 
@@ -753,8 +754,7 @@ export async function handleOllamaPs(
       }));
     emitter.done(id, { models });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    emitter.error(id, `erreur réseau: ${message}`);
+    emitter.error(id, messageReseau(err));
   }
 }
 
@@ -789,8 +789,7 @@ async function ollamaGenerateNoop(
     }
     return { ok: true };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, message: `erreur réseau: ${message}` };
+    return { ok: false, message: messageReseau(err) };
   }
 }
 

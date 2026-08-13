@@ -214,7 +214,18 @@ fn node_program(_app: &AppHandle) -> String {
 /// La fenêtre n'apportait rien que du bruit.
 fn commande_sidecar(node: &str, entry: &str) -> Command {
     let mut cmd = Command::new(node);
-    cmd.arg(entry)
+    // `--use-env-proxy` : le `fetch` de Node n'honore PAS `HTTP_PROXY` /
+    // `HTTPS_PROXY` par défaut, contrairement à curl ou à un navigateur. Sur un
+    // poste d'entreprise à egress contrôlé, tous les appels sortants échouent
+    // donc en `UND_ERR_CONNECT_TIMEOUT` pendant que le navigateur d'à côté
+    // fonctionne — constaté le 2026-08-13 sur le poste Région, où l'app
+    // affichait « erreur réseau » sur chaque fournisseur (T-043).
+    //
+    // Le drapeau ne fait rien quand aucune variable n'est posée : il est donc
+    // inconditionnel, plutôt que conditionné à une détection que nous ferions
+    // moins bien que Node. Disponible depuis Node 22.
+    cmd.arg("--use-env-proxy")
+        .arg(entry)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -779,29 +790,5 @@ pub fn sidecar_status(sidecar: State<'_, SharedState>) -> StatusPayload {
 }
 
 #[cfg(test)]
-mod tests_chemins {
-    use super::sans_prefixe_verbatim;
-    use std::path::Path;
-
-    #[test]
-    fn retire_le_prefixe_verbatim_dun_disque() {
-        assert_eq!(
-            sans_prefixe_verbatim(Path::new(r"\\?\C:\Users\x\IAction\sidecar\index.js")),
-            r"C:\Users\x\IAction\sidecar\index.js",
-        );
-    }
-
-    #[test]
-    fn retablit_la_forme_unc_dun_partage() {
-        assert_eq!(
-            sans_prefixe_verbatim(Path::new(r"\\?\UNC\serveur\partage\app\index.js")),
-            r"\\serveur\partage\app\index.js",
-        );
-    }
-
-    #[test]
-    fn laisse_intact_un_chemin_ordinaire() {
-        assert_eq!(sans_prefixe_verbatim(Path::new("/usr/lib/IAction/sidecar/index.js")), "/usr/lib/IAction/sidecar/index.js");
-        assert_eq!(sans_prefixe_verbatim(Path::new(r"C:\deja\simple.js")), r"C:\deja\simple.js");
-    }
-}
+#[path = "sidecar/tests.rs"]
+mod tests;
