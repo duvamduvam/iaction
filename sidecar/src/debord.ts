@@ -13,6 +13,7 @@
  */
 
 import { autoDebordCostUsdThisMonth, isLocalProviderId, readLatestClaudeWindows } from "./usageStats.js";
+import { getProvider } from "./engine.js";
 import type { RouteTarget, RoutingTable } from "./router.js";
 
 /**
@@ -107,7 +108,11 @@ export async function applyDebord(
       // « repli local » routerait vers du payant ou vers l'abo saturé — on
       // conserve alors la cible claude d'origine.
       const trivial = table.trivial;
-      const repliLocal = trivial.engine === "neutral" && isLocalProviderId(trivial.providerId);
+      // T-023 — trait déclaré d'abord ; la devinette ne sert plus qu'aux
+      // fournisseurs qui n'ont pas encore de profil.
+      const repliLocal =
+        trivial.engine === "neutral" &&
+        isLocalProviderId(trivial.providerId, getProvider(trivial.providerId ?? "")?.traits?.billing);
       return {
         target: repliLocal ? trivial : target,
         debord: { active: false, blocked: true, fiveHourPct, sevenDayPct },

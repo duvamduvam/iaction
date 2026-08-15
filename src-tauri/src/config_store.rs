@@ -21,7 +21,7 @@ fn config_file_path(dir: &Path) -> PathBuf {
 }
 
 /// Lit `config.json` dans `dir`. Fichier absent → `{}` (pas une erreur, cf. protocole).
-fn read_config_from(dir: &Path) -> Result<Value, String> {
+pub(crate) fn read_config_from(dir: &Path) -> Result<Value, String> {
     let path = config_file_path(dir);
     match fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
@@ -78,7 +78,7 @@ fn nanos_suffix() -> u128 {
         .unwrap_or_default()
 }
 
-fn app_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn app_config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
         .map_err(|err| format!("impossible de déterminer le répertoire de configuration : {err}"))

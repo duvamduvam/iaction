@@ -41,6 +41,7 @@ import {
   splitMcpToolName,
   writeMcpRuntime,
 } from "./mcp.js";
+import { ASK_USER_TOOL_NAME, composerInstructionSysteme, resumerPalette } from "./paletteTour.js";
 import { ensureProjectDoc } from "./projectDoc.js";
 import { recordClaudeWindowsSnapshot, recordUsageEvent, type UsageStatus } from "./usageStats.js";
 import { executerClaudeCommands } from "./claudeCommands.js";
@@ -97,7 +98,7 @@ export interface ClaudeQueryOptions {
   resume?: string;
   model?: string;
   permissionMode?: string;
-  systemPrompt?: string;
+  systemPrompt?: import("./paletteTour.js").InstructionSysteme;
   includePartialMessages?: boolean;
   env?: Record<string, string | undefined>;
   canUseTool?: CanUseTool;
@@ -391,12 +392,6 @@ function createTurnPrompt(
 // Moteur : createClaudeEngine({queryFn}) — état en mémoire isolé, injectable
 // ---------------------------------------------------------------------------
 
-/**
- * Nom complet de l'outil de question interactive : côté SDK, un outil servi
- * par un serveur MCP s'appelle `mcp__<serveur>__<outil>` (ici serveur `studio`,
- * outil `ask_user` — voir askUser.ts).
- */
-export const ASK_USER_TOOL_NAME = "mcp__studio__ask_user";
 
 interface PendingPermission {
   resolve: (result: PermissionResult) => void;
@@ -700,9 +695,9 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     if (isNonEmptyString(modelParam)) {
       options.model = modelParam;
     }
-    if (isNonEmptyString(systemPromptParam)) {
-      options.systemPrompt = systemPromptParam;
-    }
+    // Instruction système, voir paletteTour.ts : preset Claude Code hors chat pur (T-052), annonce de l'outil de question si armé (T-019).
+    const instr = composerInstructionSysteme(isNonEmptyString(systemPromptParam) ? systemPromptParam : null, askServer !== null, !chatOnly);
+    if (instr) options.systemPrompt = instr;
     if (!chatOnly && (mcpServers || knowledgeServer || askServer)) {
       // Les serveurs in-process s'ajoutent à ceux déclarés dans .mcp.json ;
       // un serveur du projet de même nom prime (pas d'écrasement).
@@ -902,9 +897,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
                 journal.info("claude", "serveurs MCP du tour", {
                   reqId: id,
                   fields: {
-                    connectes: snapshot.servers.filter((s) => s.tools.length > 0).length,
-                    muets: snapshot.servers.filter((s) => s.tools.length === 0).length,
-                    outils: snapshot.servers.reduce((sum, s) => sum + s.tools.length, 0),
+                    ...resumerPalette(snapshot.servers, ASK_USER_TOOL_NAME),
                     eteints: preparedMcp.disabled.length,
                     sansSecret: preparedMcp.missingSecrets.length,
                     ms: Date.now() - turnStartedAt,

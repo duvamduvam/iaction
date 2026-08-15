@@ -73,7 +73,7 @@ export const TIER_ORDER: Record<RouteTier, number> = {
 export const DEFAULT_ROUTING_TABLE: RoutingTable = {
   trivial: { engine: "claude", model: "claude-haiku-4-5" },
   simple: { engine: "claude", model: "claude-sonnet-5" },
-  moyen: { engine: "claude", model: "claude-opus-4-8" },
+  moyen: { engine: "claude", model: "claude-opus-5" },
   complexe: { engine: "claude", model: "claude-fable-5" },
 };
 

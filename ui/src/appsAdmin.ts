@@ -39,6 +39,19 @@ function isAppEntry(value: unknown): value is AppEntry {
  */
 export const DEFAULT_APPS: AppEntry[] = [
   {
+    // T-049 : un rapport HTML cité dans une réponse s'ouvrait en SOURCE dans
+    // l'éditeur interne. Cette règle le renvoie au navigateur — et comme le
+    // registre sert aussi les liens, elle vaut pour le distant comme pour le
+    // local. Attention : les défauts ne sont semés qu'au PREMIER lancement, il
+    // n'y a pas de re-seed (respecter les suppressions de l'utilisateur est un
+    // invariant) — sur un poste déjà configuré, la règle est à ajouter à la
+    // main dans Configuration → Applications.
+    id: "firefox",
+    label: "Firefox",
+    command: "firefox",
+    extensions: ["html", "htm", "xhtml"],
+  },
+  {
     id: "kicad",
     label: "KiCad",
     command: "kicad",

@@ -8,7 +8,12 @@ franche : aucune logique ne les lie au reste du fichier, seulement `super`.
 */
 
 mod tests_commande {
+    use crate::reseau::Reseau;
     use crate::sidecar::commande_sidecar;
+
+    fn args(cmd: std::process::Command) -> Vec<String> {
+        cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
 
     /// Le drapeau proxy doit être là, et AVANT le script : Node ne traite ses
     /// propres options qu'avant le nom du fichier à exécuter — placé après, il
@@ -16,9 +21,38 @@ mod tests_commande {
     /// silence. Panne d'entreprise garantie, sans un mot dans le journal.
     #[test]
     fn le_sidecar_est_lance_avec_le_proxy_de_lenvironnement() {
-        let cmd = commande_sidecar("/chemin/node", "/chemin/index.js");
-        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert_eq!(args, vec!["--use-env-proxy", "/chemin/index.js"]);
+        let cmd = commande_sidecar("/chemin/node", "/chemin/index.js", &Reseau::default());
+        assert_eq!(args(cmd), vec!["--use-env-proxy", "/chemin/index.js"]);
+    }
+
+    /// T-045 — même règle de position pour `--use-system-ca`, et surtout : sans
+    /// réglage réseau, la ligne de commande ne bouge pas d'un octet.
+    #[test]
+    fn le_ca_systeme_sajoute_avant_le_script_et_seulement_sil_est_demande() {
+        let cmd = commande_sidecar(
+            "/chemin/node",
+            "/chemin/index.js",
+            &Reseau { ca_systeme: true, ..Reseau::default() },
+        );
+        let a = args(cmd);
+        assert!(a.contains(&"--use-system-ca".to_string()), "drapeau absent : {a:?}");
+        assert_eq!(a.last().map(String::as_str), Some("/chemin/index.js"), "options avant le script");
+    }
+
+    /// Les variables saisies dans l'application atteignent l'enfant — c'est
+    /// tout l'objet de T-045, `--use-env-proxy` ne lisant que l'environnement.
+    #[test]
+    fn les_variables_reseau_sont_posees_sur_lenfant() {
+        let cmd = commande_sidecar(
+            "/chemin/node",
+            "/chemin/index.js",
+            &Reseau { proxy: Some("http://proxy:3128".into()), ..Reseau::default() },
+        );
+        let posees: Vec<_> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_string_lossy().into_owned(), v?.to_string_lossy().into_owned())))
+            .collect();
+        assert!(posees.iter().any(|(k, v)| k == "HTTPS_PROXY" && v == "http://proxy:3128"), "{posees:?}");
     }
 }
 

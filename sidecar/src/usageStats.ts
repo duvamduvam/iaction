@@ -47,11 +47,25 @@ import {
 
 
 /**
- * R3 — heuristique « provider local » (coût nul), partagée avec l'esprit de
- * scripts/usage-baseline.mjs (le script reste autonome) : id de fournisseur
- * contenant ollama, local ou lmstudio.
+ * R3 — ce fournisseur est-il gratuit (coût nul) ?
+ *
+ * ── La devinette, et pourquoi elle survit ───────────────────────────────
+ * La gratuité était DEVINÉE par sous-chaîne de l'identifiant — c'est la ligne
+ * que T-023 cite en exemple de ce qu'il faut supprimer : un fournisseur local
+ * nommé autrement est facturé à tort, un fournisseur payant contenant « local »
+ * compté gratuit. Elle est désormais SUBORDONNÉE au trait `billing`, déclaré
+ * par le fournisseur.
+ *
+ * Elle n'est pas supprimée pour autant, et c'est délibéré : sans trait, le
+ * comportement doit rester celui d'avant à l'octet près (discipline R0), sans
+ * quoi tout fournisseur non encore déclaré basculerait d'un coup en « payant »
+ * et fausserait l'historique. Elle disparaîtra quand les profils seront
+ * déclarés, pas avant.
  */
-export function isLocalProviderId(providerId: unknown): boolean {
+export function isLocalProviderId(providerId: unknown, billing?: "free" | "paid"): boolean {
+  if (billing) {
+    return billing === "free";
+  }
   if (!isNonEmptyString(providerId)) {
     return false;
   }
@@ -118,6 +132,18 @@ export interface RecordUsageEventInput {
   costUsd?: number | null;
   /** R0 — tokens servis depuis le cache, défaut null. */
   cachedTokens?: number | null;
+  /**
+   * T-036 — le fournisseur ne remonte AUCUN coût, par construction (trait
+   * `coutRemonte: false`). Écrit seulement quand c'est vrai : un tour ordinaire
+   * garde un événement identique à l'octet près.
+   */
+  coutIndisponible?: boolean;
+  /**
+   * T-023 — facturation DÉCLARÉE du fournisseur au moment du tour (trait
+   * `billing`). Absent : l'agrégat retombe sur la devinette par identifiant,
+   * qui est tout ce dont dispose l'historique déjà écrit.
+   */
+  gratuit?: boolean;
   /**
    * L4 — message d'échec du tour, rempli par les moteurs quand
    * `status: "error"` (tronqué à 500 caractères, sauts de ligne compactés),
@@ -203,6 +229,10 @@ export function recordUsageEvent(input: RecordUsageEventInput): void {
       modelUsed: input.modelUsed ?? null,
       costUsd: input.costUsd ?? null,
       cachedTokens: input.cachedTokens ?? null,
+      // T-036 — écrit seulement si vrai : un tour ordinaire garde un événement
+      // identique à l'octet près.
+      ...(input.coutIndisponible === true ? { coutIndisponible: true } : {}),
+      ...(typeof input.gratuit === "boolean" ? { gratuit: input.gratuit } : {}),
       status: input.status,
       // L4 — pourquoi le tour a échoué (matière du rapport qualité hebdo).
       errorMessage: normalizeErrorMessage(input.errorMessage),
@@ -477,6 +507,8 @@ interface RoutageAgg {
   coutUsd: number;
   /** S3 — tours payants dont le fournisseur n'a remonté AUCUN coût. */
   coutInconnuTours: number;
+  /** T-036 — tours dont le fournisseur ne remonte structurellement pas de coût. */
+  coutNonRemonteTours: number;
 }
 
 function newRoutageAgg(): RoutageAgg {
@@ -488,6 +520,7 @@ function newRoutageAgg(): RoutageAgg {
     mixAbo: new Map(),
     coutUsd: 0,
     coutInconnuTours: 0,
+    coutNonRemonteTours: 0,
   };
 }
 
@@ -500,7 +533,11 @@ function applyRoutageEvent(agg: RoutageAgg, ev: Record<string, unknown>): void {
     agg.parTier[ev.routeTier] = tierAgg;
   }
   // Coût nul = abonnement Claude OU provider local (ollama/local/lmstudio).
-  const coutNul = ev.engine === "claude" || isLocalProviderId(ev.providerId);
+  // T-023 — la facturation déclarée au moment du tour prime sur la devinette ;
+  // l'historique déjà écrit n'a que la devinette, et c'est pourquoi elle reste.
+  const coutNul =
+    ev.engine === "claude" ||
+    (typeof ev.gratuit === "boolean" ? ev.gratuit : isLocalProviderId(ev.providerId));
   if (coutNul) {
     agg.coutNul += 1;
   }
@@ -514,9 +551,13 @@ function applyRoutageEvent(agg: RoutageAgg, ev: Record<string, unknown>): void {
   if (typeof ev.costUsd === "number" && Number.isFinite(ev.costUsd)) {
     agg.coutUsd += ev.costUsd;
   } else if (!coutNul) {
-    // Fournisseur payant muet sur l'usage : la dépense affichée est un
-    // MINORANT, et il faut le dire plutôt que de laisser croire au total.
-    agg.coutInconnuTours += 1;
+    // Fournisseur payant sans coût : la dépense affichée est un MINORANT dans
+    // les deux cas, mais un seul appelle une action (T-036). « Structurel » =
+    // le fournisseur ne remonte jamais de coût, aucun réglage n'y changera
+    // rien ; « inconnu » = il pourrait, et ne l'a pas fait — là, il y a une
+    // comptabilité d'usage à cocher.
+    if (ev.coutIndisponible === true) agg.coutNonRemonteTours += 1;
+    else agg.coutInconnuTours += 1;
   }
 }
 
@@ -528,6 +569,7 @@ function finalizeRoutage(agg: RoutageAgg, debordMoisUsd: number): {
   debordMoisUsd: number;
   coutPeriodeUsd: number;
   coutInconnuTours: number;
+  coutNonRemonteTours: number;
 } {
   return {
     parTier: agg.parTier,
@@ -539,6 +581,7 @@ function finalizeRoutage(agg: RoutageAgg, debordMoisUsd: number): {
     debordMoisUsd,
     coutPeriodeUsd: agg.coutUsd,
     coutInconnuTours: agg.coutInconnuTours,
+    coutNonRemonteTours: agg.coutNonRemonteTours,
   };
 }
 

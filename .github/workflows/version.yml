@@ -103,6 +103,20 @@ jobs:
       - name: Collisions de casse (et ses tests)
         run: npm run casse:test && npm run casse
 
+      # Tauri ne supprime jamais d'une mise en scène ce qui a disparu de la
+      # source : un fichier retiré du bundle continue d'être livré tant que
+      # `preparer-bundle.sh` ne purge pas (T-041). La CI ne peut pas voir le
+      # symptôme — ses machines sont vierges — elle garde donc la purge.
+      - name: Purge de la mise en scène (test de preparer-bundle.sh)
+        run: npm run bundle:test
+
+      # Les défauts du routeur sont écrits deux fois : dans le sidecar qui
+      # route, et dans l'interface qui les affiche. Une seule des deux
+      # corrigée, et les réglages annoncent un modèle pendant qu'un autre
+      # répond — sans un mot dans le journal (T-047).
+      - name: Routage par défaut (et ses tests)
+        run: npm run routage:test && npm run routage
+
       # Le dépôt local EST le produit public depuis le 2026-08-07 : la
       # séparation qui protégeait par construction a disparu, et cet audit la
       # remplace. Ici les motifs littéraux (scripts/.audit-motifs) sont absents

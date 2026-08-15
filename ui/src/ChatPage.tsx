@@ -42,6 +42,7 @@ import {
   useAttachmentDraft,
   type SentAttachment,
 } from "./Attachments";
+import { MODELES_ABONNEMENT_CLAUDE } from "./modelesAbonnementClaude";
 import { readClipboardImage } from "./clipboardClient";
 import { TranscriptionChat } from "./chatTranscript";
 import { Modal } from "./Modal";
@@ -112,12 +113,10 @@ import { estCibleUtilisable, resoudreRouteMontante } from "./routageAuto";
  * L'historique vit dans la session SDK (resume), pas dans le payload.
  */
 const CLAUDE_PROVIDER_ID = "claude-abonnement";
-const CLAUDE_MODELS: ModelDetail[] = [
-  { id: "claude-fable-5" },
-  { id: "claude-sonnet-5" },
-  { id: "claude-opus-4-8" },
-  { id: "claude-haiku-4-5" },
-];
+const CLAUDE_MODELS: ModelDetail[] = MODELES_ABONNEMENT_CLAUDE.map((m) => ({
+  id: m.id,
+  description: m.note,
+}));
 
 /*
  * R1/R7 — « Auto (routeur) » : valeur sentinelle du sélecteur de modèle,
@@ -2172,7 +2171,7 @@ export const ChatPage = forwardRef<
                 // R1 — « Auto (routeur) » restant toujours proposé, le
                 // sélecteur n'est plus verrouillé quand la liste est vide.
                 disabled={streaming}
-                chargement={modelsState === "loading"}
+                chargement={modelsState === "loading"} rechercheWebActive={webSearch}
                 onChange={(value) => {
                   setModel(value);
                   // R1/R7 — choisir un modèle explicite efface plancher et

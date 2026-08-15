@@ -19,9 +19,9 @@ import { spawn } from "node:child_process";
 import { createReadStream, promises as fsp } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
-import { isNonEmptyString, isPlainObject } from "./base.js";
+import { isNonEmptyString, isPlainObject, readBoundedBody } from "./base.js";
 import { needsPermission as needsPermissionRegistre, versModeNeutre } from "./permissions.js";
-import { buildHeaders, getProvider, joinUrl, readBoundedBody, type EngineEmitter, type Provider } from "./engine.js";
+import { buildHeaders, getProvider, joinUrl, type EngineEmitter, type Provider } from "./engine.js";
 import { formatSearchResults, sanitizeTopK, searchKnowledge } from "./knowledge.js";
 import { recordUsageEvent, type UsageStatus } from "./usageStats.js";
 

@@ -80,3 +80,71 @@ export function avecCause(err: unknown): string {
 export function messageReseau(err: unknown): string {
   return `erreur réseau: ${avecCause(err)}`;
 }
+
+/** Au-delà, un corps d'erreur ne renseigne plus : il encombre. */
+const MAX_CORPS_ERREUR = 2048;
+
+/**
+ * La réponse est-elle une PAGE WEB là où on attendait une API ?
+ *
+ * Deux indices, parce qu'aucun des deux ne suffit : l'en-tête, qu'un serveur
+ * mal configuré peut taire, et la forme du corps, qu'un JSON contenant du HTML
+ * pourrait imiter — mais pas dès son premier caractère.
+ */
+export function estPageHtml(texte: string, contentType?: string | null): boolean {
+  if (contentType && /text\/html/i.test(contentType)) return true;
+  return /^\s*(<!doctype html|<html[\s>])/i.test(texte);
+}
+
+/**
+ * Corps d'une réponse en erreur, réduit à ce qui renseigne (T-007).
+ *
+ * ── Pourquoi ne pas simplement tronquer ─────────────────────────────────
+ * Le 2026-08-08, `ollama.ps` a reçu 24 fois le 404 HTML d'une plateforme
+ * d'hébergement web : l'hôte enregistré pour ce fournisseur pointait vers un
+ * site, pas vers un serveur Ollama. Chaque occurrence collait deux kilo-octets
+ * de balises dans `app.jsonl`. Deux kilo-octets qui ne disent rien — alors que
+ * le seul fait qui compte, lui, tient en une ligne : **ce n'est pas l'API
+ * attendue qui a répondu**.
+ *
+ * On garde donc le titre de la page quand il existe (« 404: NOT_FOUND » nomme
+ * souvent l'hébergeur, donc la nature de la méprise) et la taille, qui dit que
+ * quelque chose a bien répondu. Le reste part.
+ */
+export function resumerCorpsHttp(texte: string, contentType?: string | null): string {
+  if (!estPageHtml(texte, contentType)) {
+    return texte.length > MAX_CORPS_ERREUR ? texte.slice(0, MAX_CORPS_ERREUR) + "…" : texte;
+  }
+  const titre = /<title[^>]*>([^<]{0,200})/i.exec(texte)?.[1]?.trim();
+  const entete = `${ENTETE_PAGE_HTML}${texte.length} o)`;
+  return titre ? `${entete} « ${titre} »` : entete;
+}
+
+const ENTETE_PAGE_HTML = "page HTML (";
+
+/**
+ * Ce résumé est-il celui d'une page web ?
+ *
+ * L'appelant a besoin du FAIT, pas seulement du texte : c'est lui qui sait
+ * quel remède proposer (« ce n'est pas un serveur Ollama », « votre proxy a
+ * répondu à sa place »…). Reconnaître notre propre en-tête vaut mieux que de
+ * re-tester le corps, qui n'existe plus une fois résumé.
+ */
+export function estResumePageHtml(resume: string): boolean {
+  return resume.startsWith(ENTETE_PAGE_HTML);
+}
+
+/**
+ * Lit le corps d'une réponse HTTP en erreur, réduit à ce qui renseigne.
+ *
+ * Borné comme il l'a toujours été, et résumé depuis T-007 quand c'est une page
+ * web. Vit ici plutôt que dans `engine.ts` — trois modules le partagent, et il
+ * ne dépend de rien du moteur.
+ */
+export async function readBoundedBody(res: Response): Promise<string> {
+  try {
+    return resumerCorpsHttp(await res.text(), res.headers.get("content-type"));
+  } catch {
+    return "";
+  }
+}

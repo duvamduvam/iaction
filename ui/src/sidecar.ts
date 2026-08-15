@@ -48,6 +48,8 @@ interface RawSidecarEvent {
 interface PendingRequest {
   /** Méthode appelée — sert la journalisation automatique et sa garde anti-récursion. */
   method: string;
+  /** Requête de SONDE : son échec est une réponse, pas une panne (voir RequestOptions). */
+  sonde?: boolean;
   onChunk?: (data: Record<string, unknown>) => void;
   resolve: (data: Record<string, unknown>) => void;
   reject: (error: Error) => void;
@@ -70,6 +72,19 @@ interface RawAppLog {
 export interface RequestOptions {
   /** Reçoit le `data` brut de chaque événement `chunk` (forme dépendante de la méthode). */
   onChunk?: (data: Record<string, unknown>) => void;
+  /**
+   * Requête de SONDE : on interroge pour SAVOIR, et un refus est une réponse
+   * valide (T-007).
+   *
+   * Son échec est journalisé en `debug`, pas en `error`. Ce n'est pas un
+   * assouplissement de la doctrine — rien n'est tu, la ligne existe toujours —
+   * mais l'inverse : un journal qui écrit « error » 140 fois pour une réponse
+   * attendue n'est plus lisible, et c'est alors la VRAIE panne qui se perd
+   * dans le bruit. Le 2026-08-15, `app.jsonl` portait 140 de ces lignes, deux
+   * kilo-octets de HTML chacune, pour une sonde dont l'échec est le
+   * fonctionnement nominal.
+   */
+  sonde?: boolean;
 }
 
 export interface RequestHandle {
@@ -136,7 +151,11 @@ function handleSidecarEvent(payload: RawSidecarEvent): void {
       // d'une requête de journalisation (elle produirait un nouveau
       // `log.append`, qui échouerait de même — boucle infinie).
       if (handlers.method !== LOG_APPEND_METHOD) {
-        logUi("error", "ui", message, { reqId: payload.id, fields: { method: handlers.method } });
+        // Une SONDE descend en `debug` : son échec est une réponse (T-007).
+        logUi(handlers.sonde ? "debug" : "error", "ui", message, {
+          reqId: payload.id,
+          fields: { method: handlers.method },
+        });
       }
       handlers.reject(new Error(message));
       break;
@@ -204,7 +223,7 @@ export function request(
   const id = `req-${requestCounter}`;
 
   const done = new Promise<Record<string, unknown>>((resolve, reject) => {
-    pending.set(id, { method, onChunk: options.onChunk, resolve, reject });
+    pending.set(id, { method, sonde: options.sonde, onChunk: options.onChunk, resolve, reject });
 
     listenersReady
       .then(() => invoke("sidecar_request", { request: { id, method, params } }))
@@ -1030,66 +1049,14 @@ export interface OpenrouterUsage {
   remaining: number;
 }
 
-export async function usageOpenrouter(providerId: string): Promise<OpenrouterUsage> {
-  const { done } = request("usage.openrouter", { providerId });
+export async function usageCredits(providerId: string): Promise<OpenrouterUsage> {
+  const { done } = request("usage.credits", { providerId });
   const data = await done;
   return {
     totalCredits: typeof data.totalCredits === "number" ? data.totalCredits : 0,
     totalUsage: typeof data.totalUsage === "number" ? data.totalUsage : 0,
     remaining: typeof data.remaining === "number" ? data.remaining : 0,
   };
-}
-
-/* ---------- Helpers typés « ollama.* » (gestion des modèles chargés) ---------- */
-
-/** Un modèle actuellement chargé en mémoire côté serveur Ollama (`ollama.ps`). */
-export interface OllamaModelInfo {
-  name: string;
-  sizeVram: number | null;
-  sizeTotal: number | null;
-  expiresAt: string | null;
-}
-
-function toOllamaModelInfo(value: unknown): OllamaModelInfo | null {
-  if (typeof value !== "object" || value === null) return null;
-  const v = value as Record<string, unknown>;
-  if (typeof v.name !== "string" || !v.name) return null;
-  return {
-    name: v.name,
-    sizeVram: typeof v.sizeVram === "number" && Number.isFinite(v.sizeVram) ? v.sizeVram : null,
-    sizeTotal: typeof v.sizeTotal === "number" && Number.isFinite(v.sizeTotal) ? v.sizeTotal : null,
-    expiresAt: typeof v.expiresAt === "string" && v.expiresAt ? v.expiresAt : null,
-  };
-}
-
-/**
- * Liste les modèles Ollama actuellement chargés en mémoire. Rejette (promesse
- * rejetée) si le fournisseur est inconnu ou si son API native ne répond pas
- * comme un serveur Ollama — c'est le signal utilisé par `OllamaPanel` pour
- * décider de s'afficher ou non.
- */
-export async function ollamaPs(providerId: string): Promise<OllamaModelInfo[]> {
-  const { done } = request("ollama.ps", { providerId });
-  const data = await done;
-  if (!Array.isArray(data.models)) return [];
-  const out: OllamaModelInfo[] = [];
-  for (const raw of data.models) {
-    const m = toOllamaModelInfo(raw);
-    if (m) out.push(m);
-  }
-  return out;
-}
-
-/** Charge un modèle Ollama en mémoire (peut prendre plusieurs minutes à froid). */
-export async function ollamaLoad(providerId: string, model: string): Promise<void> {
-  const { done } = request("ollama.load", { providerId, model });
-  await done;
-}
-
-/** Décharge un modèle Ollama de la mémoire (`keep_alive:0`). */
-export async function ollamaUnload(providerId: string, model: string): Promise<void> {
-  const { done } = request("ollama.unload", { providerId, model });
-  await done;
 }
 
 /* ---------- Helpers typés « claude.commands » (menu « / » du composeur) ---------- */

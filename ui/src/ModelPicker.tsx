@@ -64,6 +64,12 @@ interface ModelPickerProps {
   onToggleFavori?: (modelId: string) => void;
   disabled?: boolean;
   chargement?: boolean;
+  /**
+   * T-025 — recherche web R9 active : les agents `…-with-search` sont écartés,
+   * puisque nous cherchons déjà pour eux et que leur propre recherche est ce
+   * qui casse (2 échecs sur 6 mesurés le 2026-08-11).
+   */
+  rechercheWebActive?: boolean;
 }
 
 /** Hauteur maximale du popover, en px — sert aussi à décider s'il s'ouvre vers le haut. */
@@ -108,6 +114,7 @@ export function ModelPicker({
   onToggleFavori,
   disabled = false,
   chargement = false,
+  rechercheWebActive = false,
 }: Readonly<ModelPickerProps>) {
   const [ouvert, setOuvert] = useState(false);
   const [filtre, setFiltre] = useState<FiltreModeles>(FILTRE_INITIAL);
@@ -130,9 +137,12 @@ export function ModelPicker({
   const epingleCourant = epingles.find((o) => o.value === value);
   const modeleCourant = parId.get(value);
 
+  // `rechercheWebActive` n'est pas une préférence d'affichage : elle vient de
+  // l'état de R9, pas des puces du popover — d'où la fusion ici plutôt qu'un
+  // champ de plus dans l'état local (que « Réinitialiser » remettrait à faux).
   const liste = useMemo(
-    () => construireListe(models, favoris, filtre, value),
-    [models, favoris, filtre, value],
+    () => construireListe(models, favoris, { ...filtre, rechercheWebActive }, value),
+    [models, favoris, filtre, value, rechercheWebActive],
   );
 
   const epinglesFiltres = useMemo(() => {
@@ -516,6 +526,16 @@ export function ModelPicker({
       {/* L'ordre des éditeurs n'est pas une évidence : il vient d'un relevé
           daté, et le dire est moins cher que laisser croire à un classement
           maison — ou à une mesure en direct. */}
+      {/* Un modèle qui disparaît sans un mot est un mensonge par omission :
+          l'écart se DIT, avec sa raison. */}
+      {liste.agentsRechercheMasques > 0 && (
+        <p className="model-picker__source">
+          {liste.agentsRechercheMasques} agent
+          {liste.agentsRechercheMasques > 1 ? "s" : ""} à recherche intégrée masqué
+          {liste.agentsRechercheMasques > 1 ? "s" : ""} : la recherche web est déjà faite par
+          l'application, et la leur échoue par intermittence (T-025).
+        </p>
+      )}
       {classementVisible && <p className="model-picker__source">{TRAFIC_DISCLAIMER}</p>}
     </div>
   );

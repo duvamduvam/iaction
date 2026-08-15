@@ -15,7 +15,14 @@ import {
   entry,
   fail,
   fakeClaudeModule,
+  moduleCompile,
 } from "./harness.mjs";
+import { sendFinalTextResponse, sendToolCallResponse, sseChunk } from "./sseMock.mjs";
+
+// Défauts du routeur lus dans le code plutôt que recopiés : le test vérifie
+// qu'un tier invalide retombe sur le DÉFAUT, pas que ce défaut vaut tel modèle
+// (T-047).
+const { DEFAULT_ROUTING_TABLE } = await import(moduleCompile("router.js"));
 
 // ---------------------------------------------------------------------------
 // Lot O3 : exécution d'orchestrations (sidecar/src/orchestrator.ts).
@@ -123,64 +130,6 @@ async function main() {
   // R6-A : dernier body reçu par la route agentique /v1-neutral — vérifie que
   // meta.routeDebord force usage:{include:true} même sans usageAccounting.
   let lastNeutralBody = null;
-
-  function sseChunk(res, obj) {
-    res.write(`data: ${JSON.stringify(obj)}\n\n`);
-  }
-
-  function sendToolCallResponse(res, toolCall) {
-    const argsJson = JSON.stringify(toolCall.args ?? {});
-    const mid = Math.max(1, Math.floor(argsJson.length / 2));
-    const fragments = [argsJson.slice(0, mid), argsJson.slice(mid)];
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
-    sseChunk(res, {
-      choices: [
-        {
-          index: 0,
-          delta: {
-            tool_calls: [
-              { index: 0, id: toolCall.id, type: "function", function: { name: toolCall.name, arguments: "" } },
-            ],
-          },
-          finish_reason: null,
-        },
-      ],
-    });
-    for (const frag of fragments) {
-      sseChunk(res, {
-        choices: [
-          { index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: frag } }] }, finish_reason: null },
-        ],
-      });
-    }
-    sseChunk(res, {
-      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
-      usage: { prompt_tokens: 10, completion_tokens: 4 },
-    });
-    res.write("data: [DONE]\n\n");
-    res.end();
-  }
-
-  // R6-A : `extraUsage` optionnel, fusionné dans l'usage final (usage étendu
-  // R0 — cost/prompt_tokens_details — pour l'op final_cost ci-dessous).
-  function sendFinalTextResponse(res, text, extraUsage = null) {
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
-    sseChunk(res, { choices: [{ index: 0, delta: { content: text }, finish_reason: null }] });
-    sseChunk(res, {
-      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      usage: { prompt_tokens: 6, completion_tokens: 2, ...(extraUsage ?? {}) },
-    });
-    res.write("data: [DONE]\n\n");
-    res.end();
-  }
 
   const mockServer = http.createServer((req, res) => {
     const chunks = [];
@@ -780,26 +729,26 @@ async function main() {
     );
 
     // ---------------------------------------------------------------------
-    // usage.openrouter (mini-tranche du Lot 8)
+    // usage.credits (ex-usage.openrouter, T-023) : les deux cas ci-dessous exercent les DEUX noms — l'alias doit tenir.
     // ---------------------------------------------------------------------
 
     // usage.openrouter ok
-    send({ id: "uo1", method: "usage.openrouter", params: { providerId: "mock" } });
+    send({ id: "uo1", method: "usage.credits", params: { providerId: "mock" } });
     const doneUo1 = await waitFor(
       (e) => e.id === "uo1" && (e.event === "done" || e.event === "error"),
       3000,
-      "usage.openrouter uo1",
+      "usage.credits uo1",
     );
     assert(
       doneUo1.event === "done",
-      `usage.openrouter uo1 attendu 'done', reçu '${doneUo1.event}': ${JSON.stringify(doneUo1.data)}`,
+      `usage.credits uo1 attendu 'done', reçu '${doneUo1.event}': ${JSON.stringify(doneUo1.data)}`,
     );
     assert(
       doneUo1.data.totalCredits === 100 && doneUo1.data.totalUsage === 37 && doneUo1.data.remaining === 63,
-      `usage.openrouter uo1 données incorrectes: ${JSON.stringify(doneUo1.data)}`,
+      `usage.credits uo1 données incorrectes: ${JSON.stringify(doneUo1.data)}`,
     );
 
-    // usage.openrouter provider sans clé API -> error
+    // ancien nom, provider sans clé API -> error (l'alias doit tenir)
     send({ id: "uo2", method: "usage.openrouter", params: { providerId: "unauthorized" } });
     const errUo2 = await waitFor(
       (e) => e.id === "uo2" && e.event === "error",
@@ -1365,7 +1314,7 @@ async function main() {
       `router.route rr3 : tier attendu 'moyen', reçu ${JSON.stringify(doneRr3.data)}`,
     );
     assert(
-      JSON.stringify(doneRr3.data.target) === JSON.stringify({ engine: "claude", model: "claude-opus-4-8" }),
+      JSON.stringify(doneRr3.data.target) === JSON.stringify(DEFAULT_ROUTING_TABLE.moyen),
       `router.route rr3 : le tier invalide de rs1 doit rester au défaut, reçu ${JSON.stringify(doneRr3.data.target)}`,
     );
 
@@ -1379,7 +1328,7 @@ async function main() {
     const doneRrMin1 = await waitFor((e) => e.id === "rr-min1" && e.event === "done", 3000, "router.route rr-min1");
     assert(
       doneRrMin1.data.tier === "moyen" &&
-        JSON.stringify(doneRrMin1.data.target) === JSON.stringify({ engine: "claude", model: "claude-opus-4-8" }) &&
+        JSON.stringify(doneRrMin1.data.target) === JSON.stringify(DEFAULT_ROUTING_TABLE.moyen) &&
         doneRrMin1.data.reasons.includes("plancher de session : moyen"),
       `router.route rr-min1 : plancher moyen attendu, reçu ${JSON.stringify(doneRrMin1.data)}`,
     );

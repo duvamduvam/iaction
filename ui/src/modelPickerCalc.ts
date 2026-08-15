@@ -116,6 +116,12 @@ export interface FiltreModeles {
   /** `false` (défaut) : les variantes doublonnant un modèle de base sont masquées. */
   variantes: boolean;
   gratuitSeulement: boolean;
+  /**
+   * T-025 — la recherche web R9 est active : les agents qui cherchent DÉJÀ par
+   * eux-mêmes sont écartés. Ce n'est pas une préférence d'affichage, c'est un
+   * garde-fou (voir `estAgentRechercheIntegree`).
+   */
+  rechercheWebActive: boolean;
 }
 
 export const FILTRE_INITIAL: FiltreModeles = {
@@ -123,7 +129,33 @@ export const FILTRE_INITIAL: FiltreModeles = {
   tri: "name",
   variantes: false,
   gratuitSeulement: false,
+  rechercheWebActive: false,
 };
+
+/**
+ * Un agent qui fait la recherche web LUI-MÊME (`…-with-search`) ?
+ *
+ * ── Pourquoi les écarter quand R9 est active (T-025) ────────────────────
+ * Mesuré le 2026-08-11 : `gemini-pro-with-search` rend la phrase d'erreur du
+ * fournisseur dans 2 tours sur 6, à requête strictement identique, alors que
+ * le modèle brut équivalent réussit 6 fois sur 6. Ni l'historique, ni le bloc
+ * système de R9, ni la taille du corps n'expliquent l'écart : c'est l'agent de
+ * recherche du fournisseur qui casse. Quand R9 est active, la recherche est
+ * faite DEUX fois — une fois par nous, avec nos sources citées, une fois par
+ * l'agent — et c'est la seconde qui échoue.
+ *
+ * Le ticket a écarté les autres pistes : valider les modèles par un appel court
+ * ne rattrape pas un modèle qui répond 9 fois sur 10, et la consommation à zéro
+ * ne distingue pas le tour échoué du tour réussi. Écarter ces agents-là quand
+ * on cherche déjà pour eux est le seul correctif qui vise la cause.
+ *
+ * Reconnaissance par l'id, faute de mieux : le fournisseur n'expose aucun trait
+ * disant « cet agent cherche ». C'est exactement ce que T-023 doit supprimer —
+ * en attendant, la devinette est ici, nommée, testée, et à un seul endroit.
+ */
+export function estAgentRechercheIntegree(id: string): boolean {
+  return /-with-search\b/i.test(id);
+}
 
 export interface GroupeEditeur {
   /** Slug de l'éditeur (`anthropic`, `meta-llama`…). `""` = ids sans éditeur (Ollama). */
@@ -138,6 +170,8 @@ export interface ListeModeles {
   groupes: GroupeEditeur[];
   /** Variantes écartées, pour le dire à l'utilisateur au lieu de les escamoter. */
   variantesMasquees: number;
+  /** Agents à recherche intégrée écartés par R9 (T-025) — se DIT, ne s'escamote pas. */
+  agentsRechercheMasques: number;
   /** Nombre de modèles affichés, pour distinguer « rien ne matche » de « catalogue vide ». */
   total: number;
 }
@@ -194,8 +228,16 @@ export function construireListe(
 ): ListeModeles {
   const idsConnus = new Set(models.map((m) => m.id));
   let variantesMasquees = 0;
+  let agentsRechercheMasques = 0;
 
   const retenus = models.filter((m) => {
+    // Même règle de non-perte que pour les variantes : le modèle SÉLECTIONNÉ
+    // ne disparaît jamais, sinon le sélecteur affiche « — » sur une
+    // conversation qui tourne.
+    if (filtre.rechercheWebActive && m.id !== valeurCourante && estAgentRechercheIntegree(m.id)) {
+      agentsRechercheMasques += 1;
+      return false;
+    }
     if (!filtre.variantes && m.id !== valeurCourante) {
       const base = baseDeVariante(m.id);
       if (base !== null && idsConnus.has(base)) {
@@ -220,6 +262,7 @@ export function construireListe(
     favoris: favorisRetenus,
     groupes: grouperParEditeur(autres),
     variantesMasquees,
+    agentsRechercheMasques,
     total: favorisRetenus.length + autres.length,
   };
 }

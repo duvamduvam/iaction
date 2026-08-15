@@ -65,6 +65,25 @@ export const fakeClaudeMcpModule = path.join(dossierTest, "fakeClaudeMcp.mjs");
 export const defaultXdgConfigHome = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-test-xdg-"));
 process.env.XDG_CONFIG_HOME = defaultXdgConfigHome;
 
+/**
+ * Répertoire de DONNÉES jetable, imposé pour la même raison — et pour une plus
+ * grave (T-051).
+ *
+ * `XDG_DATA_HOME` non défini, c'est le cas NORMAL d'un terminal Linux : le
+ * sidecar retombe alors sur `~/.local/share`, le vrai. Or il migre au démarrage
+ * ce qui traîne sous l'ancien nommage (`net.duvam.ia-studio` →
+ * `net.duvam.iaction`, `appPaths.ts`), et cette migration DÉPLACE. Lancer la
+ * suite de tests pouvait donc remuer les données réelles de la machine.
+ *
+ * Le défaut se cachait derrière un accident d'environnement : le terminal de
+ * VSCode installé par Snap définit `XDG_DATA_HOME` vers son bac à sable, ce qui
+ * isolait la suite sans que personne l'ait voulu. Sur un shell ordinaire,
+ * `logs.test.js` échouait — le sidecar journalisait une ligne de migration que
+ * le test ne comptait pas.
+ */
+export const defaultXdgDataHome = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-test-xdg-data-"));
+process.env.XDG_DATA_HOME = defaultXdgDataHome;
+
 export function fail(message) {
   console.error(`ECHEC: ${message}`);
   process.exitCode = 1;

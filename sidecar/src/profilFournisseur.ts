@@ -34,6 +34,31 @@ export interface ProviderTraits {
   catalogShape?: "openai" | "slugs";
   /** T-022 — `false` : les compteurs à zéro valent « inconnu » (`null`). */
   usageTrustworthy?: boolean;
+  /**
+   * T-036 — `false` : ce fournisseur ne remonte JAMAIS de coût, par
+   * construction. Le champ `usage.cost` est une extension OpenRouter ; chez qui
+   * ne l'implémente pas, aucun réglage ne le fera apparaître. Le dire ici
+   * distingue « on ne sait pas » de « il n'y a rien à savoir » — deux minorants,
+   * mais un seul appelle une action.
+   */
+  coutRemonte?: boolean;
+  /**
+   * T-023 (R8-B) — facturation du fournisseur, DÉCLARÉE au lieu d'être devinée.
+   *
+   * Elle l'était par sous-chaîne de l'identifiant (`id.includes("ollama")`) :
+   * un fournisseur local nommé autrement était facturé à tort, et un
+   * fournisseur payant contenant « local » compté gratuit. Absent : on retombe
+   * sur la devinette d'avant, à l'octet près — c'est la discipline R0, et elle
+   * permet de déclarer les profils un par un sans rien casser.
+   */
+  billing?: "free" | "paid";
+  /**
+   * T-023 (R8-B) — chemin de la jauge de solde, relatif à `baseUrl`
+   * (`"credits"` chez OpenRouter). ABSENT = ce fournisseur n'a pas de jauge, et
+   * `usage.credits` répond une erreur explicite au lieu d'aller taper une route
+   * qui n'existe pas. C'est ce champ qui retire un nom de marque du protocole.
+   */
+  creditsPath?: string;
   /** Champs non standard à fusionner dans le corps de `chat.send`. */
   bodyExtras?: Record<string, unknown>;
 }
@@ -103,6 +128,10 @@ export function normaliserTraits(brut: unknown): ProviderTraits | undefined {
   const catalogShape = forme(brut.catalogShape);
   if (catalogShape) traits.catalogShape = catalogShape;
   if (typeof brut.usageTrustworthy === "boolean") traits.usageTrustworthy = brut.usageTrustworthy;
+  if (typeof brut.coutRemonte === "boolean") traits.coutRemonte = brut.coutRemonte;
+  if (brut.billing === "free" || brut.billing === "paid") traits.billing = brut.billing;
+  const credits = cheminRelatif(brut.creditsPath);
+  if (credits) traits.creditsPath = credits;
   const bodyExtras = extras(brut.bodyExtras);
   if (bodyExtras) traits.bodyExtras = bodyExtras;
   return Object.keys(traits).length > 0 ? traits : undefined;
@@ -157,6 +186,41 @@ function signalerUneFois(providerId: string): void {
 /** Tests seulement : remet les témoins « déjà signalé » à zéro. */
 export function reinitialiserSignalementComptabilite(): void {
   sansComptabilite.clear();
+}
+
+/**
+ * Ce fournisseur est-il structurellement muet sur le coût (T-036) ?
+ *
+ * Le fait appartient au FOURNISSEUR, pas à la lecture : c'est pourquoi il
+ * s'inscrit dans l'événement d'usage au moment du tour. Relu plus tard,
+ * l'agrégat verrait une configuration qui a pu changer entre-temps.
+ */
+export function coutIndisponible(traits: ProviderTraits | undefined): boolean {
+  return traits?.coutRemonte === false;
+}
+
+/**
+ * Champs d'usage que le PROFIL du fournisseur dicte, à inscrire dans
+ * l'événement au moment du tour (T-023, T-036).
+ *
+ * Groupés ici pour que le moteur n'ait pas à connaître les traits un par un —
+ * et pour que la règle « écrit seulement si connu » tienne à un seul endroit :
+ * un fournisseur sans profil garde un événement identique à l'octet près.
+ */
+export function champsUsageDuProfil(
+  traits: ProviderTraits | undefined,
+): { coutIndisponible?: true; gratuit?: boolean } {
+  return {
+    ...(coutIndisponible(traits) ? { coutIndisponible: true as const } : {}),
+    ...(traits?.billing ? { gratuit: traits.billing === "free" } : {}),
+  };
+}
+
+/** Chemin relatif non vide, sans barre de tête (on le joint à `baseUrl`). */
+function cheminRelatif(valeur: unknown): string | undefined {
+  if (typeof valeur !== "string") return undefined;
+  const v = valeur.trim().replace(/^\/+/, "");
+  return v.length > 0 ? v : undefined;
 }
 
 function estFini(valeur: unknown): valeur is number {

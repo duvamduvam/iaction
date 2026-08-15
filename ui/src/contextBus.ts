@@ -13,6 +13,8 @@
  * faute d'une source d'autorité on retombe sur une table de correspondances.
  */
 
+import { IDS_ABONNEMENT_CLAUDE } from "./modelesAbonnementClaude";
+
 export type ContextSource = "agent" | "chat";
 
 export interface ContextInfo {
@@ -83,10 +85,11 @@ export function readCompactHandler(source: ContextSource): CompactHandler | null
  */
 const CONTEXT_WINDOWS: { match: string; tokens: number }[] = [
   { match: "[1m]", tokens: 1_000_000 },
-  { match: "claude-opus-4-8", tokens: 200_000 },
-  { match: "claude-fable-5", tokens: 200_000 },
-  { match: "claude-sonnet-5", tokens: 200_000 },
-  { match: "claude-haiku-4-5", tokens: 200_000 },
+  // Les modèles de l'abonnement partagent le même palier de départ : la
+  // fenêtre réelle dépend de l'abonnement, pas de l'id, et `usedTokens` la
+  // recale à 1M dès qu'un prompt plus grand est accepté (voir ci-dessous).
+  // Dérivé de la liste unique pour qu'un modèle ajouté là ne manque pas ici.
+  ...IDS_ABONNEMENT_CLAUDE.map((id) => ({ match: id, tokens: 200_000 })),
   { match: "claude", tokens: 200_000 },
   { match: "gpt-5", tokens: 400_000 },
   { match: "gpt-4.1", tokens: 1_000_000 },

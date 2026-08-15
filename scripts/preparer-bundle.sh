@@ -30,6 +30,27 @@ NODE_VERSION="${NODE_VERSION:-v22.22.1}"
 # Dépendances d'exécution EXCLUES du bundle (voir en-tête).
 EXCLUES='["kokoro-js","@huggingface/transformers"]'
 
+# ── Purge de la mise en scène précédente (T-041) ────────────────────────
+# Tauri COPIE les ressources dans `target/release/sidecar/`, puis dans
+# `bundle/appimage_deb/…` — et n'y supprime jamais ce qui a disparu de la
+# source. Un fichier retiré du bundle continuait donc d'être recopié dans
+# l'AppDir à chaque construction : le 2026-08-13, le CLI Claude non compressé
+# retiré par le correctif T-038 y dormait encore et faisait échouer un build que
+# ce correctif venait de réparer. Trois constructions lues comme trois échecs
+# différents, pour un seul fichier périmé.
+#
+# C'est la même famille que T-020 : du code (ici des ressources) qu'on croit
+# livrer et qui n'est pas celui qu'on a écrit. La CI ne voit rien — machine
+# vierge à chaque run —, c'est donc un piège de poste de développement, et une
+# consigne qu'il faut se rappeler n'aurait pas été un garde-fou.
+CIBLE="${CARGO_TARGET_DIR:-$RACINE/src-tauri/target}"
+for scene in "$CIBLE/release/sidecar" "$CIBLE/release/bundle"; do
+  if [ -e "$scene" ]; then
+    echo "==> Purge de la mise en scène précédente : $scene"
+    rm -rf "$scene"
+  fi
+done
+
 echo "==> Interface (vite build)"
 npm run build -w ui
 

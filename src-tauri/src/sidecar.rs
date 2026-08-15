@@ -212,8 +212,14 @@ fn node_program(_app: &AppHandle) -> String {
 /// Cela ne coupe RIEN de l'observabilité : stdout et stderr sont déjà
 /// redirigés vers l'application, qui les relaie au journal (`sidecar:log`).
 /// La fenêtre n'apportait rien que du bruit.
-fn commande_sidecar(node: &str, entry: &str) -> Command {
+fn commande_sidecar(node: &str, entry: &str, reseau: &crate::reseau::Reseau) -> Command {
     let mut cmd = Command::new(node);
+    // T-045 — réglages réseau saisis dans l'application. Rien de posé = rien de
+    // changé : l'environnement reste celui du poste, à l'octet près.
+    cmd.envs(crate::reseau::variables(reseau));
+    if reseau.ca_systeme {
+        cmd.arg("--use-system-ca");
+    }
     // `--use-env-proxy` : le `fetch` de Node n'honore PAS `HTTP_PROXY` /
     // `HTTPS_PROXY` par défaut, contrairement à curl ou à un navigateur. Sur un
     // poste d'entreprise à egress contrôlé, tous les appels sortants échouent
@@ -425,7 +431,7 @@ fn supervise(app: AppHandle, origine: &'static str) {
             }
         }
 
-        let spawned = commande_sidecar(&node, &entry).spawn();
+        let spawned = commande_sidecar(&node, &entry, &crate::reseau::lire_pour(&app)).spawn();
 
         let mut child = match spawned {
             Ok(child) => child,
