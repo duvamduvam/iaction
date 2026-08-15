@@ -16,10 +16,11 @@ import {
   validateAttachments,
   type Attachment,
 } from "./attachments.js";
-import { avecCause, isNonEmptyString, isPlainObject, messageReseau } from "./base.js";
+import { avecCause, estResumePageHtml, isNonEmptyString, isPlainObject, messageReseau, readBoundedBody } from "./base.js";
 import { cibleCatalogue, normaliserCatalogue, toDetailedModel } from "./catalogue.js";
 import {
   appliquerBodyExtras,
+  champsUsageDuProfil,
   extraireUsage,
   normaliserTraits,
   type ProviderTraits,
@@ -111,18 +112,6 @@ export function buildHeaders(
     Object.assign(headers, provider.headers);
   }
   return headers;
-}
-
-const MAX_ERROR_BODY = 2048;
-
-/** Lit le corps d'une réponse HTTP en erreur, borné (pour ne pas gonfler les logs/messages). */
-export async function readBoundedBody(res: Response): Promise<string> {
-  try {
-    const text = await res.text();
-    return text.length > MAX_ERROR_BODY ? text.slice(0, MAX_ERROR_BODY) + "…" : text;
-  } catch {
-    return "";
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +298,7 @@ function recordChatSendUsage(
     method: "chat.send",
     providerId,
     model,
+    ...champsUsageDuProfil(providers.get(providerId)?.traits),
     promptTokens: usage?.promptTokens ?? null,
     completionTokens: usage?.completionTokens ?? null,
     status,
@@ -600,10 +590,10 @@ export async function handleChatSend(
 }
 
 // ---------------------------------------------------------------------------
-// usage.openrouter
+// usage.credits
 // ---------------------------------------------------------------------------
 
-export async function handleUsageOpenrouter(
+export async function handleUsageCredits(
   id: string,
   params: Record<string, unknown>,
   emitter: EngineEmitter,
@@ -622,9 +612,9 @@ export async function handleUsageOpenrouter(
     emitter.error(id, `clé API manquante pour ${providerId}`);
     return;
   }
-
   try {
-    const res = await fetch(joinUrl(provider.baseUrl, "credits"), {
+    // T-023 — chemin déclaré ; sans profil, `credits` comme avant.
+    const res = await fetch(joinUrl(provider.baseUrl, provider.traits?.creditsPath ?? "credits"), {
       method: "GET",
       headers: buildHeaders(provider),
     });
@@ -739,7 +729,13 @@ export async function handleOllamaPs(
     });
     if (!res.ok) {
       const body = await readBoundedBody(res);
-      emitter.error(id, `HTTP ${res.status} ${res.statusText}: ${body}`);
+      // T-007 : dire la CAUSE PROBABLE, pas seulement le code. Une page web en
+      // réponse à `/api/ps` ne signale pas un Ollama en panne — elle signale
+      // que l'adresse enregistrée ne désigne pas un Ollama du tout (tunnel
+      // expiré, adresse d'un site). Deux diagnostics, deux remèdes.
+      const indice = estResumePageHtml(body) ? " — la réponse n'est pas un serveur Ollama" : "";
+      // Le fournisseur est NOMMÉ : sans lui, il fallait deviner lequel des trois.
+      emitter.error(id, `HTTP ${res.status} ${res.statusText} (fournisseur « ${provider.id} ») : ${body}${indice}`);
       return;
     }
     const json = (await res.json()) as unknown;

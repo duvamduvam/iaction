@@ -8,6 +8,7 @@
  */
 
 import type { FocusEvent, KeyboardEvent, RefObject } from "react";
+import { MODELES_ABONNEMENT_CLAUDE } from "./modelesAbonnementClaude";
 import { agentOptionValue, AUTO_MODEL, type AgentSelection, type ProjectSession } from "./modeleProjet";
 import { OllamaPanel } from "./OllamaPanel";
 import { PERMISSION_MODE_OPTIONS } from "./permissions";
@@ -28,10 +29,7 @@ import type { KnowledgeStatus, ModelDetail, PermissionMode } from "./sidecar";
  */
 const MODEL_OPTIONS: OptionEpinglee[] = [
   { value: "", label: "(défaut)" },
-  { value: "claude-fable-5", label: "claude-fable-5" },
-  { value: "claude-sonnet-5", label: "claude-sonnet-5" },
-  { value: "claude-opus-4-8", label: "claude-opus-4-8" },
-  { value: "claude-haiku-4-5", label: "claude-haiku-4-5" },
+  ...MODELES_ABONNEMENT_CLAUDE.map((m) => ({ value: m.id, label: m.id, title: m.note })),
 ];
 
 const AUTO_EPINGLE: OptionEpinglee = {

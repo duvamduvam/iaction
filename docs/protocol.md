@@ -86,6 +86,22 @@ Appelé par l'UI au démarrage et à chaque modification de l'admin.
     défaut implicite `"openai"` ;
   - `usageTrustworthy: boolean` — `false` : un compteur de jetons à `0` vaut
     « pas de mesure » (`null`) et non « zéro consommé » (voir `chat.send`) ;
+  - `coutRemonte: boolean` — `false` : ce fournisseur ne remonte **jamais** de
+    coût (T-036). `usage.cost` est une extension OpenRouter ; chez qui ne
+    l'implémente pas, aucun réglage ne le fera apparaître. Les tours concernés
+    portent alors `coutIndisponible: true` dans `usage/events.jsonl`, ce qui
+    permet à la supervision de distinguer « aucun coût reçu, il y a peut-être
+    une comptabilité d'usage à cocher » de « ce fournisseur n'en remonte
+    jamais, il n'y a rien à chercher » — deux minorants, une seule action ;
+  - `billing: "free" | "paid"` — facturation DÉCLARÉE (T-023). Elle était
+    devinée par sous-chaîne de l'identifiant (`id.includes("ollama")`) : un
+    fournisseur local nommé autrement était facturé à tort, un fournisseur
+    payant contenant « local » compté gratuit. Absent : la devinette
+    s'applique, à l'octet près — elle disparaîtra quand les profils seront
+    déclarés, pas avant ;
+  - `creditsPath: string` — chemin de la jauge de solde, relatif à `baseUrl`
+    (`"credits"` chez OpenRouter). C'est ce champ qui a permis de dé-nommer
+    `usage.openrouter` en **`usage.credits`** ;
   - `bodyExtras: {}` — champs non standard à fusionner dans le corps de
     `chat.send`.
   Validation souple, comme ci-dessus : `catalogUrl` gardé seulement s'il
@@ -285,6 +301,23 @@ approbation Anthropic — voir docs/plan.md (décisions ouvertes).
 
 Pose (ou retire si null) la clé API utilisée par les prochaines sessions
 (en mémoire uniquement, jamais loggée). `done` avec `{configured: bool}`.
+
+**Instruction système du tour (T-052).** Le SDK **agent** ne se comporte pas
+comme le SDK Claude Code historique : sans `systemPrompt`, il n'envoie **pas**
+le prompt de Claude Code mais un prompt **VIDE** (`sdk.mjs` : `if (i ===
+undefined) f = ""`), et une chaîne le **remplace** au lieu de s'y ajouter. Le
+passage d'un SDK à l'autre a donc changé le comportement en silence, et nos
+tours de projet servaient les outils intégrés sans aucune instruction pour les
+cadrer. Arbitrage tranché le 2026-08-15 :
+
+| Tour | `systemPrompt` envoyé au SDK |
+|---|---|
+| Projet (outils intégrés armés) | `{type: "preset", preset: "claude_code", append}` — l'instruction de l'agent et l'annonce de `ask_user` passent par `append` |
+| Chat pur (`tools: []`) | la chaîne de l'appelant, ou rien — un prompt de copilote de code n'a rien à faire dans une conversation sans outils |
+
+Choix RAISONNÉ, pas mesuré : comparer deux prompts système demande des tours
+réels sur des tâches outillées. Le retour arrière tient en un booléen
+(`composerInstructionSysteme`, `sidecar/src/paletteTour.ts`).
 
 ### `claude.start`
 
@@ -721,7 +754,15 @@ Tous les chemins sont résolus relativement à `cwd` et DOIVENT rester dans
 
 ## Méthodes conso (mini-tranche du Lot 8)
 
-### `usage.openrouter`
+### `usage.credits` (ex-`usage.openrouter`)
+
+> **T-023** — la méthode portait un nom de marque dans le protocole. Elle
+> s'appelle désormais `usage.credits` et lit le chemin déclaré par le trait
+> `creditsPath` (défaut `credits`). **`usage.openrouter` reste accepté comme
+> alias** : renommer une méthode ne doit pas casser une interface qui tourne.
+> L'ancien nom partira quand plus rien ne l'appellera, pas le jour du
+> renommage.
+
 
 ```json
 {"id":"req-13","method":"usage.openrouter","params":{"providerId":"openrouter"}}
@@ -2285,6 +2326,16 @@ ou en décharger un. Valides pour **tout** fournisseur dont l'API native
 répond aux mêmes routes — pas seulement un provider nommé `ollama` : c'est
 d'ailleurs ainsi que l'UI détecte « ceci est un Ollama » (`ollama.ps` réussit)
 vs. « ce n'est pas un Ollama » (erreur, panneau non affiché).
+
+**Conséquence sur le journal (T-007)** : cette détection interroge le
+fournisseur SÉLECTIONNÉ, quel qu'il soit, toutes les dix secondes. Son échec
+est donc une réponse, pas une panne — l'appel est marqué `sonde` côté UI et
+journalisé en `debug`. Sans cela, un fournisseur distant hébergé sur une
+plateforme web répondait une page HTML de 404, recopiée en `error` à chaque
+tour d'horloge : 140 lignes en onze jours, dans lesquelles une vraie panne
+serait passée inaperçue. Le corps d'une réponse en erreur est par ailleurs
+résumé quand c'est une page web (`resumerCorpsHttp`), et l'erreur nomme
+désormais le fournisseur concerné.
 
 La base native est dérivée du `baseUrl` déclaré via `providers.set` en ôtant
 un éventuel suffixe `/v1` ou `/v1/` (ex. `http://localhost:11434/v1` →

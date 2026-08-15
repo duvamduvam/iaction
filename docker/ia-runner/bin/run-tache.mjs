@@ -112,11 +112,78 @@ function cheminVerrou() {
 }
 
 /**
+ * Le détenteur inscrit dans la fiche du verrou tourne-t-il encore ?
+ *
+ * `/proc/<pid>` D'ABORD : le runner tourne dans un conteneur Linux, et seul
+ * `/proc` distingue « mort » de « vivant mais appartenant à un autre
+ * utilisateur » (EPERM), alors que le conteneur partage son espace de PID entre
+ * le planificateur et les runs.
+ *
+ * Repli sur `process.kill(pid, 0)` là où `/proc` n'existe pas — Windows, macOS
+ * (T-053). La première rédaction s'en passait, et le test qui la vérifie a fait
+ * échouer la CI Windows : sans `/proc`, un détenteur BIEN VIVANT était déclaré
+ * mort, donc son verrou volé. Le runner ne tourne pas sur ces systèmes, mais
+ * une fonction qui répond faux hors de son habitat est un piège en attente, pas
+ * une limite acceptable.
+ *
+ * Absence de fiche, fiche illisible, ou signal qui ne tranche pas (EPERM) : on
+ * ne sait pas, donc on considère le détenteur vivant — mieux vaut une synchro
+ * reportée qu'un verrou volé à un run qui travaille.
+ */
+export async function detenteurVivant(verrou) {
+  let fiche;
+  try {
+    fiche = JSON.parse(await fsp.readFile(path.join(verrou, "detenteur.json"), "utf8"));
+  } catch {
+    return true;
+  }
+  const pid = Number(fiche?.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  if (process.platform === "linux") {
+    try {
+      await fsp.stat(`/proc/${pid}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM : le processus existe, il ne nous appartient pas. Vivant.
+    return err?.code === "EPERM";
+  }
+}
+
+/** Message d'abandon, avec la fiche du détenteur quand elle est lisible. */
+async function messageVerrouOccupe(verrou, attenteMaxSec, ecouleSec) {
+  let detenteur = "(détenteur inconnu)";
+  try {
+    detenteur = (await fsp.readFile(path.join(verrou, "detenteur.json"), "utf8")).replace(/\s+/g, " ").trim();
+  } catch {
+    // Verrou sans fiche : on le signale tel quel plutôt que de le forcer.
+  }
+  return attenteMaxSec === 0
+    ? `verrou occupé, opération sautée — ${detenteur}`
+    : `verrou toujours occupé après ${Math.round(ecouleSec)} s d'attente — ${detenteur}`;
+}
+
+/**
  * Prise du verrou : `mkdir` échoue avec EEXIST si un autre run le détient —
  * c'est l'opération atomique la plus portable qui soit.
  *
  * `attenteMaxSec = 0` (mode `--sync`) : on n'attend pas, une synchro périodique
  * qui tombe pendant une tâche se contente du tour suivant.
+ *
+ * **Verrou orphelin** (T-050) : le commentaire d'origine tablait sur le fait
+ * qu'un redémarrage du conteneur vide `/tmp` et emporte le verrou avec son
+ * détenteur. C'est faux du cas le plus fréquent : `entrypoint.sh` se relance
+ * LUI-MÊME quand un manifeste change (`exec supercronic`), ce qui tue les
+ * processus en cours sans vider `/tmp`. Un verrou pris à cet instant survit à
+ * son propriétaire et bloque toutes les synchros suivantes — constaté le
+ * 2026-08-13, sept minutes avant que deux veilles ne doivent tourner. On
+ * vérifie donc que le détenteur est vivant, et on reprend le verrou sinon.
  */
 async function prendreVerrou(proprietaire, attenteMaxSec) {
   const verrou = cheminVerrou();
@@ -146,23 +213,17 @@ async function prendreVerrou(proprietaire, attenteMaxSec) {
       if (!err || err.code !== "EEXIST") {
         return { ok: false, message: `verrou inutilisable (${verrou}) : ${messageErreur(err)}` };
       }
+      // Le verrou existe : son détenteur travaille-t-il encore ?
+      if (!(await detenteurVivant(verrou))) {
+        journaliser(`verrou orphelin détecté (détenteur mort) : repris — ${verrou}`, "erreur");
+        await fsp.rm(verrou, { recursive: true, force: true }).catch(() => {});
+        continue; // nouvelle tentative immédiate, sans consommer l'attente
+      }
     }
 
     const ecouleSec = (Date.now() - debutAttente) / 1000;
     if (ecouleSec >= attenteMaxSec) {
-      let detenteur = "(détenteur inconnu)";
-      try {
-        detenteur = (await fsp.readFile(path.join(verrou, "detenteur.json"), "utf8")).replace(/\s+/g, " ").trim();
-      } catch {
-        // Verrou sans fiche : on le signale tel quel plutôt que de le forcer.
-      }
-      return {
-        ok: false,
-        message:
-          attenteMaxSec === 0
-            ? `verrou occupé, opération sautée — ${detenteur}`
-            : `verrou toujours occupé après ${Math.round(ecouleSec)} s d'attente — ${detenteur}`,
-      };
+      return { ok: false, message: await messageVerrouOccupe(verrou, attenteMaxSec, ecouleSec) };
     }
     if (!attenteSignalee) {
       attenteSignalee = true;

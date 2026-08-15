@@ -72,7 +72,8 @@ function ToolBlockView({ block }: Readonly<{ block: Extract<AgentBlock, { type: 
 const AgentBlockView = memo(function AgentBlockView({
   block,
   onFileRef,
-}: Readonly<{ block: AgentBlock; onFileRef: (ref: string) => void }>) {
+  cwd,
+}: Readonly<{ block: AgentBlock; onFileRef: (ref: string) => void; cwd: string | null }>) {
   // Rendu Markdown (GFM) pour le texte de l'assistant uniquement — voir
   // Markdown.tsx. `.agent-text-block` garde son rôle d'espacement entre
   // blocs consécutifs (`.agent-text-block + .agent-text-block`, App.css) ;
@@ -81,7 +82,7 @@ const AgentBlockView = memo(function AgentBlockView({
   if (block.type === "text") {
     return (
       <div className="agent-text-block">
-        <Markdown content={block.content} onFileRef={onFileRef} />
+        <Markdown content={block.content} onFileRef={onFileRef} cwd={cwd} />
       </div>
     );
   }
@@ -111,10 +112,13 @@ function AgentTurnMeta({ info }: Readonly<{ info: NonNullable<AgentTurn["doneInf
 export const AgentTurnView = memo(function AgentTurnView({
   turn,
   onFileRef,
+  cwd,
   onReleaseBackground,
 }: Readonly<{
   turn: AgentTurn;
   onFileRef: (ref: string) => void;
+  /** Racine du projet ouvert : décide de ce qui MÉRITE un bouton (T-024). */
+  cwd: string | null;
   /** Rendre la main pendant l'attente des rapports de tâches de fond (claude.release). */
   onReleaseBackground?: () => void;
 }>) {
@@ -160,7 +164,7 @@ export const AgentTurnView = memo(function AgentTurnView({
     <div className="chat-bubble chat-bubble--assistant">
       <div className="chat-bubble__content">
         {blocks.map((block) => (
-          <AgentBlockView key={block.id} block={block} onFileRef={onFileRef} />
+          <AgentBlockView key={block.id} block={block} onFileRef={onFileRef} cwd={cwd} />
         ))}
         {turn.status === "streaming" && <span className="cursor" />}
         {attenteFournisseur && <div className="chat-bubble__note">{MESSAGE_ATTENTE_FOURNISSEUR}</div>}

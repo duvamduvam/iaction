@@ -53,6 +53,8 @@ export interface UsageRoutage {
   coutPeriodeUsd: number;
   /** S3 — tours payants sans coût remonté : la dépense affichée est un minorant. */
   coutInconnuTours: number;
+  /** T-036 — tours dont le fournisseur ne remonte structurellement aucun coût. */
+  coutNonRemonteTours: number;
 }
 
 /**
@@ -165,6 +167,7 @@ function parseRoutage(value: unknown): UsageRoutage | null {
     // S3 — absents d'un sidecar antérieur : 0, la carte affiche « — ».
     coutPeriodeUsd: toNum(v.coutPeriodeUsd),
     coutInconnuTours: toNum(v.coutInconnuTours),
+    coutNonRemonteTours: toNum(v.coutNonRemonteTours),
   };
 }
 

@@ -25,7 +25,7 @@ import {
   handleOllamaPs,
   handleOllamaUnload,
   handleProvidersSet,
-  handleUsageOpenrouter,
+  handleUsageCredits,
   type EngineEmitter,
 } from "./engine.js";
 import {
@@ -275,8 +275,12 @@ async function dispatch(
       case "claude.sessionTitles":
         await handleClaudeSessionTitles(id, params, engineEmitter);
         break;
+      // T-023 — `usage.openrouter` reste accepté : renommer une méthode ne
+      // doit pas casser une interface qui tourne. L'ancien nom part quand
+      // plus rien ne l'appelle, pas le jour du renommage.
+      case "usage.credits":
       case "usage.openrouter":
-        await handleUsageOpenrouter(id, params, engineEmitter);
+        await handleUsageCredits(id, params, engineEmitter);
         break;
       case "ollama.ps":
         await handleOllamaPs(id, params, engineEmitter);

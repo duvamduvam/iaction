@@ -11,8 +11,22 @@
 type ProvidersPushedListener = () => void;
 
 const listeners = new Set<ProvidersPushedListener>();
+let dejaPousses = false;
+
+/**
+ * La table a-t-elle DÉJÀ été poussée au moins une fois ?
+ *
+ * Un abonnement n'apprend rien du passé : celui qui se branche après le push
+ * n'en verra jamais l'écho. Sans cette mémoire, un consommateur devait choisir
+ * entre attendre un signal déjà passé (et ne rien demander) ou tirer tout de
+ * suite (et perdre la course). Les deux ont été observés — c'est T-008.
+ */
+export function providersDejaPousses(): boolean {
+  return dejaPousses;
+}
 
 export function notifyProvidersPushed(): void {
+  dejaPousses = true;
   for (const cb of listeners) cb();
 }
 

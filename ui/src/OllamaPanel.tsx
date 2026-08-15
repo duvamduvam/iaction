@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { subscribeProvidersPushed } from "./providersBus";
-import { ollamaLoad, ollamaPs, ollamaUnload, type OllamaModelInfo } from "./sidecar";
+import { ollamaLoad, ollamaPs, ollamaUnload, type OllamaModelInfo } from "./ollamaClient";
 
 const OLLAMA_POLL_INTERVAL_MS = 10_000;
 

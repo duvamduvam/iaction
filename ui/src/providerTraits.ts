@@ -23,6 +23,25 @@ export interface ProviderTraits {
   catalogShape?: "openai" | "slugs";
   /** T-022 — `false` : les compteurs à zéro valent « inconnu » plutôt que `0`. */
   usageTrustworthy?: boolean;
+  /**
+   * T-036 — `false` : ce fournisseur ne remonte JAMAIS de coût. `usage.cost`
+   * est une extension OpenRouter ; chez qui ne l'implémente pas, aucun réglage
+   * ne le fera apparaître. Le déclarer évite d'envoyer l'utilisateur chercher
+   * une comptabilité d'usage qui n'existe pas de ce côté-là.
+   */
+  coutRemonte?: boolean;
+  /**
+   * T-023 (R8-B) — facturation déclarée, au lieu d'être devinée par
+   * sous-chaîne de l'identifiant (`id.includes("ollama")`). Absent : la
+   * devinette d'avant s'applique, à l'octet près.
+   */
+  billing?: "free" | "paid";
+  /**
+   * T-023 (R8-B) — chemin de la jauge de solde, relatif à `baseUrl`. Absent :
+   * ce fournisseur n'a pas de jauge. C'est ce champ qui retire le nom d'une
+   * marque du protocole (`usage.openrouter` → `usage.credits`).
+   */
+  creditsPath?: string;
   /** Champs non standard à fusionner dans le corps de `chat.send`. */
   bodyExtras?: Record<string, unknown>;
 }
@@ -62,6 +81,15 @@ export function nettoyerTraits(brut: unknown): ProviderTraits | undefined {
   }
   if (brut.catalogShape === "openai" || brut.catalogShape === "slugs") {
     traits.catalogShape = brut.catalogShape;
+  }
+  if (typeof brut.coutRemonte === "boolean") {
+    traits.coutRemonte = brut.coutRemonte;
+  }
+  if (brut.billing === "free" || brut.billing === "paid") {
+    traits.billing = brut.billing;
+  }
+  if (typeof brut.creditsPath === "string" && brut.creditsPath.trim().replace(/^\/+/, "")) {
+    traits.creditsPath = brut.creditsPath.trim().replace(/^\/+/, "");
   }
   if (typeof brut.usageTrustworthy === "boolean") {
     traits.usageTrustworthy = brut.usageTrustworthy;
@@ -139,6 +167,8 @@ export const PROFILS_CONNUS: ProfilConnu[] = [
       catalogUrl: "https://graphql.swiftask.ai/public/bots",
       catalogShape: "slugs",
       usageTrustworthy: false,
+      coutRemonte: false,
+      billing: "paid",
       bodyExtras: { stateless: true },
     },
   },
@@ -147,11 +177,17 @@ export const PROFILS_CONNUS: ProfilConnu[] = [
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
     needsKey: true,
+    // T-023 — seul trait déclaré ici : la facturation. Le reste du dialecte
+    // d'OpenRouter est le cas standard, et doit le rester visiblement.
+    traits: { billing: "paid", creditsPath: "credits" },
   },
   {
     id: "ollama",
     label: "Ollama local",
     baseUrl: "http://localhost:11434/v1",
     needsKey: false,
+    // Gratuit parce qu'il tourne chez vous — dit, au lieu d'être deviné sur
+    // le mot « ollama » dans l'identifiant.
+    traits: { billing: "free" },
   },
 ];

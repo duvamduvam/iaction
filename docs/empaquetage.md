@@ -35,9 +35,54 @@ Les deux passent par `scripts/preparer-bundle.sh`
 compile le sidecar, assemble ses dépendances d'exécution et télécharge le
 runtime Node. Rien à faire à la main.
 
+Il commence par **purger la mise en scène de la construction précédente**
+(`target/release/sidecar`, `target/release/bundle`). Tauri y copie les
+ressources mais n'y supprime jamais ce qui a disparu de la source : sans cette
+purge, un fichier retiré du bundle continue d'être livré, et fait échouer — ou
+pire, réussir — une construction qui ne correspond plus à ce qu'on a écrit
+(T-041). La CI ne voit pas ce piège, ses machines sont vierges à chaque *run* ;
+il n'existe que sur un poste de développement.
+
 **Tauri ne compile pas Windows depuis Linux** : l'installeur `.exe` se construit
 sur une machine Windows (ou un *runner* `windows-latest` en CI). Le reste du
 dépôt est identique — c'est la même commande.
+
+## Usage en réseau d'entreprise
+
+Derrière un proxy obligatoire, le `fetch` de Node n'honore pas
+`HTTP_PROXY`/`HTTPS_PROXY` par défaut, contrairement à curl ou à un navigateur :
+tous les appels sortants expirent en `UND_ERR_CONNECT_TIMEOUT` pendant que le
+navigateur d'à côté fonctionne (T-043). L'application lance donc son moteur avec
+`--use-env-proxy`, ce qui suffit **si les variables sont posées pour la session
+graphique**.
+
+Elles ne le sont pas toujours — sous Windows elles vivent souvent dans le profil
+du terminal, pas dans la session de bureau. D'où l'encart **Configuration →
+Réseau** (T-045) :
+
+| Champ | Ce qu'il pose | Quand il sert |
+|---|---|---|
+| **Proxy** | `HTTP(S)_PROXY`, dans les deux casses | Aucune variable posée sur le poste |
+| **Sans proxy** | `NO_PROXY` | Ollama local, intranet à joindre en direct |
+| **Autorité de certification** | `NODE_EXTRA_CA_CERTS` | Proxy qui inspecte le TLS (`SELF_SIGNED_CERT_IN_CHAIN`) |
+| **Certificats du système** | `--use-system-ca` | Idem, quand l'autorité est déjà installée sur le poste |
+
+Trois choses à savoir, et elles sont dites dans l'encart :
+
+1. **Les réglages s'appliquent au (re)démarrage du moteur**, pas à la seconde où
+   on les enregistre : `--use-env-proxy` et `--use-system-ca` sont lus par Node
+   au lancement du process. Le bouton « Enregistrer et relancer le moteur » fait
+   les deux.
+2. **Le PAC n'est pas lu.** Un poste qui déclare un `AutoConfigURL` dans le
+   registre et rien d'autre doit saisir l'adresse du proxy ici, à la main. Nous
+   n'interprétons pas le fichier de configuration automatique, et le prétendre
+   serait pire que de l'avouer.
+3. **Un proxy avec mot de passe est stocké en clair** dans la configuration non
+   secrète, comme le serait une variable d'environnement — pas dans le
+   trousseau. L'encart le signale dès que l'adresse en contient un.
+
+Rien de saisi = rien de changé : l'environnement du moteur reste exactement
+celui du poste, et c'est vérifié côté coquille (`src-tauri/src/reseau.rs`).
 
 ### Prérequis du poste Windows (pour CONSTRUIRE)
 

@@ -19,6 +19,7 @@ import {
   todayLocalStr,
   trendRange,
   type Periode,
+  libelleDepense,
 } from "./supervisionPeriode";
 import {
   usageClaudeHistory,
@@ -341,9 +342,7 @@ function RoutagePanel({ routage, totalTours }: Readonly<{ routage: UsageRoutage 
               <div className="panel__title">Dépense de la période</div>
               <div className="supervision-kpi-value">{formatUsd(routage.coutPeriodeUsd)}</div>
               <div className="supervision-kpi-sub">
-                {routage.coutInconnuTours > 0
-                  ? `au moins — ${routage.coutInconnuTours} tour${routage.coutInconnuTours > 1 ? "s" : ""} payant${routage.coutInconnuTours > 1 ? "s" : ""} sans coût remonté`
-                  : "tout le payant, débord et choix manuel"}
+                {libelleDepense(routage.coutInconnuTours, routage.coutNonRemonteTours)}
               </div>
             </div>
             <div className="supervision-kpi-card">

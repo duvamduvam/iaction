@@ -22,8 +22,8 @@ import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isNonEmptyString, isPlainObject } from "./base.js";
-import { joinUrl, readBoundedBody, type EngineEmitter } from "./engine.js";
+import { isNonEmptyString, isPlainObject, readBoundedBody } from "./base.js";
+import { joinUrl, type EngineEmitter } from "./engine.js";
 import { globalDataRoot } from "./appPaths.js";
 import * as journal from "./journal.js";
 

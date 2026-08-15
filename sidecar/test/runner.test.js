@@ -26,7 +26,7 @@ import {
   convertirOnCalendarEnCron,
   normaliserManifeste,
 } from "../../docker/ia-runner/bin/plan-cron.mjs";
-import { resoudreProjet } from "../../docker/ia-runner/bin/run-tache.mjs";
+import { detenteurVivant, resoudreProjet } from "../../docker/ia-runner/bin/run-tache.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -316,6 +316,42 @@ async function main() {
         );
       }
     }
+
+    // ── 5. Verrou orphelin (T-050) ──────────────────────────────────────────
+    // Le défaut constaté : `entrypoint.sh` se relance lui-même quand un
+    // manifeste change, tuant le détenteur du verrou sans vider /tmp. Le
+    // verrou survivait à son propriétaire et bloquait toutes les synchros
+    // suivantes — sept minutes avant que deux veilles ne doivent tourner.
+    const verrou = path.join(tmp, "verrou");
+    await fsp.mkdir(verrou, { recursive: true });
+
+    const ecrireFiche = (pid) =>
+      fsp.writeFile(
+        path.join(verrou, "detenteur.json"),
+        JSON.stringify({ proprietaire: "test", pid, depuis: "2026-08-13T21:01:38.762Z" }),
+        "utf8",
+      );
+
+    await ecrireFiche(process.pid);
+    assert((await detenteurVivant(verrou)) === true, "le processus courant doit être vu vivant");
+
+    // 999999 dépasse le pid_max usuel de Linux (4194304 au plus, 32768 par
+    // défaut) : aucun processus ne peut le porter. Sous Windows, où le repli
+    // `process.kill` s'applique, un handle de ce numéro n'existe pas non plus
+    // — le cas est donc valide sur les deux plateformes (T-053).
+    await ecrireFiche(999999);
+    assert((await detenteurVivant(verrou)) === false, "un pid inexistant doit être vu mort");
+
+    // Prudence : ce qu'on ne sait pas lire est réputé vivant — mieux vaut une
+    // synchro reportée qu'un verrou volé à un run qui travaille.
+    await fsp.rm(path.join(verrou, "detenteur.json"));
+    assert((await detenteurVivant(verrou)) === true, "verrou sans fiche : détenteur réputé vivant");
+
+    await ecrireFiche("pas-un-nombre");
+    assert((await detenteurVivant(verrou)) === true, "pid non numérique : détenteur réputé vivant");
+
+    await fsp.writeFile(path.join(verrou, "detenteur.json"), "{ceci n'est pas du json", "utf8");
+    assert((await detenteurVivant(verrou)) === true, "fiche illisible : détenteur réputé vivant");
 
     console.log("OK");
     process.exitCode = 0;

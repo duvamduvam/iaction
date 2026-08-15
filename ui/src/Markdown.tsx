@@ -7,22 +7,26 @@
  * `dangerouslySetInnerHTML` nulle part.
  *
  * Liens : `target="_blank"` est inopérant en webview Tauri (pas d'onglet à
- * ouvrir) — on intercepte le clic et on route vers `open_external` (déjà
- * utilisé par FileTree.tsx pour ouvrir fichiers/apps externes ; `xdg-open`
- * en repli sous Linux accepte aussi bien un chemin qu'une URL).
+ * ouvrir) — on intercepte le clic et on route vers `open_external`, en passant
+ * par le REGISTRE d'applications (T-049) : un `.html` cité part dans le
+ * navigateur déclaré par l'utilisateur, et non dans celui que le système a
+ * décidé d'être le sien. Sans règle applicable, repli sur `xdg-open`, qui
+ * accepte aussi bien un chemin qu'une URL.
  *
  * Références de fichiers cliquables (page Agent, voir AgentPage.tsx) : si
  * `onFileRef` est fourni, un `code` INLINE (pas un bloc — distingué via
  * `node.position` : une portée mono-ligne, un bloc de code fence toujours
- * au moins deux lignes) dont le texte « ressemble à un fichier » devient un
- * bouton cliquable plutôt qu'un simple `<code>`. Sans la prop (ex. page
- * Chat), rendu strictement inchangé — le composant `code` n'est même pas
- * surchargé.
+ * au moins deux lignes) dont le texte peut réellement s'ouvrir devient un
+ * bouton cliquable plutôt qu'un simple `<code>`. Ce « peut réellement
+ * s'ouvrir » vit dans refFichier.ts, et c'est le même jugement qui décide de
+ * l'ouverture : un bouton ne promet donc plus ce que le clic ne sait pas tenir
+ * (T-024). Sans la prop (ex. page Chat), rendu strictement inchangé — le
+ * composant `code` n'est même pas surchargé.
  */
-import { createContext, memo, useContext, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useContext, useMemo, type ComponentProps, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { openExternal } from "./appsAdmin";
+import { estReferenceCliquable, ouvrirLienExterne } from "./refFichier";
 
 function MarkdownLink({ href, children }: Readonly<ComponentProps<"a"> & ExtraProps>) {
   if (!href) return <>{children}</>;
@@ -32,7 +36,7 @@ function MarkdownLink({ href, children }: Readonly<ComponentProps<"a"> & ExtraPr
       title={href}
       onClick={(e) => {
         e.preventDefault();
-        openExternal(href).catch(() => {
+        ouvrirLienExterne(href).catch(() => {
           // best effort : un lien qui ne s'ouvre pas ne doit jamais casser l'affichage de la transcription
         });
       }}
@@ -59,29 +63,15 @@ function flattenText(node: ReactNode): string {
 }
 
 /**
- * Heuristique « ressemble à un fichier » : pas d'espace, longueur ≤ 120, et
- * (contient un `/` OU un point suivi d'une extension de 1 à 8 caractères),
- * en excluant ce qui commence par `http://`/`https://` (déjà traité par
- * `MarkdownLink` s'il s'agit d'un vrai lien Markdown — un code inline
- * contenant une URL n'en est pas un).
- */
-function looksLikeFileRef(text: string): boolean {
-  if (!text || text.length > 120 || /\s/.test(text)) return false;
-  if (/^https?:\/\//i.test(text)) return false;
-  if (text.includes("/")) return true;
-  return /\.[^./\s]{1,8}$/.test(text);
-}
-
-/**
  * Porte le handler `onFileRef` jusqu'à `MarkdownInlineCode` sans redéfinir
  * de composant à chaque rendu de `Markdown` (le composant `code` passé à
  * `react-markdown` doit garder une identité stable ; le handler, lui, varie
  * librement d'un rendu à l'autre côté appelant).
  */
-const FileRefContext = createContext<((ref: string) => void) | null>(null);
+const FileRefContext = createContext<{ ouvrir: (ref: string) => void; cwd: string | null } | null>(null);
 
 function MarkdownInlineCode({ node, className, children }: Readonly<ComponentProps<"code"> & ExtraProps>) {
-  const onFileRef = useContext(FileRefContext);
+  const fileRef = useContext(FileRefContext);
   // Un bloc de code (fence ``` ou indentation) s'étend TOUJOURS sur au moins
   // deux lignes (ligne d'ouverture + contenu, ou plusieurs lignes indentées)
   // — à la différence d'un `code` inline, toujours porté par une seule ligne
@@ -90,13 +80,13 @@ function MarkdownInlineCode({ node, className, children }: Readonly<ComponentPro
   const isBlock = node?.position ? node.position.start.line !== node.position.end.line : false;
   const text = flattenText(children);
 
-  if (onFileRef && !isBlock && looksLikeFileRef(text)) {
+  if (fileRef && !isBlock && estReferenceCliquable(text, fileRef.cwd)) {
     return (
       <button
         type="button"
         className="md__file-ref"
         title={`Ouvrir « ${text} »`}
-        onClick={() => onFileRef(text)}
+        onClick={() => fileRef.ouvrir(text)}
       >
         {children}
       </button>
@@ -142,10 +132,15 @@ const componentsWithFileRef: Components = { ...baseComponents, code: MarkdownInl
 export const Markdown = memo(function Markdown({
   content,
   onFileRef,
-}: Readonly<{ content: string; onFileRef?: (ref: string) => void }>) {
+  cwd = null,
+}: Readonly<{ content: string; onFileRef?: (ref: string) => void; cwd?: string | null }>) {
   const components = onFileRef ? componentsWithFileRef : baseComponents;
+  // Identité stable : un contexte dont la valeur change à chaque rendu re-rend
+  // tous ses consommateurs, ce qui annulerait le `memo` ci-dessus — et c'est
+  // lui qui rend la frappe au clavier tenable sur une longue transcription.
+  const valeur = useMemo(() => (onFileRef ? { ouvrir: onFileRef, cwd } : null), [onFileRef, cwd]);
   return (
-    <FileRefContext.Provider value={onFileRef ?? null}>
+    <FileRefContext.Provider value={valeur}>
       <div className="md">
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
           {content}

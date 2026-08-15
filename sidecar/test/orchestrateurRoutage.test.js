@@ -15,7 +15,13 @@ import path from "node:path";
 import http from "node:http";
 import { promises as fsp } from "node:fs";
 import os from "node:os";
-import { lancer, assert, entry, fail, fakeClaudeModule } from "./harness.mjs";
+import { lancer, assert, entry, fail, fakeClaudeModule, moduleCompile } from "./harness.mjs";
+
+// Le modèle du palier n'est PAS recopié ici : le test vérifie que le tier
+// « moyen » route vers le défaut du tier « moyen », pas que ce défaut vaut tel
+// modèle. Recopier la valeur en ferait une cinquième déclaration à maintenir
+// (T-047), et le test tomberait à chaque changement de catalogue.
+const { DEFAULT_ROUTING_TABLE } = await import(moduleCompile("router.js"));
 
 /**
  * R2 — spec §5.4 (révisée 2026-07-31 : routage au DÉMARRAGE de chaque étape,
@@ -225,7 +231,7 @@ async function testOrchRunRouterAuto() {
 
     // step_started : chaque étape porte sa cible résolue au démarrage —
     // s1 (« Salut », trivial) -> neutre/petit-local ; s2 (édition + code,
-    // score 5 = moyen) -> claude/claude-opus-4-8 (défaut du tier moyen).
+    // score 5 = moyen) -> le défaut du tier moyen (voir DEFAULT_ROUTING_TABLE).
     const stepStartedS1 = await waitFor6(
       (e) => e.id === runId && e.event === "chunk" && e.data.kind === "step_started" && e.data.stepId === "s1",
       3000,
@@ -244,7 +250,7 @@ async function testOrchRunRouterAuto() {
     );
     assert(
       stepStartedS2.data.engine === "claude" &&
-        stepStartedS2.data.model === "claude-opus-4-8" &&
+        stepStartedS2.data.model === DEFAULT_ROUTING_TABLE.moyen.model &&
         stepStartedS2.data.routeTier === "moyen",
       `step_started s2 : cible claude routée (tier moyen) attendue, reçu ${JSON.stringify(stepStartedS2.data)}`,
     );

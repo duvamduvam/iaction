@@ -9,6 +9,107 @@ versions selon [SemVer](https://semver.org/lang/fr/).
 > Les entrées commencent à la 0.3.0 ; les versions antérieures ne sont pas
 > reconstituées après coup.
 
+## [0.4.0] — 2026-08-15
+
+### Ajouté
+
+- **Encart « Réseau » (Configuration).** Derrière un proxy d'entreprise, il n'y
+  avait aucun endroit où saisir une adresse : sous Windows les variables vivent
+  souvent dans le profil du terminal et pas dans la session graphique, et il
+  fallait passer par `setx`. Proxy, hôtes en direct, autorité de certification
+  et magasin du système se règlent maintenant dans l'application. Le fichier de
+  configuration automatique (PAC) n'est toujours **pas** lu, et l'encart le dit
+  (T-045).
+
+### Corrigé
+
+- **Un chemin cité dans une réponse ne ment plus.** Un `~/Téléchargements/x.pdf`
+  devenait un bouton dont le clic répondait « introuvable dans le projet » à
+  propos d'un fichier qui existe. Il est désormais nommé « hors du projet », et
+  ce qui ne peut pas s'ouvrir ne se déguise plus en bouton (T-024).
+- **Un rapport HTML s'ouvre dans le navigateur déclaré**, local ou distant : le
+  registre d'applications, que seul l'arbre de fichiers consultait, vaut aussi
+  pour les références citées dans une transcription (T-049).
+- **Le journal cesse de crier au loup.** La sonde `ollama.ps` interroge le
+  fournisseur sélectionné toutes les dix secondes : son échec est une réponse,
+  pas une panne, et il produisait 140 lignes `error` en onze jours, avec deux
+  kilo-octets de HTML chacune. Une page web reçue au lieu d'une API est
+  résumée, et l'erreur nomme enfin le fournisseur concerné (T-007).
+- **Plus d'erreur d'usage au démarrage** : l'encart de consommation attend que
+  la table des fournisseurs ait atteint le moteur avant de l'interroger
+  (T-008).
+- **Les questions interactives sont de nouveau proposées au modèle.** L'outil
+  n'était documenté que par une fiche qu'il fallait chercher pour lire ; il est
+  annoncé par l'instruction système, qui part à chaque tour. Le journal dit
+  désormais si l'outil figure dans la palette, ce qu'aucune ligne ne permettait
+  de savoir (T-019).
+- **Les agents `*-with-search` ne sont plus proposés quand la recherche web est
+  active** : la recherche était faite deux fois, et la seconde échouait un tour
+  sur cinq (T-025).
+- **Le runner serveur ne vole plus le verrou d'un détenteur vivant** hors Linux
+  (T-053), et un verrou orphelin ne gèle plus toutes les synchros (T-050).
+- **L'empaquetage local ne ressuscite plus les fichiers supprimés** : la mise en
+  scène de la construction précédente est purgée (T-041).
+
+### Interne
+
+- **Profils de fournisseur** : la gratuité et le chemin de la jauge de solde
+  sont déclarés (`billing`, `creditsPath`) au lieu d'être devinés sur le nom du
+  fournisseur. `usage.openrouter` devient `usage.credits` — l'ancien nom reste
+  accepté (T-023).
+- La dépense de la période distingue « aucun coût reçu » (il y a une
+  comptabilité à cocher) de « fournisseur qui n'en remonte jamais » (rien à
+  chercher) : Swiftask est dans le second cas, et la recherche web n'a rien à
+  facturer (T-036).
+- La suite de tests n'écrit plus dans le vrai dossier de données du poste
+  (T-051).
+- **Les tours de projet partaient avec un prompt système VIDE.** Le SDK agent
+  n'utilise pas le prompt de Claude Code quand on ne lui en donne pas — il en
+  envoie un vide — et une instruction d'agent le remplaçait au lieu de s'y
+  ajouter. Les tours outillés demandent désormais le preset explicitement, et
+  l'instruction de l'agent s'y ajoute. Le chat pur, sans outils, ne change pas
+  (T-052).
+- **Dépendances montées** : `ip-address`, `fast-uri`, `hono` et
+  `@hono/node-server` — les quatre paquets vulnérables qui partaient réellement
+  dans le produit. Les cinq alertes restantes concernent la pile de voix locale,
+  exclue du bundle, et `glib` dépend d'une montée de Tauri (T-012).
+- Extractions imposées par le cliquet de taille, toutes justifiées : navigation
+  au clavier (`focusZones.ts`), tableau des raccourcis (`raccourcisClavier.ts`),
+  références de fichiers (`refFichier.ts`), palette du tour (`paletteTour.ts`),
+  client Ollama, helpers SSE de test.
+
+## [0.3.3] — 2026-08-15
+
+### Corrigé
+
+- **Runner serveur : un verrou survivait à son détenteur et gelait toutes les
+  synchros.** `entrypoint.sh` se relance lui-même quand un manifeste change, ce
+  qui tue le run en cours sans vider `/tmp` : le verrou restait pris par un
+  processus mort et chaque synchro suivante était « reportée », indéfiniment.
+  Le détenteur est désormais vérifié vivant (`/proc/<pid>`) et le verrou repris
+  sinon, avec une ligne de journal en erreur. Prudence dans l'autre sens : fiche
+  absente ou illisible ⇒ détenteur réputé vivant (T-050).
+- **`claude-opus-5` manquait dans les sélecteurs de modèle.** L'abonnement
+  Claude n'expose pas de catalogue interrogeable, donc la liste est tenue à la
+  main — mais elle était recopiée dans trois fichiers, et personne n'a fait le
+  tour quand le modèle est sorti. Liste unique désormais, dont les trois
+  consommateurs dérivent, avec une note par modèle en infobulle (T-046).
+- **`claude-opus-4-8` retiré du sélecteur** : même tarif qu'Opus 5 pour une
+  génération de moins. Le palier `moyen` du routage automatique passe à
+  `claude-opus-5`. Un fil déjà épinglé sur 4.8 continue de tourner et affiche
+  son id — il ne peut simplement plus être resélectionné.
+
+### Interne
+
+- Garde-fou sur la table de routage par défaut, écrite à la fois dans le
+  sidecar et dans l'interface : `npm run routage` refuse tout écart entre les
+  deux, palier par palier (T-047).
+- **La suite de tests travaillait dans le vrai `~/.local/share`.** Le harnais
+  imposait un `XDG_CONFIG_HOME` jetable mais pas `XDG_DATA_HOME` : sur un shell
+  ordinaire, le sidecar de test visait le dossier de données réel, où il migre
+  au démarrage l'ancien nommage — une opération qui DÉPLACE. Un dossier jetable
+  est désormais imposé pour les deux (T-051).
+
 ## [0.3.2] — 2026-08-13
 
 ### Corrigé

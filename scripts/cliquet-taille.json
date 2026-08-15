@@ -1,21 +1,21 @@
 {
   "limite": 800,
   "derogations": {
-    "ui/src/ProvidersPage.tsx": 3207,
-    "ui/src/AgentPage.tsx": 2926,
-    "sidecar/test/protocol.test.js": 2670,
-    "ui/src/ChatPage.tsx": 2632,
+    "ui/src/ProvidersPage.tsx": 2996,
+    "ui/src/AgentPage.tsx": 2896,
+    "ui/src/ChatPage.tsx": 2631,
+    "sidecar/test/protocol.test.js": 2619,
     "sidecar/src/orchestrator.ts": 1802,
-    "sidecar/src/claude.ts": 1489,
+    "sidecar/src/claude.ts": 1483,
     "sidecar/src/neutralAgent.ts": 1320,
-    "ui/src/App.tsx": 1262,
-    "ui/src/sidecar.ts": 1237,
+    "ui/src/sidecar.ts": 1204,
     "ui/src/SystemPage.tsx": 1157,
     "sidecar/src/speech.ts": 1130,
+    "ui/src/App.tsx": 1022,
     "ui/src/voiceConversation.ts": 985,
     "ui/src/useVoiceComposer.ts": 894,
-    "sidecar/src/engine.ts": 840,
+    "sidecar/src/engine.ts": 836,
     "ui/src/speechAdmin.ts": 828,
-    "sidecar/src/knowledge.ts": 806
+    "sidecar/src/knowledge.ts": 805
   }
 }

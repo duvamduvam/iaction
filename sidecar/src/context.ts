@@ -1,4 +1,4 @@
-import { isNonEmptyString, isPlainObject } from "./base.js";
+import { isNonEmptyString, isPlainObject, readBoundedBody } from "./base.js";
 /**
  * Économie de contexte — Lot 14, phase R4 (docs/spec-r4-contexte.md).
  *
@@ -19,7 +19,6 @@ import {
   buildHeaders,
   getProvider,
   joinUrl,
-  readBoundedBody,
   type ChatMessage,
   type EngineEmitter,
 } from "./engine.js";

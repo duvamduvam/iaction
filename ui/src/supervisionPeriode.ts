@@ -158,3 +158,32 @@ export function formatPeriodLabel(bucket: UsageBucketKind, periode: Periode): st
   const jour = (x: Date) => x.toLocaleDateString("fr-FR", { day: "2-digit", month: "short" });
   return `S${isoWeekInfo(d).week} · ${jour(d)} — ${jour(fin)} ${fin.getFullYear()}`;
 }
+
+/**
+ * Sous-titre de la carte « Dépense de la période » (T-035, précisé par T-036).
+ *
+ * ── Pourquoi deux compteurs et pas un ───────────────────────────────────
+ * Un total qui ne compte pas tout est un minorant, et le dire vaut mieux que
+ * de laisser lire un total faux — c'était T-035. Mais « on ne sait pas » et
+ * « il n'y a rien à savoir » ne demandent pas la même chose au lecteur :
+ *
+ * - `inconnus` : le fournisseur POURRAIT remonter un coût et ne l'a pas fait.
+ *   Il y a une comptabilité d'usage à cocher — c'est actionnable.
+ * - `nonRemontes` : le fournisseur ne remonte jamais de coût, par construction
+ *   (`usage.cost` est une extension OpenRouter). Aucun réglage n'y changera
+ *   rien, et l'utilisateur n'a rien à chercher.
+ *
+ * Les confondre, c'était envoyer chercher un réglage qui n'existe pas.
+ */
+export function libelleDepense(inconnus: number, nonRemontes: number): string {
+  const parts: string[] = [];
+  if (inconnus > 0) {
+    parts.push(`${inconnus} tour${inconnus > 1 ? "s" : ""} sans coût remonté`);
+  }
+  if (nonRemontes > 0) {
+    parts.push(
+      `${nonRemontes} tour${nonRemontes > 1 ? "s" : ""} chez un fournisseur qui n'en remonte jamais`,
+    );
+  }
+  return parts.length > 0 ? `au moins — ${parts.join(", ")}` : "tout le payant, débord et choix manuel";
+}

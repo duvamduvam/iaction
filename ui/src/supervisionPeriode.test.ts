@@ -6,7 +6,7 @@
  * sans dériver, et la tendance s'achève sur la période affichée.
  */
 import { describe, expect, it } from "vitest";
-import { periodRange, shiftAnchor, superRange, trendRange } from "./supervisionPeriode";
+import { libelleDepense, periodRange, shiftAnchor, superRange, trendRange } from "./supervisionPeriode";
 
 const TODAY = "2026-08-13"; // jeudi, semaine ISO 33
 
@@ -109,5 +109,34 @@ describe("trendRange", () => {
       expect(t.from <= p.from).toBe(true);
       expect(t.to >= p.from).toBe(true);
     }
+  });
+});
+
+/*
+ * T-036 — « on ne sait pas » et « il n'y a rien à savoir » ne se disent pas
+ * pareil. Le premier envoie cocher une comptabilité d'usage ; le second
+ * n'appelle aucune action, parce que `usage.cost` est une extension OpenRouter
+ * que le fournisseur n'implémente pas. Les confondre, c'était envoyer chercher
+ * un réglage qui n'existe pas.
+ */
+describe("sous-titre de la dépense de la période", () => {
+  it("dit le total quand tout est compté", () => {
+    expect(libelleDepense(0, 0)).toBe("tout le payant, débord et choix manuel");
+  });
+
+  it("réclame une action quand le coût POURRAIT être remonté", () => {
+    expect(libelleDepense(3, 0)).toBe("au moins — 3 tours sans coût remonté");
+    expect(libelleDepense(1, 0)).toBe("au moins — 1 tour sans coût remonté");
+  });
+
+  it("n'en réclame aucune quand le fournisseur est structurellement muet", () => {
+    expect(libelleDepense(0, 7)).toBe("au moins — 7 tours chez un fournisseur qui n'en remonte jamais");
+  });
+
+  it("distingue les deux quand les deux existent", () => {
+    const t = libelleDepense(2, 7);
+    expect(t).toContain("2 tours sans coût remonté");
+    expect(t).toContain("7 tours chez un fournisseur qui n'en remonte jamais");
+    expect(t.startsWith("au moins —")).toBe(true);
   });
 });

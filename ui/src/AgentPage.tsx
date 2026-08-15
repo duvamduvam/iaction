@@ -82,7 +82,8 @@ import {
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { readApps, type AppEntry } from "./appsAdmin";
+import { openExternal, readApps, type AppEntry } from "./appsAdmin";
+import { ouvrirReference } from "./refFichier";
 import {
   AttachmentPickerButton,
   AttachmentTray,
@@ -2076,55 +2077,23 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   releaseBackgroundImpl.current = () => void handleReleaseBackground();
   const stableReleaseBackground = useCallback(() => releaseBackgroundImpl.current(), []);
 
+  /*
+   * Clic sur une référence citée dans la transcription. Toute la décision vit
+   * dans refFichier.ts (T-024/T-049) : classement du chemin, registre
+   * d'applications, repli sur la recherche par nom. Ici, l'adaptation au monde
+   * réel — le disque, l'éditeur, l'encart d'avis.
+   */
   async function handleFileRef(ref: string) {
     if (!cwd) return;
-    setOpenFilesNotice(null);
-
-    if (ref.startsWith("/")) {
-      if (ref === cwd || ref.startsWith(`${cwd}/`)) {
-        handleOpenFile(ref, ref.slice(ref.lastIndexOf("/") + 1) || ref);
-      } else {
-        setOpenFilesNotice(`Fichier hors du projet : ${ref}`);
-      }
-      return;
-    }
-
-    const baseName = ref.includes("/") ? ref.slice(ref.lastIndexOf("/") + 1) : ref;
-
-    if (ref.includes("/")) {
-      const candidate = `${cwd}/${ref}`;
-      try {
-        await fsReadFile(candidate);
-        handleOpenFile(candidate, baseName || ref);
-        return;
-      } catch {
-        // Échec de lecture (chemin inexistant depuis la racine du projet) :
-        // repli sur la recherche par nom de base, ci-dessous.
-      }
-    }
-
-    if (!baseName) {
-      setOpenFilesNotice(`« ${ref} » introuvable dans le projet.`);
-      return;
-    }
-
-    try {
-      const matches = await fsFindByName(cwd, baseName);
-      if (matches.length === 0) {
-        setOpenFilesNotice(`« ${ref} » introuvable dans le projet.`);
-        return;
-      }
-      const [first, ...rest] = matches;
-      handleOpenFile(first, first.slice(first.lastIndexOf("/") + 1));
-      if (rest.length > 0) {
-        setOpenFilesNotice(
-          `${rest.length} autre${rest.length > 1 ? "s" : ""} correspondance${rest.length > 1 ? "s" : ""} pour « ${ref} ».`,
-        );
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setOpenFilesNotice(`Recherche impossible pour « ${ref} » : ${message}`);
-    }
+    await ouvrirReference(ref, {
+      cwd,
+      apps,
+      lireFichier: fsReadFile,
+      chercherParNom: fsFindByName,
+      ouvrirDansEditeur: handleOpenFile,
+      ouvrirDansApp: openExternal,
+      avis: setOpenFilesNotice,
+    });
   }
 
   function handleCloseTab(path: string, e: ReactMouseEvent) {
@@ -2585,6 +2554,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                       key={turn.id}
                       turn={turn}
                       onFileRef={stableFileRef}
+                      cwd={cwd}
                       onReleaseBackground={stableReleaseBackground}
                     />
                   ))}

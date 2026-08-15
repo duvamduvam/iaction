@@ -34,45 +34,12 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 
 | ID    | Type | Prio | Statut | Titre |
 |-------|------|------|--------|-------|
-| T-007 | bug  | P2   | ouvert | `ollama.ps` répond 404 avec une page web : l'hôte configuré n'est pas un serveur Ollama |
-| T-008 | bug  | P3   | ouvert | `usage.openrouter` au démarrage : « fournisseur inconnu » avant la poussée des providers |
 | T-009 | tech | P3   | ouvert | Dev : fenêtre ouverte avant que vite soit chaud → page à moitié chargée, IPC muet |
-| T-012 | tech | P1   | ouvert | 24 alertes Dependabot : quatre paquets npm livrés + une dépendance Rust |
 | T-015 | bug  | P1   | ouvert | Un tour Claude peut mourir sans laisser AUCUNE trace dans le journal |
-| T-019 | bug  | P1   | ouvert | Les questions interactives ne sont plus sollicitées par le modèle |
-| T-023 | tech | P2   | ouvert | La plomberie spécifique à un fournisseur est éparpillée sur 15 sites et 4 méthodes du protocole |
-| T-024 | bug  | P3   | ouvert | Un chemin hors projet cliqué dans une transcription annonce « introuvable » alors qu'il existe |
-| T-025 | bug  | P2   | ouvert | Un échec du fournisseur peut arriver comme une réponse réussie, indétectable par le protocole |
 | T-026 | feat | P3   | ouvert | Recherche web : sur une question d'actualité, le moteur rend des pages de rubrique, pas des articles |
 | T-029 | tech | P2   | en cours | Démarrage long : aucun budget mesuré entre le lancement et la première image |
 | T-030 | bug  | P1   | ouvert | La fenêtre gèle au démarrage quand le process WebKit meurt, sans une ligne de journal |
-| T-036 | bug  | P3   | ouvert | Recherche web et tours Swiftask ne remontent aucun coût : la dépense affichée est un minorant |
-| T-045 | tech | P2   | ouvert | Aucune traversée de proxy documentée : l'app est inutilisable en réseau d'entreprise sans le drapeau |
-| T-041 | tech | P3   | ouvert | Empaquetage local : `target/release/sidecar/` garde les fichiers disparus de la source et les reverse dans l'AppDir |
-
-### T-007 — `ollama.ps` répond 404 avec une page web
-
-24 occurrences dans le journal du seul 2026-08-08 : la requête `ollama.ps`
-reçoit un **404 HTML d'une plateforme d'hébergement web** (page Vercel), pas
-une réponse Ollama. L'hôte configuré pour ce fournisseur pointe donc vers un
-site web, pas vers un serveur Ollama (URL de tunnel expirée ? mauvaise
-adresse enregistrée ?) — à distinguer du cas connu « fetch failed »
-(conteneur Docker arrêté). Deux choses à corriger :
-
-- diagnostiquer/corriger l'adresse enregistrée du fournisseur concerné ;
-- côté journal, TRONQUER le corps HTML et dire la cause probable
-  (« la réponse n'est pas un serveur Ollama ») — aujourd'hui chaque
-  occurrence colle une page HTML entière dans `app.jsonl`.
-
-### T-008 — `usage.openrouter` : « fournisseur inconnu » au démarrage
-
-4 occurrences le 2026-08-08, toutes dans les secondes qui suivent un
-lancement : l'encart d'usage interroge `usage.openrouter` AVANT que la
-poussée des fournisseurs (providersBus) n'ait atteint le sidecar, qui répond
-« fournisseur inconnu: openrouter ». Transitoire et auto-réparé, mais c'est
-une erreur journalisée à chaque démarrage pour une simple course. Piste :
-l'encart attend le signal « providers poussés » avant sa première requête —
-ou le sidecar distingue « pas encore déclaré » (silencieux) d'« inconnu ».
+| T-048 | bug  | P2   | ouvert | Coller une capture fige le composeur ~5 s : ni vignette, ni frappe prise en compte pendant la lecture du presse-papier |
 
 ### T-009 — Dev : fenêtre ouverte avant que vite soit chaud
 
@@ -85,79 +52,6 @@ message d'erreur. Un simple rechargement du webview répare. Pistes (dev
 uniquement) : garde-fou au boot de l'UI — si les invocations de démarrage
 n'ont pas répondu après quelques secondes, bandeau « recharger » (voire
 rechargement automatique une fois), plutôt qu'une page qui a l'air saine.
-
-### T-012 — 24 alertes Dependabot, dont cinq dépendances livrées
-
-> **Correction du 2026-08-09** (`gh` installé, alertes lues par l'API au lieu
-> d'être devinées) : la première rédaction de ce ticket concluait « une seule
-> dépendance vulnérable part réellement dans le produit ». **C'était faux** —
-> je n'avais dépouillé que les paquets cités par `npm audit` en tête de
-> sortie. Le décompte exact figure ci-dessous ; la conclusion rassurante ne
-> tenait qu'à un examen partiel. Leçon : ne pas conclure d'un échantillon
-> quand l'inventaire complet est interrogeable.
-
-**Décompte réel** (`gh api /repos/…/dependabot/alerts`, 24 ouvertes) :
-
-| Manifeste | Alertes | Livré ? |
-|---|---|---|
-| `package-lock.json` (racine) | 5 hautes, 8 moyennes, 1 basse | partiellement |
-| `src-tauri/Cargo.lock` | 1 moyenne (`glib`) | **oui** — la coquille Linux |
-| `tools/mcp-imap/package-lock.json` | 2 hautes, 6 moyennes, 1 basse | non (outil hors app) |
-
-**Ce qui part réellement chez l'utilisateur** — vérifié fichier par fichier
-dans `build/sidecar-bundle/node_modules` :
-
-- `ip-address` (1 haute + 2 moyennes, SSRF) — SDK Claude → SDK MCP → `express-rate-limit` ;
-- `fast-uri` (2 hautes) — SDK Claude → SDK MCP → `ajv` ;
-- `hono` (3 moyennes + 1 basse) et `@hono/node-server` (1 moyenne) — même chaîne ;
-- `glib` (1 moyenne) — dépendance Rust de la coquille, donc du binaire lui-même.
-
-**Ce qui ne part pas** : `sharp`, `tar`, `adm-zip` (pile de voix locale, EXCLUE
-du bundle — `scripts/preparer-bundle.sh`), `postcss` (vite, construction
-seule), et tout `tools/mcp-imap` (outil MCP de courriel, hors application).
-
-La plupart des paquets livrés sont **transitifs sous le SDK Claude** : la
-correction dépend de la montée du SDK, pas d'un `npm audit fix` local. À
-qualifier au cas par cas, et à ne pas forcer par des `overrides` qui
-désaligneraient le SDK de ce qu'il a testé.
-
-Constaté le 2026-08-09 en publiant l'instantané : GitHub annonce « 23
-vulnerabilities (7 high, 14 moderate, 2 low) » sur la branche par défaut.
-Dépouillement local (`npm audit`, `npm ls`) — le chiffre brut est trompeur,
-trois familles très inégales :
-
-- **`sharp`, `tar` (7 hautes)** — tirées par `@huggingface/transformers` et
-  `kokoro-js`, c'est-à-dire la pile de **voix locale**, explicitement EXCLUE
-  du bundle livré (`EXCLUES` dans `scripts/preparer-bundle.sh`, voir
-  `docs/empaquetage.md` §2). Vérifié : `build/sidecar-bundle/node_modules` ne
-  les contient pas. Elles ne concernent que le poste de développement — et
-  l'utilisateur qui installe la voix locale à la main.
-- **`nanoid`, `postcss`** — dépendances de `vite`, donc outil de construction
-  seulement, absentes du produit.
-- **`ip-address` (3 avis SSRF, modérés)** — la SEULE présente dans le bundle
-  livré. Chaîne : `@anthropic-ai/claude-agent-sdk` →
-  `@modelcontextprotocol/sdk` → `express-rate-limit` → `ip-address@10.2.0`.
-  Exploitabilité à qualifier : ce limiteur ne sert que si un serveur MCP HTTP
-  écoute, ce qui n'est pas le mode nominal — mais la correction est triviale.
-
-**Second manifeste, découvert dans la foulée** : `tools/mcp-imap` a son propre
-`package-lock.json` (outil MCP de courriel, hors bundle de l'application).
-Dependabot y avait déjà ouvert **quatre PR** — `ip-address` 10.4.0, `fast-uri`,
-`hono`, `@hono/node-server` + SDK MCP. Elles sont à **fermer**, pas à
-fusionner : l'instantané remplace l'arbre entier, donc une PR fusionnée sur
-`main` serait silencieusement annulée à la publication suivante (voir
-`docs/github.md` §4). Les mêmes montées se font ici.
-
-À faire, **application fermée** (`npm install` perturbe le vite en cours) :
-`npm audit fix` à la racine (monte `ip-address`, 10.4.0 satisfait le `^10.2.0`
-demandé) **et** dans `tools/mcp-imap`, puis `npm run verif` et instantané. Les
-autres attendent leurs amonts ; ne pas forcer de résolution sur une pile qu'on
-ne livre pas.
-
-Décision de fond consignée : les **PR automatiques de Dependabot restent
-désactivées** (elles modifieraient le dépôt public, qui n'est pas la source de
-vérité) — les alertes seules sont voulues, et ce ticket est la façon dont
-elles entrent dans le backlog. Voir `docs/github.md` §4.
 
 ### T-015 — Un tour Claude peut mourir sans aucune trace dans le journal
 
@@ -218,245 +112,13 @@ qu'une attente infinie.
 Reste ouvert : la CAUSE du non-lancement du CLI. Les garde-fous ci-dessus la
 rendront visible à la prochaine occurrence — c'est tout leur objet.
 
-### T-019 — Les questions interactives ne sont plus sollicitées
-
-Constaté le 2026-08-09 à 12h58 : l'agent écrit lui-même « vu que les questions
-interactives ne passent pas ici, questionnaire texte » et pose ses questions en
-prose. Dernier appel RÉUSSI à `mcp__studio__ask_user` : **2026-08-07 12:48**.
-Depuis, plus un seul appel dans `app.jsonl` — pas même en échec. L'outil n'est
-donc pas cassé : il n'est plus SOLLICITÉ.
-
-> **Correction de la première rédaction (même jour).** J'avais conclu que la
-> cause était l'absence de migration du projet vers `.iaction/`, en me fiant au
-> commentaire d'en-tête de `projectDoc.ts` (« uniquement si `.iaction/`
-> existe »). **C'était faux** : `projectDir()` (`sidecar/src/appPaths.ts`
-> 224-232) retombe sur `.iadadou/` quand `.iaction/` est absent, et la fiche
-> est bien déposée. Elle datait du 2026-08-07 non par panne mais parce que le
-> dépôt est adressé par CONTENU — réécrit seulement quand le texte change.
-> Deuxième fois dans la même session que je conclus d'un examen partiel (voir
-> T-012) : lire le code, pas le commentaire qui le décrit.
-
-**Ce qui est établi** :
-
-- l'outil INTÉGRÉ `AskUserQuestion` est délibérément interdit
-  (`options.disallowedTools`, `sidecar/src/claude.ts` ~672) — or c'est le seul
-  nom que le modèle connaît nativement ;
-- son remplaçant `mcp__studio__ask_user` n'est armé que si le tour porte
-  `interactive: true` ; la page Projets l'envoie sans condition
-  (`ui/src/envoiProjet.ts:231`) ;
-- `buildAskUserMcpServer` journalise un `warn` s'il échoue : aucun dans le
-  journal, donc le serveur se construit ;
-- l'outil n'est documenté au modèle que par la fiche `connaissances/iaction.md`
-  — une SOURCE DE RAG, qu'il faut chercher pour lire, pas une instruction
-  système qui part à chaque tour.
-
-**Ce qui reste inconnu** : si `mcp__studio__ask_user` figure réellement dans la
-palette annoncée au modèle. La ligne `serveurs MCP du tour` compte serveurs et
-outils (`connectes:5, outils:39`) mais **ne les nomme pas** : impossible de
-trancher a posteriori. C'est le premier correctif — journaliser les noms, ou au
-moins la présence du serveur `studio`. Sans cela le ticket ne peut se fermer
-que par supposition.
-
-Ensuite, selon la réponse : faire connaître l'outil par l'INSTRUCTION SYSTÈME
-du tour (qui part toujours) plutôt que par une fiche qu'il faut chercher —
-plus robuste que le RAG pour une capacité aussi structurante.
-
-### T-023 — Isoler la plomberie spécifique à un fournisseur
-
-Constat de structure, posé le 2026-08-10 en cherchant où brancher T-021.
-L'hypothèse fondatrice du moteur neutre — « un fournisseur, c'est une `baseUrl`
-compatible OpenAI et une clé » — a déjà cédé **quinze fois**, sans qu'aucun
-endroit ne le déclare :
-
-| Où | Spécificité codée en dur |
-|---|---|
-| [engine.ts](../sidecar/src/engine.ts) ~735-830 | `ollamaNativeBase()` + API native `/api/ps`, `/api/generate` |
-| [engine.ts](../sidecar/src/engine.ts) ~651-680 | `GET /credits` — solde, propre à OpenRouter |
-| [engine.ts](../sidecar/src/engine.ts) ~467-475 | corps R0 : `models`, `provider.sort`, `usage.include` |
-| [usageStats.ts](../sidecar/src/usageStats.ts) ~51 | « ce fournisseur est-il gratuit ? » deviné par `id.includes("ollama")` |
-| [debord.ts](../sidecar/src/debord.ts) ~34 | cible de débord `openrouter · deepseek-chat` |
-| [router.ts](../sidecar/src/router.ts) ~90, ~103 | classificateur et embeddings sur `ollama` |
-| [routerAdmin.ts](../ui/src/routerAdmin.ts) ~55-65 | les mêmes valeurs, redéclarées côté interface |
-| [App.tsx](../ui/src/App.tsx) ~304 | `usageOpenrouter("openrouter")` — id littéral |
-| [providerAdmin.ts](../ui/src/providerAdmin.ts) ~30-44 | en-têtes `HTTP-Referer` / `X-Title` d'OpenRouter |
-| [ProvidersPage.tsx](../ui/src/ProvidersPage.tsx) ~85, ~1993-2014 | `OPENROUTER_PROVIDER_ID`, préréglages `openrouter`/`groq` |
-| [protocol.md](protocol.md) | **4 méthodes portent un nom de fournisseur** : `usage.openrouter`, `ollama.ps`, `ollama.load`, `ollama.unload` |
-
-La ligne la plus parlante est `usageStats.ts` : la gratuité d'un fournisseur y
-est **devinée par sous-chaîne de son identifiant**. Un fournisseur local nommé
-autrement est facturé à tort ; un fournisseur payant contenant « local » est
-compté gratuit. C'est le symptôme, pas la cause : faute d'endroit où déclarer
-un trait, chaque besoin s'est résolu par un `if` là où il tombait.
-
-**Direction proposée — spec R8, « profils de fournisseur ».** La spécificité
-devient une **donnée portée par le fournisseur**, pas une branche de code,
-selon la discipline déjà écrite en R0 (*champ absent → comportement
-d'aujourd'hui, à l'octet près*) :
-
-```ts
-interface ProviderTraits {
-  catalogUrl?: string;              // T-021 — remplace GET {baseUrl}/models
-  catalogShape?: "openai" | "slugs";// {data:[{id}]} vs [{slug,name}]
-  creditsPath?: string;             // "credits" — absent : pas de jauge de solde
-  nativeApi?: "ollama";             // ps / load / unload
-  usageTrustworthy?: boolean;       // T-022 — false : les zéros valent null
-  billing?: "free" | "paid";        // remplace la devinette sur l'id
-  bodyExtras?: Record<string, unknown>; // ex. {stateless: true} chez Swiftask
-  noReasoningEffort?: boolean;      // passerelle qui rejette le champ en 400
-}
-```
-
-Les deux derniers champs sortent de l'observation du client officiel de
-Swiftask le 2026-08-10 : il envoie `stateless: true` (champ non standard) et a
-**désactivé `reasoning_effort` en commentaire** — « HTTP 400 reasoning_effort
-is not allowed ». Deux quirks qu'aucun `if (providerId === …)` ne doit porter,
-et la démonstration que la liste des traits ne se devine pas à l'avance : elle
-doit être *ouverte*, d'où `bodyExtras` en dictionnaire libre plutôt qu'un
-énième booléen nommé.
-
-Le champ voyage comme les trois réglages R0 : config non-secrète →
-`pushProviders` → `providers.set` → `Provider` du sidecar. **Le sidecar ne
-porte donc aucune table de fournisseurs** — il lit ce qu'on lui pousse, et
-reste ignorant des marques. La table des profils connus (Swiftask, OpenRouter,
-Ollama, « OpenAI strict ») vit côté interface, à côté de `DEFAULT_PROVIDERS`,
-comme simple **aide de saisie** du formulaire — même patron que les
-préréglages STT/TTS déjà en place. Une seule déclaration a un consommateur à
-l'exécution : pas de cinquième vérité à faire diverger (cf. 0.3.0).
-
-Périmètre et coût estimés — à découper en deux, la première moitié seule
-débloque Swiftask :
-
-- **R8-A (¼ lot)** : `catalogUrl` + `catalogShape` + `usageTrustworthy`, le
-  profil traversant les couches, préréglage Swiftask, tests de protocole.
-  Ferme T-021 et T-022.
-- **R8-B (¼ lot)** : `creditsPath` et `billing` — c'est-à-dire dé-nommer
-  `usage.openrouter` et retirer la devinette d'`usageStats`. Touche le
-  protocole, donc à faire seul et documenté.
-
-Restent volontairement hors périmètre : `nativeApi` (le code Ollama existant
-marche et ne gêne personne tant qu'il n'y a qu'un cas) et la cible de débord de
-`debord.ts`, qui relève de R3.
-
-### T-024 — Un chemin hors projet annonce « introuvable » alors qu'il existe
-
-**Type** bug · **Prio** P3 · **Statut** ouvert · **Créé** 2026-08-10
-
-Constaté le 2026-08-10 : un tour a rempli un PDF déposé dans `~/Téléchargements` et l'a cité
-dans sa réponse. Le chemin, rendu en `code` inline, devient un bouton cliquable
-([Markdown.tsx](../ui/src/Markdown.tsx) `looksLikeFileRef`) — mais `handleFileRef`
-([AgentPage.tsx](../ui/src/AgentPage.tsx)) n'ouvre que ce qui est sous `cwd` : une référence
-commençant par `~` n'est ni absolue (pas de `/` initial) ni résoluble depuis la racine, donc
-elle tombe dans la recherche par nom de base et se solde par
-« « ~/Téléchargements/… » introuvable dans le projet. »
-
-Deux défauts distincts, aucun bloquant :
-
-1. **Message trompeur** — le fichier existe, il est simplement hors projet. Un `~/…` mérite la
-   même notice que le cas absolu (« Fichier hors du projet : … »), pas un « introuvable » qui
-   laisse croire à une erreur de l'agent. Détecter le préfixe `~/` avant la branche
-   « contient un `/` » suffit.
-2. **Lien promis pour rien** — tout `code` inline ressemblant à un chemin devient un bouton,
-   y compris quand rien ne pourra s'ouvrir. Piste : n'habiller en bouton que ce qui est
-   plausiblement dans le projet (rejeter `~/` et les absolus hors `cwd` côté rendu), pour que
-   l'affordance ne mente pas.
-
-Le versant agent est traité : le guide d'intégration déposé dans chaque projet
-([projectDoc.ts](../sidecar/src/projectDoc.ts), § « Fichiers produits ou modifiés ») impose
-désormais d'écrire le livrable dans le projet, de copier avant d'éditer une source externe, et
-de ne jamais citer un chemin hors projet en `code` inline. Ce ticket ne couvre que le versant
-app : ne pas mentir sur ce qui est cliquable.
-
-### T-025 — Un échec du fournisseur arrive comme une réponse réussie
-
-Constaté le 2026-08-10, premier tour Swiftask réel dans le Chat (modèle
-`gemini-pro-with-search`). L'écran affiche, dans une bulle d'assistant
-normale : *« Sorry, An error occurred. If the problem persists, please contact
-us. »* — suivi de `0 + 0 tokens`. Aucun bandeau d'erreur, aucune entrée au
-journal : pour l'application, **ce tour a réussi**.
-
-Vu du protocole, en effet, rien ne le distingue d'une réponse légitime :
-
-```
-HTTP 200 · finish_reason: "stop" · contenu = le texte d'erreur
-usage: {prompt_tokens: 0, completion_tokens: 0, total_tokens: 1}
-```
-
-Le fournisseur encode donc sa panne **dans le corps de la réponse**, pas dans
-son statut. Deux modèles sur les huit proposés par le sélecteur sont dans ce
-cas — `gemini-pro-with-search` (phrase d'erreur) et `llama31` (contenu
-littéralement `""`, encore plus muet) —, les six autres répondent
-correctement. Un quart du catalogue offert est mort, et l'app le présente
-comme vivant.
-
-**Ce qu'on ne peut pas faire** : détecter la phrase. Filtrer sur un texte
-anglais dans une réponse d'assistant condamnerait des réponses légitimes ; ce
-serait remplacer un faux positif par un faux négatif.
-
-**Ce qu'on peut faire**, par ordre de solidité :
-
-1. **Écarter les modèles morts du sélecteur** — c'est le vrai correctif, et il
-   rejoint T-021 : tant que le catalogue vient d'une liste figée non vérifiée,
-   il proposera des entrées non servies. Un « Rafraîchir les modèles » qui
-   VALIDE (un appel court par modèle, en tâche de fond, résultat mémorisé)
-   coûte peu et rend la liste honnête.
-2. **Signaler la consommation nulle** — une réponse non vide facturée
-   `0 + 0` est au minimum suspecte. Une fois T-022 en place (zéro → `null`),
-   l'affichage dirait « consommation inconnue », ce qui est déjà moins
-   trompeur que `0 + 0 tokens`.
-3. Le discriminant observé (`total_tokens: 1` sur les tours en échec contre
-   ~1200 sur les tours réussis) est **volontairement écarté** : c'est un
-   comportement non documenté d'un fournisseur, exactement le genre de
-   devinette que T-023 cherche à éliminer, pas à multiplier.
-
-Ce ticket ne dit pas que l'app est fautive : le défaut est chez le
-fournisseur. Il est ouvert parce qu'une panne invisible reste une panne
-invisible, quelle que soit son origine — et parce que le choix du modèle,
-lui, est bien de notre côté.
-
-**Mesure du 2026-08-11 — le modèle n'est PAS mort, il est INTERMITTENT.**
-Deux nouvelles occurrences constatées dans le Chat (mêmes conditions :
-`swiftask · gemini-pro-with-search`, recherche web R9 activée), dont un
-deuxième tour dans une conversation dont le premier avait parfaitement
-répondu. Rejeu direct sur l'API, hors application :
-
-| Envoi rejoué | Résultat |
-|---|---|
-| 10 requêtes **identiques**, message unique, `gemini-pro-with-search` | **1 échec / 10** |
-| 10 requêtes identiques, `gemini-3-pro` (modèle brut) | 0 échec / 10 |
-| 6 formes de conversation (avec/sans historique, avec/sans bloc web) | échec sur une forme, réussite au rejeu de la même |
-
-L'échec ne dépend donc **ni de l'historique, ni du bloc système injecté par
-R9, ni de la taille du corps** : à requête strictement identique, la même
-question réussit ou échoue. C'est une panne aléatoire de l'agent Swiftask
-`*-with-search` (~10 %), pas un slug non servi.
-
-Balayage des **8 slugs effectivement proposés** par le sélecteur, 6 requêtes
-identiques chacun, même jour :
-
-| Slug | Réponses exploitables |
-|---|---|
-| `deepseek-r1`, `swiftask`, `agentreact`, `mistralmedium`, `deepseek-v3`, `o3-mini` | 6/6 |
-| `gemini-pro-with-search` | **4/6** (2 fois la phrase d'erreur) |
-| `llama31` | 6/6 en apparence, mais **~2 caractères** de contenu — muet |
-
-Six des huit sont donc sains ; le catalogue offert n'est pas « mort au quart »,
-il porte un modèle muet et un modèle instable.
-
-Trois conséquences pour le plan ci-dessus :
-
-- La piste 1 (**valider les modèles par un appel court**) ne rattrape pas ce
-  cas : un modèle qui répond 9 fois sur 10 passera la validation, et
-  échouera quand même un tour sur dix. Elle reste bonne pour `llama31`
-  (mort franc), pas pour celui-ci.
-- La piste 2 (**consommation inconnue**, T-022) devient le seul signal
-  disponible côté app, et n'en est pas un : le tour échoué et le tour réussi
-  annoncent tous deux `0 + 0`.
-- Il reste donc un correctif non listé, et c'est le plus simple : **ne pas
-  proposer les agents `*-with-search` quand R9 est activée**. La recherche
-  est faite deux fois (une fois par nous, une fois par l'agent), et la
-  seconde est celle qui casse — voir la spec R9, §Pourquoi une capacité
-  locale. Un modèle brut (`gemini-3-pro`) rend le même service, avec nos
-  sources citées et sans cet aléa.
+**Statut arrêté le 2026-08-15 : EN ATTENTE DE CONSTAT, pas en attente de travail.** Tout ce
+qui pouvait être écrit sans revoir la panne l'a été le 2026-08-09 — journal d'erreur sur tout
+tour terminé anormalement, sur toute exception du flux, sur un flux qui se referme sans
+`result`, et plafond de silence au démarrage. Écrire davantage maintenant reviendrait à coder
+contre une hypothèse, puis à présenter l'absence de récidive comme une preuve. Ce ticket se
+fermera le jour où la panne reviendra **avec sa trace** — ou, si elle ne revient plus, par une
+décision de l'utilisateur, pas par un correctif de plus.
 
 ### T-026 — Recherche web : des pages de rubrique au lieu d'articles
 
@@ -489,6 +151,13 @@ Deux pistes, à ne pas confondre :
 
 Aucune des deux ne se décide sur un seul cas : à rouvrir quand plusieurs
 tours réels auront montré le même défaut, avec leurs requêtes.
+
+**Statut arrêté le 2026-08-15 : EN ATTENTE DE CONSTAT.** Un seul tour, une seule question. Les
+deux pistes coûtent cher au bon endroit — l'heuristique « cette question porte sur
+l'actualité » se trompe en silence sur les cas limites, la reformulation par LLM ajoute un
+appel et une latence à chaque recherche. Trancher aujourd'hui, ce serait choisir sur un
+échantillon de un ; c'est précisément l'erreur que T-012 et T-019 ont documentée dans ce même
+fichier. Le ticket attend d'autres tours réels, avec leurs requêtes.
 
 ### T-029 — Démarrage long, et pas un chiffre pour le dire
 
@@ -621,111 +290,56 @@ d'observabilité interdit — la coquille sait pourtant journaliser la mort du s
    sur le fournisseur PulseAudio. À confirmer par un relevé : la panne est
    intermittente, une absence de plantage sur quelques lancements ne prouvera rien.
 
-### T-034 — Le cliquet de taille est rouge sur `master`
+### T-048 — Coller une capture fige le composeur ~5 s
 
-**Type** tech · **Prio** P2 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-13
+**Type** bug · **Prio** P2 · **Statut** ouvert · **Créé** 2026-08-14
 
-Constaté le 2026-08-13 en lançant `npm run verif` avant de livrer T-033 :
-`node scripts/cliquet-taille.mjs` sort en **échec** sur `master` propre —
-[src-tauri/src/sidecar.rs](../src-tauri/src/sidecar.rs), 807 lignes, plafond 800. Le
-dépassement n'a rien à voir avec le ticket en cours (aucun `.rs` touché) : il est déjà là,
-poussé tel quel.
+Constat utilisateur du 2026-08-14 : « quand je colle une capture d'écran, ça prend 5 secondes
+avant d'être pris en compte ». Pendant ce délai, **rien** : pas de vignette, et la question
+tapée dans le composeur n'est pas prise en compte. Attendu : vignette et frappe immédiates,
+les octets arrivant ensuite.
 
-Ce n'est pas la taille du fichier qui est le vrai défaut, c'est qu'un garde-fou rouge en
-permanence **cesse d'être un garde-fou** : la commande de vérification échoue toujours, on
-prend l'habitude de lire au-delà, et le jour où le cliquet signale une vraie dérive personne
-ne le distingue du bruit. Même mécanique que l'échec muet, à l'envers.
+Ce qui rend le constat instructif, c'est que le repli natif a **déjà** été écrit pour ça. Le
+handler `onPaste` ([AgentPage.tsx](../ui/src/AgentPage.tsx) ~2727, idem
+[ChatPage.tsx](../ui/src/ChatPage.tsx)) crée une vignette « en chargement » de façon
+SYNCHRONE (`beginImage`, [Attachments.tsx](../ui/src/Attachments.tsx) ~246) avant d'appeler
+`readClipboardImage()`. Si la vignette n'apparaît pas, ce n'est donc pas qu'on l'affiche trop
+tard : **c'est que rien n'est peint du tout** pendant ces secondes — et le clavier muet dit la
+même chose. Le symptôme n'est pas « le collage est lent », c'est « l'interface est gelée ».
 
-À faire : découper `sidecar.rs` (la réponse attendue par le cliquet), ou consigner une
-dérogation explicite et datée dans `scripts/cliquet-taille.json` si la taille se justifie.
-Puis vérifier que `npm run verif` repasse au vert de bout en bout — c'est le seul état
-acceptable pour la commande qui garde la porte.
+**Hypothèse principale, à MESURER avant de corriger** : `clipboard_read_image`
+([clipboard.rs](../src-tauri/src/clipboard.rs) 29-42) est une commande Tauri **synchrone**
+(`pub fn`, pas `async fn`). Sous Tauri 2, une commande synchrone s'exécute sur le fil
+principal — celui qui porte la boucle GTK, donc l'affichage et les événements de la webview.
+Tant qu'`arboard` négocie avec le propriétaire du presse-papier (X11/Wayland : le processus
+qui a fait la capture doit répondre) puis qu'on encode le PNG, la boucle ne rend pas la main.
+Le soin déjà pris côté performance (compression `Fast`, renvoi binaire plutôt que base64) ne
+change rien à ça : ce n'est pas la durée qui gêne, c'est *où* elle est passée.
 
-**Dérogation posée le 2026-08-13** — `"src-tauri/src/sidecar.rs": 807` dans
-`scripts/cliquet-taille.json`, pour livrer la 0.3.1 sur une chaîne verte. Le fichier de
-référence est du JSON : il ne porte pas de commentaire, la date et le motif vivent donc ici.
-Ce n'était **pas** la clôture du ticket : la dérogation gèle la taille (le fichier ne peut
-plus que rétrécir) mais ne découpe rien.
+Suspect secondaire, côté interface : `resolveImage` relit ensuite les octets en **data URL
+base64** (`FileReader.readAsDataURL`, [Attachments.tsx](../ui/src/Attachments.tsx) ~279) —
+plusieurs Mo pour une capture plein écran, +33 % en base64, sur le fil de l'UI lui aussi.
 
-**Clos le 2026-08-13, par la bande.** En corrigeant [T-043](#t-043--tous-les-fournisseurs-en--erreur-réseau--sur-un-poste-dentreprise),
-le cliquet a refusé les 27 lignes que j'ajoutais à un fichier qui n'avait le droit que de
-maigrir. Plutôt que de relâcher son budget deux fois dans la même journée — ce qui aurait vidé
-le garde-fou de son sens — les deux modules de test sont sortis dans
-[src-tauri/src/sidecar/tests.rs](../src-tauri/src/sidecar/tests.rs) (`#[path]`, ils restent des
-tests unitaires du module). `sidecar.rs` passe de 807 à **794 lignes** : sous la limite, et
-donc HORS dérogation.
+**Mesure à faire avant tout correctif** (ne pas conclure d'une lecture de code, cf. T-012 et
+T-019) — quatre segments à horodater sur un collage réel :
 
-Honnêteté sur ce qu'on a fait : c'est la coupe la plus franche, pas la plus profonde. Aucune
-logique n'a été redécoupée — seulement les tests, qui ne tenaient au reste que par `super`. Le
-fichier reste dense, mais il n'a plus de traitement de faveur, et c'est ce que le cliquet
-demandait.
+1. événement `paste` → vignette « en chargement » réellement peinte ;
+2. `invoke` → retour de `clipboard_read_image` (et, dedans, `get_image()` vs `encode_png`) ;
+3. taille et dimensions du PNG produit ;
+4. `FileReader` → `dataUrl` posée, vignette pleine.
 
-### T-036 — Des tours payants ne remontent aucun coût
+Sans ces chiffres on ne sait pas si les 5 s sont la négociation du presse-papier, l'encodage
+PNG ou l'encodage base64 — trois correctifs différents.
 
-**Type** bug · **Prio** P3 · **Statut** ouvert · **Créé** 2026-08-13
+**Pistes, dans l'ordre où elles deviendront pertinentes** :
 
-Relevé en instruisant [T-035](#t-035--la-dépense-réelle-nétait-affichée-nulle-part), sur
-`usage/events.jsonl` du poste, mois d'août 2026 :
-
-| moteur / fournisseur | tours | `costUsd` cumulé |
-|---|---|---|
-| claude (abonnement)  | 546 | 0 (normal : coût nul) |
-| neutral / openrouter |  16 | 2,4327 $ |
-| neutral / ollama     |  11 | 0 (normal : local) |
-| neutral / swiftask   |   7 | **0, alors que le fournisseur est payant** |
-
-Les 7 tours Swiftask ne portent pas de `costUsd`. Depuis T-035 la carte « Dépense de la
-période » le signale (« au moins — N tours payants sans coût remonté ») plutôt que de laisser
-lire un total faux, mais le trou reste : on ne sait pas ce que ces tours ont coûté.
-
-À instruire : le fournisseur ne renvoie-t-il pas d'usage, ou bien l'option `usageAccounting`
-n'est-elle pas cochée sur son profil ? Même question pour la recherche web, dont les appels
-n'apparaissent pas du tout dans `events.jsonl`. Si le fournisseur est structurellement muet, le
-dire dans son profil vaut mieux que de compter zéro.
-
-### T-045 — La traversée de proxy n'est ni configurable, ni documentée
-
-**Type** tech · **Prio** P2 · **Statut** ouvert · **Créé** 2026-08-13
-
-[T-043](#t-043--tous-les-fournisseurs-en--erreur-réseau--sur-un-poste-dentreprise) a réparé le
-cas courant — un proxy déclaré dans l'environnement — d'une ligne. Il laisse trois trous, et
-les nommer vaut mieux que de croire le sujet clos :
-
-1. **Le PAC est ignoré.** Le poste concerné déclare aussi un `AutoConfigURL` dans le registre. `--use-env-proxy` ne lit que les variables ; un poste qui
-   n'aurait QUE le PAC resterait en panne, avec le même message pour l'utilisateur.
-2. **Aucun réglage dans l'application.** Si les variables ne sont pas posées pour la session
-   graphique — cas fréquent sous Windows, où elles vivent souvent dans le profil du terminal —
-   l'utilisateur n'a aucun endroit où saisir son proxy. Il faut passer par `setx`, ce qu'aucune
-   documentation ne dit.
-3. **Le certificat d'inspection TLS n'est pas traité.** Ce poste-ci coupe avant le handshake,
-   donc la question ne s'est pas posée. Le poste suivant, derrière un proxy MITM, tombera sur
-   `SELF_SIGNED_CERT_IN_CHAIN` — Node n'utilise pas le magasin de certificats de Windows.
-   Le remède existe (`--use-system-ca`, `NODE_EXTRA_CA_CERTS`), il n'est pas posé.
-
-À faire : un encart « Réseau » dans la configuration (proxy explicite, autorité
-supplémentaire), et une section dans `docs/empaquetage.md` sur l'usage en entreprise. Tant que
-ce n'est pas fait, l'application est **utilisable au bureau par accident**, pas par
-conception.
-
-### T-041 — L'empaquetage local ressuscite les fichiers supprimés
-
-**Type** tech · **Prio** P3 · **Statut** ouvert · **Créé** 2026-08-13
-
-Constaté en corrigeant [T-038](#t-038--lappimage-ne-se-construit-plus-et-léchec-est-muet) :
-Tauri met les ressources en scène dans `src-tauri/target/release/sidecar/` (puis
-`bundle/appimage_deb/…`) et **n'y supprime jamais ce qui a disparu de la source**. Le CLI
-Claude non compressé, retiré du bundle par le correctif, y dormait encore et se recopiait dans
-l'AppDir à chaque construction — faisant échouer un build que le correctif venait pourtant de
-réparer.
-
-Coût réel : trois constructions lues comme trois échecs différents alors que c'était le même
-fichier périmé. La CI n'est pas concernée (machine vierge à chaque run) ; c'est un piège de
-poste de développement, du même genre que T-020 — **du code qu'on croit exécuter et qui n'est
-pas celui qu'on a écrit**, ici transposé aux ressources.
-
-À faire : purger `target/release/sidecar` et `target/release/bundle` au début de
-`preparer-bundle.sh`, ou documenter la purge dans `docs/empaquetage.md`. La première option
-vaut mieux — une consigne qu'il faut se rappeler n'est pas un garde-fou.
+- passer la commande en `async fn` (ou déporter le corps dans `spawn_blocking`) pour rendre la
+  boucle GTK disponible : la vignette se peint et la frappe passe, même si la lecture prend
+  plusieurs secondes ;
+- afficher la vignette par `URL.createObjectURL(blob)` (instantané, aucune copie) et ne
+  produire le base64 qu'au moment de l'envoi, où il est réellement exigé par le contrat ;
+- si le poste reste lent après ça, dire l'attente (vignette « lecture du presse-papier… »)
+  plutôt que la laisser deviner.
 
 ### T-038 — L'AppImage ne se construit plus, et l'échec est muet
 
@@ -882,7 +496,24 @@ plus coûteuse.
 
 | ID    | Type | Prio | Statut | Titre |
 |-------|------|------|--------|-------|
+| T-052 | bug  | P2   | fait   | Les tours de projet partaient avec un prompt système VIDE : le preset Claude Code est demandé explicitement |
+| T-012 | tech | P1   | fait   | Dependabot : les quatre paquets réellement livrés sont montés, le reste ne part pas dans le produit |
+| T-045 | tech | P2   | fait   | Réseau d'entreprise : un encart pour saisir proxy et autorité, et le PAC dit non lu |
+| T-023 | tech | P2   | fait   | Profils de fournisseur : la gratuité et la jauge de solde sont déclarées, plus devinées |
+| T-036 | bug  | P3   | fait   | Swiftask est structurellement muet sur le coût, et la recherche web n'a rien à facturer |
+| T-053 | bug  | P2   | fait   | Le verrou du runner déclarait mort tout détenteur hors Linux : `/proc` sans repli, CI Windows rouge |
+| T-025 | bug  | P2   | fait   | Agents `*-with-search` : la recherche faite deux fois cassait un tour sur cinq, R9 les écarte |
+| T-019 | bug  | P1   | fait   | Les questions interactives n'étaient plus sollicitées : l'outil n'était annoncé que par une fiche de RAG |
+| T-008 | bug  | P3   | fait   | `usage.openrouter` au démarrage : une course avec la poussée des fournisseurs, journalisée en erreur |
+| T-007 | bug  | P2   | fait   | `ollama.ps` répondait une page web : une SONDE dont l'échec est nominal criait « error » 140 fois |
+| T-049 | feat | P3   | fait   | Un HTML cité dans un rapport s'ouvrait dans l'éditeur interne, jamais dans le navigateur déclaré |
+| T-024 | bug  | P3   | fait   | Un chemin hors projet cliqué dans une transcription annonçait « introuvable » alors qu'il existe |
+| T-041 | tech | P3   | fait   | Empaquetage local : `target/release/sidecar/` reversait dans l'AppDir des fichiers disparus de la source |
+| T-051 | bug  | P1   | fait   | La suite de tests travaillait dans le VRAI `~/.local/share`, et pouvait y déplacer des données |
+| T-050 | bug  | P1   | fait   | Verrou orphelin : une modification de manifeste pendant une synchro bloquait toutes les suivantes |
 | T-040 | bug  | P1   | fait   | L'image `ia-runner` ne se construisait plus : le Dockerfile ne copiait pas `sidecar/scripts/` |
+| T-047 | tech | P2   | fait   | La table de routage par défaut était écrite deux fois, sans rien pour vérifier qu'elles concordent |
+| T-046 | bug  | P2   | fait   | `claude-opus-5` absent des sélecteurs : la liste des modèles de l'abonnement était recopiée dans trois fichiers |
 | T-034 | tech | P2   | fait   | Le cliquet de taille était rouge sur `master` : `src-tauri/src/sidecar.rs` à 807 lignes |
 | T-043 | bug  | P1   | fait   | Poste d'entreprise : tous les fournisseurs en « erreur réseau », le fetch de Node ignorait le proxy |
 | T-044 | bug  | P2   | fait   | « erreur réseau: fetch failed » sans le code de cause : quatre pannes, un seul message |
@@ -914,6 +545,956 @@ plus coûteuse.
 | T-001 | feat | P3   | fait   | Page « Tickets » dans l'app |
 
 ---
+
+### T-052 — Les tours Claude tournent sans instruction système, et personne ne l'a décidé
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-08-15 · **Clos** 2026-08-15
+
+Trouvé le 2026-08-15 en instruisant [T-019](#t-019--les-questions-interactives-ne-sont-plus-sollicitées),
+dans le SDK réellement installé (`@anthropic-ai/claude-agent-sdk` 0.3.214, `sdk.mjs`) :
+
+```js
+if (i === undefined) f = "";            // systemPrompt absent  → prompt système VIDE
+else if (typeof i === "string") f = i;  // chaîne              → REMPLACE le preset
+else if (i.type === "preset") { … }     // preset              → prompt Claude Code + append
+```
+
+Deux conséquences, aucune décidée :
+
+1. **Un tour sans agent sélectionné part avec un prompt système vide.** Pas le prompt de
+   Claude Code, pas un prompt réduit : rien. C'est le cas de la majorité des tours du Chat et
+   des tours de projet sans agent.
+2. **Un agent avec instructions REMPLACE** le prompt de Claude Code au lieu de s'y ajouter.
+   Ce qui est peut-être voulu — mais nulle part écrit.
+
+Le SDK **agent** diffère ici du SDK Claude Code historique, où le preset était le défaut. Le
+passage de l'un à l'autre a donc changé le comportement en silence, et rien dans le dépôt n'en
+parle.
+
+Pourquoi P2 et pas P1 : l'application marche, les outils sont déclarés par l'API quoi qu'il
+arrive, et beaucoup de tours n'ont besoin de rien de plus. Mais « le modèle reçoit-il des
+instructions ? » ne devrait pas être une question à laquelle on répond en lisant le bundle
+minifié d'une dépendance.
+
+À faire — et c'est un ARBITRAGE, pas un correctif évident :
+
+- mesurer d'abord : un tour identique avec et sans `{type:"preset", preset:"claude_code"}`,
+  sur une tâche outillée, pour voir ce que le preset change réellement ici ;
+- puis décider explicitement, et l'écrire dans `docs/protocol.md` : preset + `append` (le
+  modèle hérite des conventions de Claude Code), ou prompt propre à IAction (on assume de
+  tout dire soi-même). Le pire état est celui d'aujourd'hui : ni l'un ni l'autre, par défaut
+  d'une dépendance.
+- garder à l'esprit T-019 : l'annonce de l'outil de question devra suivre le choix retenu.
+
+**Tranché et livré le 2026-08-15**, sur décision de l'utilisateur.
+
+| Tour | Ce qui part maintenant |
+|---|---|
+| **Projet** (outils intégrés armés) | `{type: "preset", preset: "claude_code", append}` |
+| **Chat pur** (`tools: []`) | inchangé — la chaîne de l'appelant, ou rien |
+
+Le raisonnement tient en une phrase : les outils intégrés de Claude Code
+(Read/Write/Edit/Bash/Grep) ont été conçus pour être pilotés par ce prompt-là. Les servir sans
+lui était l'anomalie, pas l'inverse. Le chat pur, lui, n'a aucun outil : lui imposer un prompt
+de copilote de code serait le défaut symétrique.
+
+Second effet, aussi important que le premier : **l'instruction d'un agent s'AJOUTE désormais au
+preset au lieu de l'effacer**. Un agent « relecteur méticuleux » conservait jusqu'ici les outils
+de Claude Code… en ayant supprimé les instructions qui les décrivent.
+
+**Ce choix est raisonné, pas mesuré, et il faut le dire.** Le ticket réclamait une mesure
+préalable ; elle suppose des tours réels sur des tâches outillées, donc de la dépense
+d'abonnement, et l'arbitrage a été rendu sans elle. Deux garde-fous en tiennent lieu : le retour
+arrière tient en un booléen (`composerInstructionSysteme`), et quatre cas de test verrouillent
+les deux régimes — dont « le preset n'est jamais remplacé par l'instruction de l'agent ». Si le
+preset se révélait nuisible sur des tours réels, ce sera un ticket de plus, avec sa trace — pas
+une découverte dans le bundle minifié d'une dépendance.
+
+### T-012 — 24 alertes Dependabot, dont cinq dépendances livrées
+
+**Type** tech · **Prio** P1 · **Statut** fait · **Créé** 2026-08-09 · **Clos** 2026-08-15
+
+**Fait le 2026-08-15, application FERMÉE** (la condition que le ticket posait : `npm install`
+perturbe le vite en cours).
+
+**Racine : 12 vulnérabilités → 5.** Les quatre paquets que le ticket avait identifiés comme
+**réellement livrés** sont tous montés :
+
+| Paquet | Avant → après |
+|---|---|
+| `ip-address` (SSRF) | 10.2.0 → 10.5.0 |
+| `fast-uri` | 3.1.3 → 3.1.5 |
+| `hono` | 4.12.30 → 4.13.2 |
+| `@hono/node-server` | 1.19.14 → 1.19.17 |
+
+S'y ajoutent `nanoid`, `postcss` et `tar`, qui ne partent pas dans le produit (outil de
+construction, pile de voix) mais ne coûtaient rien à monter.
+
+**`tools/mcp-imap` : 4 → 0.** Les quatre PR Dependabot ouvertes sur le dépôt public restent à
+**fermer**, pas à fusionner : l'instantané remplace l'arbre entier, une PR fusionnée sur `main`
+serait silencieusement annulée à la publication suivante (`docs/github.md` §4).
+
+**Les 5 qui restent sont exactement la pile de voix locale** — `sharp`, `adm-zip`,
+`onnxruntime-node`, `@huggingface/transformers`, `kokoro-js` — c'est-à-dire ce que le ticket
+avait déjà classé « ne part pas » : ces modules sont EXCLUS du bundle
+(`scripts/preparer-bundle.sh`), l'application les charge par `import()` dynamique et fonctionne
+sans eux. Elles ne concernent que le poste de développement et l'utilisateur qui installe la
+voix locale à la main. Aucune n'a de correctif amont disponible.
+
+**La dépendance Rust `glib` (1 moyenne) n'est pas corrigeable de notre côté** : la 0.18.5 est
+tirée transitivement par `gtk 0.18` ← `muda` ← `tauri 2.11.5`, et l'avis est réglé en 0.19,
+qui suppose une montée de Tauri. `cargo update -p glib` ne trouve rien de compatible. Même
+famille que les paquets transitifs sous le SDK Claude : la correction dépend de la montée de
+l'amont, pas d'un forçage local — et forcer une résolution désalignerait la coquille de ce que
+Tauri a testé.
+
+Chaîne de vérification complète repassée au vert avec les nouvelles versions avant commit.
+
+
+> **Correction du 2026-08-09** (`gh` installé, alertes lues par l'API au lieu
+> d'être devinées) : la première rédaction de ce ticket concluait « une seule
+> dépendance vulnérable part réellement dans le produit ». **C'était faux** —
+> je n'avais dépouillé que les paquets cités par `npm audit` en tête de
+> sortie. Le décompte exact figure ci-dessous ; la conclusion rassurante ne
+> tenait qu'à un examen partiel. Leçon : ne pas conclure d'un échantillon
+> quand l'inventaire complet est interrogeable.
+
+**Décompte réel** (`gh api /repos/…/dependabot/alerts`, 24 ouvertes) :
+
+| Manifeste | Alertes | Livré ? |
+|---|---|---|
+| `package-lock.json` (racine) | 5 hautes, 8 moyennes, 1 basse | partiellement |
+| `src-tauri/Cargo.lock` | 1 moyenne (`glib`) | **oui** — la coquille Linux |
+| `tools/mcp-imap/package-lock.json` | 2 hautes, 6 moyennes, 1 basse | non (outil hors app) |
+
+**Ce qui part réellement chez l'utilisateur** — vérifié fichier par fichier
+dans `build/sidecar-bundle/node_modules` :
+
+- `ip-address` (1 haute + 2 moyennes, SSRF) — SDK Claude → SDK MCP → `express-rate-limit` ;
+- `fast-uri` (2 hautes) — SDK Claude → SDK MCP → `ajv` ;
+- `hono` (3 moyennes + 1 basse) et `@hono/node-server` (1 moyenne) — même chaîne ;
+- `glib` (1 moyenne) — dépendance Rust de la coquille, donc du binaire lui-même.
+
+**Ce qui ne part pas** : `sharp`, `tar`, `adm-zip` (pile de voix locale, EXCLUE
+du bundle — `scripts/preparer-bundle.sh`), `postcss` (vite, construction
+seule), et tout `tools/mcp-imap` (outil MCP de courriel, hors application).
+
+La plupart des paquets livrés sont **transitifs sous le SDK Claude** : la
+correction dépend de la montée du SDK, pas d'un `npm audit fix` local. À
+qualifier au cas par cas, et à ne pas forcer par des `overrides` qui
+désaligneraient le SDK de ce qu'il a testé.
+
+Constaté le 2026-08-09 en publiant l'instantané : GitHub annonce « 23
+vulnerabilities (7 high, 14 moderate, 2 low) » sur la branche par défaut.
+Dépouillement local (`npm audit`, `npm ls`) — le chiffre brut est trompeur,
+trois familles très inégales :
+
+- **`sharp`, `tar` (7 hautes)** — tirées par `@huggingface/transformers` et
+  `kokoro-js`, c'est-à-dire la pile de **voix locale**, explicitement EXCLUE
+  du bundle livré (`EXCLUES` dans `scripts/preparer-bundle.sh`, voir
+  `docs/empaquetage.md` §2). Vérifié : `build/sidecar-bundle/node_modules` ne
+  les contient pas. Elles ne concernent que le poste de développement — et
+  l'utilisateur qui installe la voix locale à la main.
+- **`nanoid`, `postcss`** — dépendances de `vite`, donc outil de construction
+  seulement, absentes du produit.
+- **`ip-address` (3 avis SSRF, modérés)** — la SEULE présente dans le bundle
+  livré. Chaîne : `@anthropic-ai/claude-agent-sdk` →
+  `@modelcontextprotocol/sdk` → `express-rate-limit` → `ip-address@10.2.0`.
+  Exploitabilité à qualifier : ce limiteur ne sert que si un serveur MCP HTTP
+  écoute, ce qui n'est pas le mode nominal — mais la correction est triviale.
+
+**Second manifeste, découvert dans la foulée** : `tools/mcp-imap` a son propre
+`package-lock.json` (outil MCP de courriel, hors bundle de l'application).
+Dependabot y avait déjà ouvert **quatre PR** — `ip-address` 10.4.0, `fast-uri`,
+`hono`, `@hono/node-server` + SDK MCP. Elles sont à **fermer**, pas à
+fusionner : l'instantané remplace l'arbre entier, donc une PR fusionnée sur
+`main` serait silencieusement annulée à la publication suivante (voir
+`docs/github.md` §4). Les mêmes montées se font ici.
+
+À faire, **application fermée** (`npm install` perturbe le vite en cours) :
+`npm audit fix` à la racine (monte `ip-address`, 10.4.0 satisfait le `^10.2.0`
+demandé) **et** dans `tools/mcp-imap`, puis `npm run verif` et instantané. Les
+autres attendent leurs amonts ; ne pas forcer de résolution sur une pile qu'on
+ne livre pas.
+
+Décision de fond consignée : les **PR automatiques de Dependabot restent
+désactivées** (elles modifieraient le dépôt public, qui n'est pas la source de
+vérité) — les alertes seules sont voulues, et ce ticket est la façon dont
+elles entrent dans le backlog. Voir `docs/github.md` §4.
+
+### T-045 — La traversée de proxy n'est ni configurable, ni documentée
+
+**Type** tech · **Prio** P2 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-15
+
+**Corrigé le 2026-08-15 — les trois trous, dont un par l'aveu.**
+
+**Trou 2, le plus bête et le plus coûteux : il n'y avait aucun endroit où saisir un proxy.**
+Encart **Configuration → Réseau** : proxy, hôtes en direct, autorité de certification, et
+lecture du magasin du système. La coquille les pose sur l'environnement du sidecar au moment
+de le lancer (`src-tauri/src/reseau.rs`) — c'est là que ça doit se faire, `--use-env-proxy`
+étant lu par Node au démarrage du process et non à chaque requête. « Enregistrer et relancer
+le moteur » est donc le geste complet, et l'encart le dit plutôt que de laisser croire à un
+effet immédiat.
+
+**Trou 3 : le certificat d'inspection TLS.** `NODE_EXTRA_CA_CERTS` (fichier PEM) et
+`--use-system-ca` sont posés depuis l'encart. Le poste qui tombera sur
+`SELF_SIGNED_CERT_IN_CHAIN` a désormais où répondre.
+
+**Trou 1, le PAC : non corrigé, et DIT.** Nous n'interprétons pas `AutoConfigURL`. Un poste
+qui n'a que ça doit saisir son proxy à la main — c'est écrit dans l'encart et dans
+`docs/empaquetage.md`. Prétendre le contraire aurait été pire que le trou lui-même : un
+utilisateur qui croit le PAC lu ne cherchera pas pourquoi rien ne passe.
+
+L'invariant tenu de bout en bout, et testé des deux côtés : **rien de saisi = rien de changé**.
+Une clé `reseau` absente, vide, ou d'un mauvais type laisse l'environnement du moteur
+identique à l'octet près (6 tests Rust, 10 tests d'interface, plus deux tests de coquille sur
+la position des drapeaux — Node ne traite ses options qu'AVANT le nom du script, une option
+placée après serait ignorée en silence, exactement le piège de T-043).
+
+Effet de bord du cliquet, et il avait raison : les 240 lignes du tableau des raccourcis
+clavier sortent de `ProvidersPage.tsx` (3 207 → 2 996 lignes) dans
+[raccourcisClavier.ts](../ui/src/raccourcisClavier.ts). C'est de la documentation pure au
+milieu d'un fichier qui fait tourner fournisseurs, modèles, voix et applications ; elle n'avait
+aucune raison d'y vivre, et c'est le refus de l'encart « Réseau » qui a posé la question.
+
+
+**Type** tech · **Prio** P2 · **Statut** ouvert · **Créé** 2026-08-13
+
+[T-043](#t-043--tous-les-fournisseurs-en--erreur-réseau--sur-un-poste-dentreprise) a réparé le
+cas courant — un proxy déclaré dans l'environnement — d'une ligne. Il laisse trois trous, et
+les nommer vaut mieux que de croire le sujet clos :
+
+1. **Le PAC est ignoré.** Le poste concerné déclare aussi un `AutoConfigURL` dans le registre. `--use-env-proxy` ne lit que les variables ; un poste qui
+   n'aurait QUE le PAC resterait en panne, avec le même message pour l'utilisateur.
+2. **Aucun réglage dans l'application.** Si les variables ne sont pas posées pour la session
+   graphique — cas fréquent sous Windows, où elles vivent souvent dans le profil du terminal —
+   l'utilisateur n'a aucun endroit où saisir son proxy. Il faut passer par `setx`, ce qu'aucune
+   documentation ne dit.
+3. **Le certificat d'inspection TLS n'est pas traité.** Ce poste-ci coupe avant le handshake,
+   donc la question ne s'est pas posée. Le poste suivant, derrière un proxy MITM, tombera sur
+   `SELF_SIGNED_CERT_IN_CHAIN` — Node n'utilise pas le magasin de certificats de Windows.
+   Le remède existe (`--use-system-ca`, `NODE_EXTRA_CA_CERTS`), il n'est pas posé.
+
+À faire : un encart « Réseau » dans la configuration (proxy explicite, autorité
+supplémentaire), et une section dans `docs/empaquetage.md` sur l'usage en entreprise. Tant que
+ce n'est pas fait, l'application est **utilisable au bureau par accident**, pas par
+conception.
+
+### T-023 — Isoler la plomberie spécifique à un fournisseur
+
+**Type** tech · **Prio** P2 · **Statut** fait · **Créé** 2026-08-10 · **Clos** 2026-08-15
+
+**R8-A était déjà livré** (`catalogUrl`, `catalogShape`, `usageTrustworthy`, `bodyExtras`, le
+profil traversant les couches, le préréglage Swiftask), et avait fermé T-021 et T-022.
+**R8-B est livré le 2026-08-15**, avec la retenue que le ticket lui-même prescrivait.
+
+**La devinette nommée dans le ticket a disparu du chemin nominal.** `usageStats.ts` déduisait
+la gratuité d'un fournisseur par sous-chaîne de son identifiant — « la ligne la plus parlante »,
+disait le ticket. C'est désormais un trait `billing: "free" | "paid"`, déclaré, et inscrit sur
+l'événement d'usage **au moment du tour** : la facturation est un fait du fournisseur, et la
+relire plus tard verrait une configuration qui a pu changer.
+
+La devinette n'est pas SUPPRIMÉE, et c'est délibéré : sans trait, le comportement reste celui
+d'avant à l'octet près (discipline R0). La retirer d'un coup ferait basculer en « payant » tout
+fournisseur pas encore déclaré, et fausserait l'historique. Elle disparaîtra quand les profils
+seront déclarés — pas avant, et le commentaire du code le dit à celui qui passera après.
+
+**Une méthode du protocole perd son nom de marque.** `usage.openrouter` devient
+**`usage.credits`**, et le chemin de la jauge devient le trait `creditsPath` (défaut `credits`).
+`usage.openrouter` **reste accepté comme alias** : renommer une méthode ne doit pas casser une
+interface qui tourne, et le test de protocole exerce volontairement les DEUX noms — le nouveau
+sur le chemin nominal, l'ancien sur le cas d'erreur. L'ancien nom partira quand plus rien ne
+l'appellera.
+
+S'y ajoute `coutRemonte` (T-036) : « ce fournisseur ne remonte jamais de coût », déclaré au lieu
+d'être compté comme une mesure manquante.
+
+**Ce qui reste hors périmètre, et le ticket le disait déjà** : `nativeApi` (les trois méthodes
+`ollama.*` gardent leur nom — le code marche et ne gêne personne tant qu'il n'y a qu'un cas ;
+T-007 a montré au passage que la SONDE, elle, mérite d'être déclarée un jour) et la cible de
+débord de `debord.ts`, qui relève de R3. Le compte des « quinze sites » n'est donc pas tombé à
+zéro : il est tombé sur les deux familles que le ticket avait explicitement mises de côté.
+
+
+Constat de structure, posé le 2026-08-10 en cherchant où brancher T-021.
+L'hypothèse fondatrice du moteur neutre — « un fournisseur, c'est une `baseUrl`
+compatible OpenAI et une clé » — a déjà cédé **quinze fois**, sans qu'aucun
+endroit ne le déclare :
+
+| Où | Spécificité codée en dur |
+|---|---|
+| [engine.ts](../sidecar/src/engine.ts) ~735-830 | `ollamaNativeBase()` + API native `/api/ps`, `/api/generate` |
+| [engine.ts](../sidecar/src/engine.ts) ~651-680 | `GET /credits` — solde, propre à OpenRouter |
+| [engine.ts](../sidecar/src/engine.ts) ~467-475 | corps R0 : `models`, `provider.sort`, `usage.include` |
+| [usageStats.ts](../sidecar/src/usageStats.ts) ~51 | « ce fournisseur est-il gratuit ? » deviné par `id.includes("ollama")` |
+| [debord.ts](../sidecar/src/debord.ts) ~34 | cible de débord `openrouter · deepseek-chat` |
+| [router.ts](../sidecar/src/router.ts) ~90, ~103 | classificateur et embeddings sur `ollama` |
+| [routerAdmin.ts](../ui/src/routerAdmin.ts) ~55-65 | les mêmes valeurs, redéclarées côté interface |
+| [App.tsx](../ui/src/App.tsx) ~304 | `usageOpenrouter("openrouter")` — id littéral |
+| [providerAdmin.ts](../ui/src/providerAdmin.ts) ~30-44 | en-têtes `HTTP-Referer` / `X-Title` d'OpenRouter |
+| [ProvidersPage.tsx](../ui/src/ProvidersPage.tsx) ~85, ~1993-2014 | `OPENROUTER_PROVIDER_ID`, préréglages `openrouter`/`groq` |
+| [protocol.md](protocol.md) | **4 méthodes portent un nom de fournisseur** : `usage.openrouter`, `ollama.ps`, `ollama.load`, `ollama.unload` |
+
+La ligne la plus parlante est `usageStats.ts` : la gratuité d'un fournisseur y
+est **devinée par sous-chaîne de son identifiant**. Un fournisseur local nommé
+autrement est facturé à tort ; un fournisseur payant contenant « local » est
+compté gratuit. C'est le symptôme, pas la cause : faute d'endroit où déclarer
+un trait, chaque besoin s'est résolu par un `if` là où il tombait.
+
+**Direction proposée — spec R8, « profils de fournisseur ».** La spécificité
+devient une **donnée portée par le fournisseur**, pas une branche de code,
+selon la discipline déjà écrite en R0 (*champ absent → comportement
+d'aujourd'hui, à l'octet près*) :
+
+```ts
+interface ProviderTraits {
+  catalogUrl?: string;              // T-021 — remplace GET {baseUrl}/models
+  catalogShape?: "openai" | "slugs";// {data:[{id}]} vs [{slug,name}]
+  creditsPath?: string;             // "credits" — absent : pas de jauge de solde
+  nativeApi?: "ollama";             // ps / load / unload
+  usageTrustworthy?: boolean;       // T-022 — false : les zéros valent null
+  billing?: "free" | "paid";        // remplace la devinette sur l'id
+  bodyExtras?: Record<string, unknown>; // ex. {stateless: true} chez Swiftask
+  noReasoningEffort?: boolean;      // passerelle qui rejette le champ en 400
+}
+```
+
+Les deux derniers champs sortent de l'observation du client officiel de
+Swiftask le 2026-08-10 : il envoie `stateless: true` (champ non standard) et a
+**désactivé `reasoning_effort` en commentaire** — « HTTP 400 reasoning_effort
+is not allowed ». Deux quirks qu'aucun `if (providerId === …)` ne doit porter,
+et la démonstration que la liste des traits ne se devine pas à l'avance : elle
+doit être *ouverte*, d'où `bodyExtras` en dictionnaire libre plutôt qu'un
+énième booléen nommé.
+
+Le champ voyage comme les trois réglages R0 : config non-secrète →
+`pushProviders` → `providers.set` → `Provider` du sidecar. **Le sidecar ne
+porte donc aucune table de fournisseurs** — il lit ce qu'on lui pousse, et
+reste ignorant des marques. La table des profils connus (Swiftask, OpenRouter,
+Ollama, « OpenAI strict ») vit côté interface, à côté de `DEFAULT_PROVIDERS`,
+comme simple **aide de saisie** du formulaire — même patron que les
+préréglages STT/TTS déjà en place. Une seule déclaration a un consommateur à
+l'exécution : pas de cinquième vérité à faire diverger (cf. 0.3.0).
+
+Périmètre et coût estimés — à découper en deux, la première moitié seule
+débloque Swiftask :
+
+- **R8-A (¼ lot)** : `catalogUrl` + `catalogShape` + `usageTrustworthy`, le
+  profil traversant les couches, préréglage Swiftask, tests de protocole.
+  Ferme T-021 et T-022.
+- **R8-B (¼ lot)** : `creditsPath` et `billing` — c'est-à-dire dé-nommer
+  `usage.openrouter` et retirer la devinette d'`usageStats`. Touche le
+  protocole, donc à faire seul et documenté.
+
+Restent volontairement hors périmètre : `nativeApi` (le code Ollama existant
+marche et ne gêne personne tant qu'il n'y a qu'un cas) et la cible de débord de
+`debord.ts`, qui relève de R3.
+
+### T-036 — Des tours payants ne remontent aucun coût
+
+**Type** bug · **Prio** P3 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-15
+
+**Instruit le 2026-08-15 — les deux questions du ticket ont une réponse, et ce ne sont pas
+les mêmes.**
+
+**1. Swiftask est structurellement muet, et l'option `usageAccounting` n'y peut rien.** Le
+`costUsd` de nos événements vient de `usage.cost` ; `usageAccounting` pose `usage.include`.
+Ces deux champs sont des **extensions OpenRouter**, pas du dialecte OpenAI. Un fournisseur
+qui ne les implémente pas ne les servira jamais, quelle que soit la case cochée. Cocher la
+comptabilité d'usage sur Swiftask n'aurait donc rien changé — et c'était précisément la
+question du ticket.
+
+**2. La recherche web n'a rien à facturer, et son absence de `events.jsonl` est correcte.**
+R9 interroge un **SearXNG auto-hébergé** en HTTP simple : aucun appel de modèle, aucune API
+payante, donc aucun événement d'usage à écrire. Son coût réel existe, mais il est **indirect
+et déjà compté** : les sources injectées gonflent le prompt du tour qui suit, et ce tour-là
+porte sa propre consommation. Il n'y a donc pas de trou ici — il y avait une attente fausse.
+
+**Corrigé** : le trait `coutRemonte: false` (déclaré sur le préréglage Swiftask) inscrit
+`coutIndisponible: true` sur les événements concernés, au moment du tour — c'est un fait du
+FOURNISSEUR, et le relire plus tard verrait une configuration qui a pu changer. La carte
+« Dépense de la période » distingue désormais deux minorants qui n'appellent pas la même
+chose :
+
+- « N tours sans coût remonté » — le fournisseur pourrait, et ne l'a pas fait : **il y a une
+  comptabilité d'usage à cocher** ;
+- « N tours chez un fournisseur qui n'en remonte jamais » — **rien à chercher**.
+
+Les confondre, c'était envoyer l'utilisateur chercher un réglage qui n'existe pas. Quatre cas
+de test sur le libellé, dont celui où les deux coexistent.
+
+Reste vrai, et assumé : la dépense Swiftask demeure inconnue. Aucun correctif de notre côté ne
+la fera apparaître — seul le fournisseur le peut. Ce que le ticket demandait était de le DIRE
+plutôt que de compter zéro ; c'est fait.
+
+
+**Type** bug · **Prio** P3 · **Statut** ouvert · **Créé** 2026-08-13
+
+Relevé en instruisant [T-035](#t-035--la-dépense-réelle-nétait-affichée-nulle-part), sur
+`usage/events.jsonl` du poste, mois d'août 2026 :
+
+| moteur / fournisseur | tours | `costUsd` cumulé |
+|---|---|---|
+| claude (abonnement)  | 546 | 0 (normal : coût nul) |
+| neutral / openrouter |  16 | 2,4327 $ |
+| neutral / ollama     |  11 | 0 (normal : local) |
+| neutral / swiftask   |   7 | **0, alors que le fournisseur est payant** |
+
+Les 7 tours Swiftask ne portent pas de `costUsd`. Depuis T-035 la carte « Dépense de la
+période » le signale (« au moins — N tours payants sans coût remonté ») plutôt que de laisser
+lire un total faux, mais le trou reste : on ne sait pas ce que ces tours ont coûté.
+
+À instruire : le fournisseur ne renvoie-t-il pas d'usage, ou bien l'option `usageAccounting`
+n'est-elle pas cochée sur son profil ? Même question pour la recherche web, dont les appels
+n'apparaissent pas du tout dans `events.jsonl`. Si le fournisseur est structurellement muet, le
+dire dans son profil vaut mieux que de compter zéro.
+
+### T-053 — Le verrou du runner déclarait mort tout détenteur, hors de Linux
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-08-15 · **Clos** 2026-08-15
+
+Constaté le 2026-08-15 sur le portique de la 0.3.3 : la PR publique est rouge sur **Windows**,
+verte sur Linux. `runner.test.js` échoue sur une seule assertion — « le processus courant doit
+être vu vivant ».
+
+La cause est dans le correctif de [T-050](#t-050--un-verrou-survivait-à-son-détenteur-et-gelait-toutes-les-synchros),
+écrit le matin même : `detenteurVivant()` teste `/proc/<pid>`. **Il n'y a pas de `/proc` sous
+Windows** — donc un détenteur bien vivant y est déclaré mort, et son verrou volé. Le choix de
+`/proc` était pourtant motivé et reste bon sur Linux : lui seul distingue « mort » de « vivant
+mais appartenant à un autre utilisateur » (EPERM), ce qui compte dans un conteneur où le
+planificateur et les runs partagent l'espace de PID.
+
+Ce que ce ticket corrige n'est donc pas le choix, c'est son **absence de repli**. Le runner ne
+tourne que dans un conteneur Linux, et on aurait pu se contenter de garder le test par
+plateforme — c'est-à-dire faire taire le messager. Une fonction qui répond faux hors de son
+habitat est un piège en attente, pas une limite acceptable : `/proc` d'abord, `process.kill(pid, 0)`
+en repli, EPERM traité comme vivant. La prudence d'origine est préservée de bout en bout — ce
+qu'on ne sait pas trancher est réputé vivant.
+
+Troisième fois que la CI Windows attrape ce que le poste Linux ne peut pas voir (T-014, T-037,
+puis ici) — et la première où c'est le CODE, pas le test, qui décrivait la machine qui l'exécute.
+
+### T-025 — Un échec du fournisseur arrive comme une réponse réussie
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-08-10 · **Clos** 2026-08-15
+
+**Corrigé le 2026-08-15 par le correctif « non listé » du ticket lui-même** — celui que la
+mesure du 2026-08-11 avait fait apparaître, et qui est le seul à viser la cause : quand R9 est
+active, les agents `*-with-search` ne sont plus proposés. La recherche est alors faite deux
+fois — une fois par nous, avec nos sources citées, une fois par l'agent — et c'est la seconde
+qui casse (`gemini-pro-with-search` : 2 échecs sur 6 à requête identique, contre 0 sur 6 pour
+le modèle brut).
+
+Les trois autres pistes restent écartées, pour les raisons que le ticket avait déjà établies :
+valider les modèles par un appel court ne rattrape pas un modèle qui répond 9 fois sur 10 ; la
+consommation à zéro ne distingue pas le tour échoué du tour réussi ; et le discriminant
+`total_tokens: 1` est un comportement non documenté qu'on refuse d'inscrire dans le code.
+
+Deux règles de non-perte, testées, parce qu'un filtre qui escamote est un défaut de plus :
+
+1. **Le modèle SÉLECTIONNÉ n'est jamais masqué** — sinon le sélecteur afficherait « — » sur
+   une conversation qui tourne. Même règle que pour les variantes (T-032).
+2. **L'écart se DIT** : le popover annonce combien d'agents sont masqués et pourquoi. Un
+   modèle qui disparaît sans un mot est un mensonge par omission.
+
+La reconnaissance se fait sur l'id (`…-with-search`), faute de mieux : aucun fournisseur
+n'expose un trait disant « cet agent cherche ». C'est exactement la devinette que
+[T-023](#t-023--isoler-la-plomberie-spécifique-à-un-fournisseur) doit supprimer — en attendant
+elle est à UN seul endroit, nommée et testée, au lieu d'être un `if` au fil de l'eau. Quatre
+cas de test, dont celui qui compte : le modèle courant survit au filtre.
+
+Ce que ce ticket ne prétend toujours pas régler : `llama31`, muet (≈ 2 caractères de contenu),
+qui n'est pas un agent de recherche et reste proposé. Il relève de la validation de catalogue,
+donc de T-021/T-023, pas d'ici.
+
+
+Constaté le 2026-08-10, premier tour Swiftask réel dans le Chat (modèle
+`gemini-pro-with-search`). L'écran affiche, dans une bulle d'assistant
+normale : *« Sorry, An error occurred. If the problem persists, please contact
+us. »* — suivi de `0 + 0 tokens`. Aucun bandeau d'erreur, aucune entrée au
+journal : pour l'application, **ce tour a réussi**.
+
+Vu du protocole, en effet, rien ne le distingue d'une réponse légitime :
+
+```
+HTTP 200 · finish_reason: "stop" · contenu = le texte d'erreur
+usage: {prompt_tokens: 0, completion_tokens: 0, total_tokens: 1}
+```
+
+Le fournisseur encode donc sa panne **dans le corps de la réponse**, pas dans
+son statut. Deux modèles sur les huit proposés par le sélecteur sont dans ce
+cas — `gemini-pro-with-search` (phrase d'erreur) et `llama31` (contenu
+littéralement `""`, encore plus muet) —, les six autres répondent
+correctement. Un quart du catalogue offert est mort, et l'app le présente
+comme vivant.
+
+**Ce qu'on ne peut pas faire** : détecter la phrase. Filtrer sur un texte
+anglais dans une réponse d'assistant condamnerait des réponses légitimes ; ce
+serait remplacer un faux positif par un faux négatif.
+
+**Ce qu'on peut faire**, par ordre de solidité :
+
+1. **Écarter les modèles morts du sélecteur** — c'est le vrai correctif, et il
+   rejoint T-021 : tant que le catalogue vient d'une liste figée non vérifiée,
+   il proposera des entrées non servies. Un « Rafraîchir les modèles » qui
+   VALIDE (un appel court par modèle, en tâche de fond, résultat mémorisé)
+   coûte peu et rend la liste honnête.
+2. **Signaler la consommation nulle** — une réponse non vide facturée
+   `0 + 0` est au minimum suspecte. Une fois T-022 en place (zéro → `null`),
+   l'affichage dirait « consommation inconnue », ce qui est déjà moins
+   trompeur que `0 + 0 tokens`.
+3. Le discriminant observé (`total_tokens: 1` sur les tours en échec contre
+   ~1200 sur les tours réussis) est **volontairement écarté** : c'est un
+   comportement non documenté d'un fournisseur, exactement le genre de
+   devinette que T-023 cherche à éliminer, pas à multiplier.
+
+Ce ticket ne dit pas que l'app est fautive : le défaut est chez le
+fournisseur. Il est ouvert parce qu'une panne invisible reste une panne
+invisible, quelle que soit son origine — et parce que le choix du modèle,
+lui, est bien de notre côté.
+
+**Mesure du 2026-08-11 — le modèle n'est PAS mort, il est INTERMITTENT.**
+Deux nouvelles occurrences constatées dans le Chat (mêmes conditions :
+`swiftask · gemini-pro-with-search`, recherche web R9 activée), dont un
+deuxième tour dans une conversation dont le premier avait parfaitement
+répondu. Rejeu direct sur l'API, hors application :
+
+| Envoi rejoué | Résultat |
+|---|---|
+| 10 requêtes **identiques**, message unique, `gemini-pro-with-search` | **1 échec / 10** |
+| 10 requêtes identiques, `gemini-3-pro` (modèle brut) | 0 échec / 10 |
+| 6 formes de conversation (avec/sans historique, avec/sans bloc web) | échec sur une forme, réussite au rejeu de la même |
+
+L'échec ne dépend donc **ni de l'historique, ni du bloc système injecté par
+R9, ni de la taille du corps** : à requête strictement identique, la même
+question réussit ou échoue. C'est une panne aléatoire de l'agent Swiftask
+`*-with-search` (~10 %), pas un slug non servi.
+
+Balayage des **8 slugs effectivement proposés** par le sélecteur, 6 requêtes
+identiques chacun, même jour :
+
+| Slug | Réponses exploitables |
+|---|---|
+| `deepseek-r1`, `swiftask`, `agentreact`, `mistralmedium`, `deepseek-v3`, `o3-mini` | 6/6 |
+| `gemini-pro-with-search` | **4/6** (2 fois la phrase d'erreur) |
+| `llama31` | 6/6 en apparence, mais **~2 caractères** de contenu — muet |
+
+Six des huit sont donc sains ; le catalogue offert n'est pas « mort au quart »,
+il porte un modèle muet et un modèle instable.
+
+Trois conséquences pour le plan ci-dessus :
+
+- La piste 1 (**valider les modèles par un appel court**) ne rattrape pas ce
+  cas : un modèle qui répond 9 fois sur 10 passera la validation, et
+  échouera quand même un tour sur dix. Elle reste bonne pour `llama31`
+  (mort franc), pas pour celui-ci.
+- La piste 2 (**consommation inconnue**, T-022) devient le seul signal
+  disponible côté app, et n'en est pas un : le tour échoué et le tour réussi
+  annoncent tous deux `0 + 0`.
+- Il reste donc un correctif non listé, et c'est le plus simple : **ne pas
+  proposer les agents `*-with-search` quand R9 est activée**. La recherche
+  est faite deux fois (une fois par nous, une fois par l'agent), et la
+  seconde est celle qui casse — voir la spec R9, §Pourquoi une capacité
+  locale. Un modèle brut (`gemini-3-pro`) rend le même service, avec nos
+  sources citées et sans cet aléa.
+
+### T-019 — Les questions interactives ne sont plus sollicitées
+
+**Type** bug · **Prio** P1 · **Statut** fait · **Créé** 2026-08-09 · **Clos** 2026-08-15
+
+**Fait le 2026-08-15 — les deux étapes que le ticket réclamait, dans l'ordre qu'il fixait.**
+
+**1. Le fait devient lisible.** La ligne « serveurs MCP du tour » nomme désormais les serveurs
+avec leur compte d'outils (`studio:1, iaction:3, imap:12`) et surtout porte un champ
+`questionInteractive` — vrai ou faux, explicitement. C'était la condition posée par le ticket :
+« sans cela le ticket ne peut se fermer que par supposition ». Les 39 noms d'outils ne sont
+PAS déversés dans le journal : ce serait illisible, et l'information utile n'y gagnerait rien.
+
+**2. L'outil est annoncé par l'instruction système**, et seulement quand le serveur est
+réellement armé (`interactive`) — annoncer dans un tour headless serait un mensonge, et le
+modèle poserait une question que personne ne verrait. L'annonce est formulée comme une
+capacité assortie d'un critère d'emploi, pas comme un ordre : « tu DOIS utiliser cet outil »
+produirait des questions là où le modèle devait décider seul, c'est-à-dire le défaut inverse.
+L'instruction de l'agent, quand il y en a une, n'est jamais écrasée — l'annonce s'y ajoute.
+
+**Découverte au passage, plus lourde que le ticket** : en lisant le SDK installé (0.3.214,
+`sdk.mjs`) pour savoir comment ajouter proprement au prompt système, on trouve
+`if (i === undefined) f = ""` — **sans `systemPrompt`, le SDK agent n'envoie pas le prompt
+système de Claude Code : il en envoie un VIDE.** Tous les tours sans agent tournaient donc
+sans aucune instruction système. C'est peut-être une cause du défaut constaté ici, et ça
+dépasse largement ce ticket : [T-052](#t-052--les-tours-claude-tournent-sans-instruction-système-et-personne-ne-la-décidé).
+Le correctif ci-dessus se garde bien de « régler » ça au passage — passer au preset
+`claude_code` changerait le comportement de tous les tours, ce que personne n'a décidé.
+
+Ce qui n'est PAS démontré, et le sera au prochain tour interactif réel : que l'outil figure
+effectivement dans la palette. Le ticket restait ouvert faute de pouvoir trancher ; il se
+ferme parce que la question est désormais **posée au journal**, pas parce qu'on y a répondu.
+Si `questionInteractive:false` apparaît, la cause est côté armement du serveur et un nouveau
+ticket le dira — avec, cette fois, la ligne qui le prouve.
+
+
+Constaté le 2026-08-09 à 12h58 : l'agent écrit lui-même « vu que les questions
+interactives ne passent pas ici, questionnaire texte » et pose ses questions en
+prose. Dernier appel RÉUSSI à `mcp__studio__ask_user` : **2026-08-07 12:48**.
+Depuis, plus un seul appel dans `app.jsonl` — pas même en échec. L'outil n'est
+donc pas cassé : il n'est plus SOLLICITÉ.
+
+> **Correction de la première rédaction (même jour).** J'avais conclu que la
+> cause était l'absence de migration du projet vers `.iaction/`, en me fiant au
+> commentaire d'en-tête de `projectDoc.ts` (« uniquement si `.iaction/`
+> existe »). **C'était faux** : `projectDir()` (`sidecar/src/appPaths.ts`
+> 224-232) retombe sur `.iadadou/` quand `.iaction/` est absent, et la fiche
+> est bien déposée. Elle datait du 2026-08-07 non par panne mais parce que le
+> dépôt est adressé par CONTENU — réécrit seulement quand le texte change.
+> Deuxième fois dans la même session que je conclus d'un examen partiel (voir
+> T-012) : lire le code, pas le commentaire qui le décrit.
+
+**Ce qui est établi** :
+
+- l'outil INTÉGRÉ `AskUserQuestion` est délibérément interdit
+  (`options.disallowedTools`, `sidecar/src/claude.ts` ~672) — or c'est le seul
+  nom que le modèle connaît nativement ;
+- son remplaçant `mcp__studio__ask_user` n'est armé que si le tour porte
+  `interactive: true` ; la page Projets l'envoie sans condition
+  (`ui/src/envoiProjet.ts:231`) ;
+- `buildAskUserMcpServer` journalise un `warn` s'il échoue : aucun dans le
+  journal, donc le serveur se construit ;
+- l'outil n'est documenté au modèle que par la fiche `connaissances/iaction.md`
+  — une SOURCE DE RAG, qu'il faut chercher pour lire, pas une instruction
+  système qui part à chaque tour.
+
+**Ce qui reste inconnu** : si `mcp__studio__ask_user` figure réellement dans la
+palette annoncée au modèle. La ligne `serveurs MCP du tour` compte serveurs et
+outils (`connectes:5, outils:39`) mais **ne les nomme pas** : impossible de
+trancher a posteriori. C'est le premier correctif — journaliser les noms, ou au
+moins la présence du serveur `studio`. Sans cela le ticket ne peut se fermer
+que par supposition.
+
+Ensuite, selon la réponse : faire connaître l'outil par l'INSTRUCTION SYSTÈME
+du tour (qui part toujours) plutôt que par une fiche qu'il faut chercher —
+plus robuste que le RAG pour une capacité aussi structurante.
+
+### T-008 — `usage.openrouter` : « fournisseur inconnu » au démarrage
+
+**Type** bug · **Prio** P3 · **Statut** fait · **Créé** 2026-08-08 · **Clos** 2026-08-15
+
+4 occurrences le 2026-08-08, toutes dans les secondes qui suivent un
+lancement : l'encart d'usage interroge `usage.openrouter` AVANT que la
+poussée des fournisseurs (providersBus) n'ait atteint le sidecar, qui répond
+« fournisseur inconnu: openrouter ». Transitoire et auto-réparé, mais c'est
+une erreur journalisée à chaque démarrage pour une simple course. Piste :
+l'encart attend le signal « providers poussés » avant sa première requête —
+ou le sidecar distingue « pas encore déclaré » (silencieux) d'« inconnu ».
+
+**Corrigé le 2026-08-15** par la première des deux pistes — l'encart attend le signal, plutôt
+que le sidecar n'invente une nuance entre « pas encore déclaré » et « inconnu ». La seconde
+aurait mis dans le protocole une distinction que seul l'appelant peut faire : lui seul sait
+s'il est en train de démarrer.
+
+Le bus « fournisseurs poussés » existait déjà et servait exactement à ça — sa propre
+documentation le disait, l'encart d'usage ne s'en servait pas. Mais un abonnement seul
+n'aurait pas suffi, et c'est le vrai enseignement du ticket : **un signal n'apprend rien du
+passé**. Qui se branche après la poussée n'en verra jamais l'écho, et attendrait un événement
+déjà survenu. La correction ajoute donc une mémoire (`providersDejaPousses()`) à côté de
+l'abonnement : on interroge l'état, puis on écoute la suite.
+
+Cinq cas de test, dont celui qui aurait manqué : *un abonné tardif ne reçoit pas l'écho du
+passé*. C'est la moitié du défaut, et c'est celle qu'un correctif hâtif aurait réintroduite
+dans l'autre sens — une requête qui ne part jamais au lieu d'une requête qui part trop tôt.
+
+Deux extractions au passage, imposées par le cliquet de taille sur `App.tsx` et bienvenues :
+les ~240 lignes de navigation au clavier (F6, Alt + flèches) sortent dans
+[focusZones.ts](../ui/src/focusZones.ts) — elles ne touchent ni à l'état, ni à React —, et la
+table des six pages dans [navigation.ts](../ui/src/navigation.ts), pour que la navigation
+connaisse les pages sans dépendre du composant racine. `App.tsx` passe de 1 262 à 1 022 lignes.
+
+### T-007 — `ollama.ps` répond 404 avec une page web
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-08-08 · **Clos** 2026-08-15
+
+24 occurrences dans le journal du seul 2026-08-08 : la requête `ollama.ps`
+reçoit un **404 HTML d'une plateforme d'hébergement web** (page Vercel), pas
+une réponse Ollama. L'hôte configuré pour ce fournisseur pointe donc vers un
+site web, pas vers un serveur Ollama (URL de tunnel expirée ? mauvaise
+adresse enregistrée ?) — à distinguer du cas connu « fetch failed »
+(conteneur Docker arrêté). Deux choses à corriger :
+
+- diagnostiquer/corriger l'adresse enregistrée du fournisseur concerné ;
+- côté journal, TRONQUER le corps HTML et dire la cause probable
+  (« la réponse n'est pas un serveur Ollama ») — aujourd'hui chaque
+  occurrence colle une page HTML entière dans `app.jsonl`.
+
+
+> **La prémisse de ce ticket était fausse, et c'est le plus intéressant.** « L'hôte configuré
+> pointe vers un site web » supposait une adresse à corriger — tunnel expiré, mauvaise saisie.
+> Vérification faite le 2026-08-15 : **aucune adresse enregistrée n'est fautive**
+> (`ollama → http://localhost:11434/v1`, plus deux fournisseurs distants légitimes). Le 404
+> vient d'ailleurs, et il ne s'est jamais arrêté — 140 occurrences du 2026-08-04 au
+> 2026-08-15, la dernière le matin même de la clôture.
+
+**La vraie mécanique** : `OllamaPanel` sonde `ollama.ps` sur le fournisseur **sélectionné,
+quel qu'il soit**, toutes les dix secondes, et c'est délibéré — c'est ainsi que l'interface
+décide de s'afficher ou non (« ceci est un Ollama » / « ceci n'en est pas un »). Interroger
+`/api/ps` sur un fournisseur distant hébergé sur une plateforme web rend donc une page de 404,
+et c'est le **fonctionnement nominal**. L'échec n'était pas dans l'adresse : il était dans le
+fait de journaliser en `error` une réponse attendue.
+
+Coût réel du défaut, mesuré : 140 lignes `error` en onze jours, deux kilo-octets de balises
+chacune, dans le fichier même qu'on ouvre quand quelque chose cloche. C'est l'échec muet par
+son autre bout — non pas le silence, mais un bruit assez régulier pour qu'on cesse de le lire.
+Une vraie panne d'Ollama serait passée là-dedans sans se distinguer.
+
+**Corrigé, en trois gestes :**
+
+1. **La sonde est déclarée comme telle** (`sonde: true`, [sidecar.ts](../ui/src/sidecar.ts)) :
+   son échec descend en `debug`. Rien n'est tu — la ligne existe toujours — mais elle cesse de
+   crier au loup. Le signal visible reste le panneau qui ne s'affiche pas ; une vraie panne du
+   fournisseur, elle, se dit au premier tour envoyé, avec son propre message.
+2. **Une page web reçue au lieu d'une API est résumée, pas recopiée**
+   ([base.ts](../sidecar/src/base.ts), `resumerCorpsHttp`) : titre de la page quand il existe —
+   « 404: NOT_FOUND » nomme souvent l'hébergeur, donc la nature de la méprise — et taille, qui
+   dit que quelque chose a bien répondu. Le reste part. Le correctif vaut pour **tous** les
+   points d'appel qui lisent un corps d'erreur, pas seulement `ollama.ps` : un portail de proxy
+   qui répond à la place d'une API tombe dans le même cas (voir T-045).
+3. **L'erreur nomme le fournisseur.** Le journal montrait un 404 sans dire à quelle adresse ; il
+   fallait deviner lequel des trois. C'est ce qui a rendu ce diagnostic-ci plus long qu'il
+   n'aurait dû l'être.
+
+Ce qui n'est PAS couvert par un test, et il vaut mieux l'écrire que le laisser croire : le
+drapeau `sonde` lui-même. Le tester supposerait de simuler la couche Tauri, machinerie que les
+tests d'interface n'ont pas et qui coûterait plus que le risque couvert. La logique de résumé,
+elle, l'est (trois cas, dont le JSON qui contient du HTML sans être une page).
+
+Reste hors de portée d'un correctif : que la sonde parle à des fournisseurs qui n'ont rien
+d'Ollama est un symptôme de [T-023](#t-023--isoler-la-plomberie-spécifique-à-un-fournisseur) —
+avec un trait `nativeApi` porté par le fournisseur, on ne sonderait que ceux qui l'annoncent.
+
+### T-049 — Un HTML cité dans un rapport ne s'ouvre pas dans Firefox
+
+**Type** feat · **Prio** P3 · **Statut** fait · **Créé** 2026-08-14 · **Clos** 2026-08-15
+
+Demande utilisateur du 2026-08-14 : qu'une référence de fichier HTML citée dans un rapport ou
+une réponse — **local ou distant** — s'ouvre **dans Firefox** au clic.
+
+Trois chemins de code aujourd'hui, trois comportements, aucun ne fait ça :
+
+| Ce qui est cité | Ce qui se passe |
+|---|---|
+| `rapports/2026-08-14.html` en `code` inline | bouton → `handleFileRef` ([AgentPage.tsx](../ui/src/AgentPage.tsx) ~2079) → **onglet éditeur interne**, source HTML brute |
+| `[rapport](https://…/x.html)` (lien Markdown) | `MarkdownLink` ([Markdown.tsx](../ui/src/Markdown.tsx) ~27) → `openExternal(href)` sans commande → **navigateur par défaut du système** (`xdg-open`), pas forcément Firefox |
+| `https://…/x.html` en `code` inline | rien : `looksLikeFileRef` exclut explicitement `http(s)://` — texte inerte |
+
+Le registre d'applications existe pourtant déjà (Configuration → Applications, clé `apps`,
+`extension → commande`, `findAppForExtension` + `openExternal`, [appsAdmin.ts](../ui/src/appsAdmin.ts))
+— mais **`handleFileRef` ne le consulte jamais** : seul [FileTree.tsx](../ui/src/FileTree.tsx)
+s'en sert. C'est le manque principal, et il est plus large que le HTML : un fichier ouvert
+depuis l'arbre respecte la règle de l'utilisateur, le MÊME fichier cliqué dans la transcription
+l'ignore.
+
+À faire, du plus petit au plus discutable :
+
+1. **Router `handleFileRef` par le registre d'apps.** Une fois le chemin résolu (les trois
+   branches actuelles : absolu sous `cwd`, `cwd/ref`, recherche par nom de base), interroger
+   `findAppForExtension` ; règle trouvée ⇒ `openExternal(path, command)` au lieu de
+   `handleOpenFile`. Règle le HTML local, et gratuitement tout ce que l'utilisateur a déclaré
+   (pdf, odt, kicad…).
+2. **Une règle `html`/`htm` → `firefox`** dans `DEFAULT_APPS`. Attention : les défauts ne sont
+   semés qu'au **premier lancement** (clé `apps` absente) et il n'y a **pas de re-seed** — sur
+   un poste déjà configuré, la règle est à ajouter à la main dans Configuration → Applications.
+   Ne pas « réparer » ça en re-semant : respecter les suppressions de l'utilisateur est un
+   invariant écrit.
+3. **Le distant.** Le registre est indexé par extension : il ne sait rien d'une URL. Deux
+   options — (a) un réglage « navigateur » explicite, utilisé à la fois par `MarkdownLink` et
+   par le cas HTML local, repli `xdg-open` si vide ; (b) laisser `xdg-open` et régler le
+   navigateur par défaut au niveau du système. (b) ne coûte rien mais ne tient pas la demande
+   dès que le défaut du poste n'est pas Firefox — c'est précisément le cas visé ici.
+4. *Optionnel, à décider séparément* : rendre cliquable une URL citée en `code` inline
+   (assouplir `looksLikeFileRef`). C'est l'affordance, pas l'ouverture — et
+   [T-024](#t-024--un-chemin-hors-projet-annonce--introuvable--alors-quil-existe) rappelle
+   qu'un bouton incapable d'ouvrir quoi que ce soit ment à l'utilisateur.
+
+Point d'attention à assumer, pas à découvrir : router le `.html` vers le navigateur retire la
+possibilité d'ouvrir la SOURCE dans l'éditeur interne **depuis la transcription**. L'arbre de
+fichiers garde l'ouverture en éditeur, donc rien n'est perdu — mais c'est un arbitrage, et il
+se dit.
+
+**Réalisé le 2026-08-15** — les points 1, 2 et 4 ; le 3 (« le distant ») autrement que prévu.
+
+1. **`handleFileRef` passe par le registre** ([refFichier.ts](../ui/src/refFichier.ts),
+   `ouvrirReference`) : règle trouvée ⇒ `openExternal(chemin, commande)`, sinon éditeur interne
+   comme avant. Le manque principal est donc comblé, et il l'est pour tout ce que l'utilisateur
+   a déclaré — pdf, odt, kicad — pas seulement pour le HTML.
+2. **Règle `html`/`htm`/`xhtml` → `firefox`** dans `DEFAULT_APPS`. Le ticket avertissait :
+   pas de re-seed, donc **sur ce poste-ci la règle est à ajouter à la main** dans
+   Configuration → Applications. Ne pas « réparer » ça en re-semant : respecter les
+   suppressions de l'utilisateur reste un invariant.
+3. **Le distant** — ni réglage « navigateur » séparé, ni abandon à `xdg-open` : `MarkdownLink`
+   interroge le MÊME registre, par l'extension portée par l'URL. Un `https://…/rapport.html`
+   part donc dans Firefox, et une URL sans extension retombe sur l'ouvreur du système,
+   c'est-à-dire le comportement d'avant. L'option (a) créait une seconde déclaration du même
+   choix, à faire diverger un jour (0.3.0, T-047) ; celle-ci n'en crée aucune. Piège écarté au
+   passage : le nom est pris sur le dernier segment du CHEMIN, sinon `https://exemple.com`
+   livrerait l'extension « com » et déclencherait une règle qui ne le vise pas.
+4. **URL en `code` inline** : rendues cliquables, puisqu'elles s'ouvrent maintenant.
+
+Le point d'attention annoncé est bien réel et assumé : un `.html` cliqué dans la transcription
+ne s'ouvre plus en SOURCE dans l'éditeur interne. L'arbre de fichiers, lui, garde l'ouverture en
+éditeur — rien n'est perdu, mais l'arbitrage se dit.
+
+### T-024 — Un chemin hors projet annonce « introuvable » alors qu'il existe
+
+**Type** bug · **Prio** P3 · **Statut** fait · **Créé** 2026-08-10 · **Clos** 2026-08-15
+
+Constaté le 2026-08-10 : un tour a rempli un PDF déposé dans `~/Téléchargements` et l'a cité
+dans sa réponse. Le chemin, rendu en `code` inline, devient un bouton cliquable
+([Markdown.tsx](../ui/src/Markdown.tsx) `looksLikeFileRef`) — mais `handleFileRef`
+([AgentPage.tsx](../ui/src/AgentPage.tsx)) n'ouvre que ce qui est sous `cwd` : une référence
+commençant par `~` n'est ni absolue (pas de `/` initial) ni résoluble depuis la racine, donc
+elle tombe dans la recherche par nom de base et se solde par
+« « ~/Téléchargements/… » introuvable dans le projet. »
+
+Deux défauts distincts, aucun bloquant :
+
+1. **Message trompeur** — le fichier existe, il est simplement hors projet. Un `~/…` mérite la
+   même notice que le cas absolu (« Fichier hors du projet : … »), pas un « introuvable » qui
+   laisse croire à une erreur de l'agent. Détecter le préfixe `~/` avant la branche
+   « contient un `/` » suffit.
+2. **Lien promis pour rien** — tout `code` inline ressemblant à un chemin devient un bouton,
+   y compris quand rien ne pourra s'ouvrir. Piste : n'habiller en bouton que ce qui est
+   plausiblement dans le projet (rejeter `~/` et les absolus hors `cwd` côté rendu), pour que
+   l'affordance ne mente pas.
+
+Le versant agent est traité : le guide d'intégration déposé dans chaque projet
+([projectDoc.ts](../sidecar/src/projectDoc.ts), § « Fichiers produits ou modifiés ») impose
+désormais d'écrire le livrable dans le projet, de copier avant d'éditer une source externe, et
+de ne jamais citer un chemin hors projet en `code` inline. Ce ticket ne couvre que le versant
+app : ne pas mentir sur ce qui est cliquable.
+
+**Corrigé le 2026-08-15**, avec T-049 — les deux ticket décrivaient la même absence de
+décision partagée, et les corriger séparément aurait été les recorriger deux fois.
+
+Toute la décision vit désormais dans [refFichier.ts](../ui/src/refFichier.ts) : le rendu et
+l'ouverture posent la MÊME question et lisent la même réponse. C'était le fond du défaut — une
+heuristique d'affichage au fond de `Markdown.tsx` et cinquante lignes de branches au milieu
+d'`AgentPage.tsx`, qui ne se consultaient jamais.
+
+1. **Message trompeur** — `~/…` est classé « hors projet », comme un absolu qui sort de la
+   racine, et l'avis le NOMME au lieu de prétendre l'avoir cherché. Le dossier personnel n'est
+   volontairement pas développé : l'interface ne le connaît pas, et l'inventer serait une
+   devinette de plus.
+2. **Lien promis pour rien** — le rendu reçoit maintenant le `cwd`, donc un absolu hors projet
+   et un `~/…` restent du `code` inerte. Ils ne mentent plus, faute de promettre.
+
+L'invariant est tenu par un test qui ne dépend d'aucun cas particulier : *tout ce qui est
+cliquable se classe en quelque chose d'ouvrable*. Sept autres tests couvrent le parcours
+complet, monde extérieur simulé (registre, disque, recherche), là où la logique n'était jusque-là
+pas testable du tout — elle vivait dans un composant de 2 900 lignes.
+
+Effet de bord bienvenu : `AgentPage.tsx` passe de 2 926 à 2 895 lignes, sous son budget de
+cliquet.
+
+### T-041 — L'empaquetage local ressuscite les fichiers supprimés
+
+**Type** tech · **Prio** P3 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-15
+
+Constaté en corrigeant [T-038](#t-038--lappimage-ne-se-construit-plus-et-léchec-est-muet) :
+Tauri met les ressources en scène dans `src-tauri/target/release/sidecar/` (puis
+`bundle/appimage_deb/…`) et **n'y supprime jamais ce qui a disparu de la source**. Le CLI
+Claude non compressé, retiré du bundle par le correctif, y dormait encore et se recopiait dans
+l'AppDir à chaque construction — faisant échouer un build que le correctif venait pourtant de
+réparer.
+
+Coût réel : trois constructions lues comme trois échecs différents alors que c'était le même
+fichier périmé. La CI n'est pas concernée (machine vierge à chaque run) ; c'est un piège de
+poste de développement, du même genre que T-020 — **du code qu'on croit exécuter et qui n'est
+pas celui qu'on a écrit**, ici transposé aux ressources.
+
+**Corrigé le 2026-08-15** : `preparer-bundle.sh` purge les deux dossiers de mise en scène
+avant tout assemblage, en respectant `CARGO_TARGET_DIR`. Le ticket offrait l'alternative
+« documenter la purge » — elle est écartée pour la raison qu'il énonçait lui-même : une
+consigne qu'il faut se rappeler n'est pas un garde-fou. `docs/empaquetage.md` la mentionne
+quand même, mais comme description de ce que fait le script, pas comme geste à faire.
+
+Le test ([preparer-bundle.test.mjs](../scripts/preparer-bundle.test.mjs), branché dans
+`npm run verif` et dans la CI) est **textuel**, et c'est un choix assumé : exercer le script
+pour de vrai coûterait une construction complète de l'interface et le téléchargement d'un
+runtime Node. Il verrouille ce qui casserait en silence — la purge existe, elle vise les deux
+dossiers, et surtout elle s'exécute AVANT l'assemblage. Purger après aurait effacé le travail
+du script, et aucun test de présence seule ne l'aurait vu. Même patron que le test de position
+du drapeau proxy (T-043).
+
+### T-051 — La suite de tests travaillait dans le vrai dossier de données
+
+**Type** bug · **Prio** P1 · **Statut** fait · **Créé** 2026-08-15 · **Clos** 2026-08-15
+
+Constaté le 2026-08-15 en passant `npm run verif` avant de livrer la 0.3.3 : `logs.test.js`
+échoue — 8 entrées lues là où le test en attend 7. La huitième est « données rapatriées depuis
+l'ancien nommage », émise par le sidecar **au démarrage**, que le test ne compte pas.
+
+Le test n'est pas le défaut, il est le témoin. Le harnais impose un `XDG_CONFIG_HOME` jetable
+(`harness.mjs`) mais **pas** `XDG_DATA_HOME`. Non défini — le cas normal d'un terminal Linux —
+`dataBase()` retombe sur `~/.local/share` ([appPaths.ts](../sidecar/src/appPaths.ts) 109-117),
+le vrai. Or `migrerDepuisAncienNom()` tourne à chaque démarrage et **déplace** ce qui reste
+sous `net.duvam.ia-studio` vers `net.duvam.iaction`. Autrement dit : lancer la suite de tests
+pouvait remuer les données réelles de la machine. Le test rouge est la conséquence bénigne
+d'une porte ouverte qui ne l'était pas.
+
+Ce qui a caché le défaut est aussi instructif que le défaut : le terminal de VSCode installé
+par **Snap** définit `XDG_DATA_HOME` vers son bac à sable. La suite était donc isolée *par
+accident d'environnement*, et verte, sur le poste où on la lance le plus souvent. Vérifié dans
+les deux sens avant correction — `node test/logs.test.js` sort en 0 avec la variable, en 1 sans
+elle. Même famille que T-014 et T-037 : un test qui décrit la machine qui le lance, pas le
+produit.
+
+**Corrigé** dans [harness.mjs](../sidecar/test/harness.mjs) : un `XDG_DATA_HOME` jetable est
+imposé au même endroit et pour la même raison que le `XDG_CONFIG_HOME` — avant qu'un seul test
+ne démarre un sidecar, donc hérité par tous les spawns. `logs.test.js` passe désormais avec et
+sans la variable dans l'environnement.
+
+Dégât constaté sur ce poste : **aucun**. Les six entrées de l'ancien dossier existent des deux
+côtés, et la migration ne s'autorise jamais d'écrasement — elle les a comptées en « conflits »
+et n'a rien déplacé (horodatages de `~/.local/share/net.duvam.ia-studio` inchangés depuis le
+7 août). C'est une chance, pas une garantie : sur un poste où l'ancien dossier contient une
+entrée absente du nouveau, un simple `npm test` l'aurait déménagée.
+
+### T-050 — Un verrou survivait à son détenteur et gelait toutes les synchros
+
+**Type** bug · **Prio** P1 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-13
+
+Constaté le 2026-08-13 à 23 h, sept minutes après l'installation de deux tâches de veille et
+trois heures avant qu'elles ne doivent tourner pour la première fois.
+
+Séquence exacte, lue dans les journaux du conteneur :
+
+```
+21:01:38  une synchro périodique prend le verrou (pid 20522)
+21:01:46  manifestes modifiés : régénération du crontab et relance
+21:03:51  synchro périodique reportée — verrou occupé, pid 20522
+21:05:51  synchro périodique reportée — verrou occupé, pid 20522
+21:07:52  synchro périodique reportée — verrou occupé, pid 20522
+```
+
+Le processus 20522 était mort (`/proc/20522` absent) mais son verrou subsistait. Toutes les
+synchros suivantes étaient sautées, et les deux veilles planifiées à 02 h 30 et 03 h 15
+auraient été « reportées » sans jamais s'exécuter — un échec silencieux à retardement, dont
+rien n'aurait signalé la cause au matin.
+
+Cause : `entrypoint.sh` se relance **lui-même** (`exec supercronic`) dès qu'un manifeste
+change, ce qui tue les processus en cours. Le commentaire de `prendreVerrou` tablait sur
+l'inverse — « le verrou vit dans un dossier VOLATILE (/tmp) : au redémarrage du conteneur il
+disparaît de lui-même, puisqu'un éventuel détenteur est mort avec lui ». C'est vrai d'un
+redémarrage du **conteneur**, faux d'une relance **interne**, qui est le cas courant : chaque
+édition de manifeste depuis le poste la déclenche.
+
+Correction (`docker/ia-runner/bin/run-tache.mjs`) : sur `EEXIST`, la fiche `detenteur.json`
+est lue et l'existence de `/proc/<pid>` vérifiée. Détenteur mort → le verrou est repris, avec
+une ligne de journal en niveau erreur. Prudence délibérée dans l'autre sens : fiche absente,
+illisible ou sans pid numérique ⇒ détenteur **réputé vivant**, car mieux vaut une synchro
+reportée qu'un verrou volé à un run qui travaille.
+
+Test ajouté (`sidecar/test/runner.test.js`, section 5) : les cinq cas — processus courant,
+pid inexistant, fiche absente, pid non numérique, JSON invalide. Le verrou n'était couvert par
+aucun test jusque-là, alors qu'il est le garant de l'exécution séquentielle.
 
 ### T-040 — L'image du runner serveur ne se construisait plus, et rien ne pouvait le dire
 
@@ -952,6 +1533,104 @@ la CI, au moins sur les PR qui touchent `docker/`, `sidecar/` ou les manifestes 
 Docker sans push coûte quelques minutes et aurait attrapé les trois.
 
 ---
+
+### T-047 — Deux tables de routage, aucune garantie qu'elles disent la même chose
+
+**Type** tech · **Prio** P2 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-13
+
+Trouvé en retirant `claude-opus-4-8` du sélecteur ([T-046](#t-046--un-modèle-manquant-parce-que-la-liste-vivait-en-trois-exemplaires)) :
+le palier `moyen` pointait dessus, et il fallait le corriger **dans deux fichiers** —
+[router.ts](../sidecar/src/router.ts), qui route réellement, et
+[routerAdmin.ts](../ui/src/routerAdmin.ts), qui affiche les défauts et préremplit les réglages.
+Le commentaire de l'UI disait déjà « identique aux défauts codés en dur du sidecar » : un vœu,
+que rien ne vérifiait.
+
+Ce que coûterait l'oubli d'une des deux : l'écran des réglages annonce un modèle, le routeur
+en appelle un autre, et **rien ne le signale**. Même famille que T-016, où le sidecar
+annonçait une version fausse — la panne n'est pas le mauvais modèle, c'est l'écart muet entre
+ce qu'on montre et ce qu'on fait.
+
+**Corrigé** par [routage-defauts.mjs](../scripts/routage-defauts.mjs), sur le modèle du garde
+de version (« cinq déclarations, une vérité ») : il extrait `DEFAULT_ROUTING_TABLE` des deux
+fichiers et refuse le moindre écart, palier par palier, en nommant qui route et qui affiche.
+La lecture est textuelle et non par import — le module du sidecar tire un moteur entier
+derrière lui, et une comparaison de source ne peut pas exécuter de code au passage. Branché
+dans `npm run verif` et dans la CI ; 9 cas de test, dont la divergence exercée sur un faux
+dépôt et le dépôt réel vérifié.
+
+### T-046 — Un modèle manquant, parce que la liste vivait en trois exemplaires
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-13
+
+Constat utilisateur du 2026-08-13, capture à l'appui : « toujours pas d'opus 5 ». Le sélecteur
+de modèle propose `claude-fable-5`, `claude-sonnet-5`, `claude-opus-4-8` et `claude-haiku-4-5`
+— **`claude-opus-5` n'y est pas**, alors que le modèle est disponible et que c'est l'Opus
+courant.
+
+L'abonnement Claude n'expose aucun catalogue interrogeable : contrairement aux fournisseurs
+neutres, le CLI ne rend pas la liste des modèles auxquels l'abonnement donne droit. La liste
+est donc tenue à la main — ce qui est assumé. Ce qui ne l'était pas : elle était **recopiée
+dans trois fichiers**, [agentSidebarDroit.tsx](../ui/src/agentSidebarDroit.tsx) (sélecteur des
+projets), [ChatPage.tsx](../ui/src/ChatPage.tsx) (sélecteur du Chat) et
+[contextBus.ts](../ui/src/contextBus.ts) (table des fenêtres de contexte). Trois endroits à
+mettre à jour, aucun rappel : le modèle est sorti, personne n'a fait le tour.
+
+**Corrigé** par une liste unique,
+[modelesAbonnementClaude.ts](../ui/src/modelesAbonnementClaude.ts), dont les trois
+consommateurs dérivent — et `claude-opus-5` y est ajouté, avec une note par modèle affichée en
+infobulle du sélecteur. Cinq cas de test
+([modelesAbonnementClaude.test.ts](../ui/src/modelesAbonnementClaude.test.ts)) ; celui qui
+compte n'est pas « l'id est présent » mais **« chaque modèle de la liste a une fenêtre de
+contexte connue »**, car c'est la propriété qui traverse deux fichiers et que rien ne
+vérifiait. Un id à suffixe de date est refusé au passage : les identifiants de l'API sont
+complets tels quels, y accoler une date donne un 404 au premier tour.
+
+Suite décidée dans la foulée : `claude-opus-4-8` est **retiré** du sélecteur — même tarif
+qu'Opus 5 pour une génération de moins — et le palier `moyen` de la table de routage
+automatique passe donc à `claude-opus-5`, dans les deux fichiers qui la déclarent (c'est ce
+retrait qui a fait surgir [T-047](#t-047--deux-tables-de-routage-aucune-garantie-quelles-disent-la-même-chose)).
+Le palier `complexe` reste sur `claude-fable-5` : choix de coût, pas un oubli. Un fil déjà
+épinglé sur 4.8 continue de tourner et affiche son id — il ne peut simplement plus être
+resélectionné.
+
+### T-034 — Le cliquet de taille est rouge sur `master`
+
+**Type** tech · **Prio** P2 · **Statut** fait · **Créé** 2026-08-13 · **Clos** 2026-08-13
+
+Constaté le 2026-08-13 en lançant `npm run verif` avant de livrer T-033 :
+`node scripts/cliquet-taille.mjs` sort en **échec** sur `master` propre —
+[src-tauri/src/sidecar.rs](../src-tauri/src/sidecar.rs), 807 lignes, plafond 800. Le
+dépassement n'a rien à voir avec le ticket en cours (aucun `.rs` touché) : il est déjà là,
+poussé tel quel.
+
+Ce n'est pas la taille du fichier qui est le vrai défaut, c'est qu'un garde-fou rouge en
+permanence **cesse d'être un garde-fou** : la commande de vérification échoue toujours, on
+prend l'habitude de lire au-delà, et le jour où le cliquet signale une vraie dérive personne
+ne le distingue du bruit. Même mécanique que l'échec muet, à l'envers.
+
+À faire : découper `sidecar.rs` (la réponse attendue par le cliquet), ou consigner une
+dérogation explicite et datée dans `scripts/cliquet-taille.json` si la taille se justifie.
+Puis vérifier que `npm run verif` repasse au vert de bout en bout — c'est le seul état
+acceptable pour la commande qui garde la porte.
+
+**Dérogation posée le 2026-08-13** — `"src-tauri/src/sidecar.rs": 807` dans
+`scripts/cliquet-taille.json`, pour livrer la 0.3.1 sur une chaîne verte. Le fichier de
+référence est du JSON : il ne porte pas de commentaire, la date et le motif vivent donc ici.
+Ce n'était **pas** la clôture du ticket : la dérogation gèle la taille (le fichier ne peut
+plus que rétrécir) mais ne découpe rien.
+
+**Clos le 2026-08-13, par la bande.** En corrigeant [T-043](#t-043--tous-les-fournisseurs-en--erreur-réseau--sur-un-poste-dentreprise),
+le cliquet a refusé les 27 lignes que j'ajoutais à un fichier qui n'avait le droit que de
+maigrir. Plutôt que de relâcher son budget deux fois dans la même journée — ce qui aurait vidé
+le garde-fou de son sens — les deux modules de test sont sortis dans
+[src-tauri/src/sidecar/tests.rs](../src-tauri/src/sidecar/tests.rs) (`#[path]`, ils restent des
+tests unitaires du module). `sidecar.rs` passe de 807 à **794 lignes** : sous la limite, et
+donc HORS dérogation.
+
+Honnêteté sur ce qu'on a fait : c'est la coupe la plus franche, pas la plus profonde. Aucune
+logique n'a été redécoupée — seulement les tests, qui ne tenaient au reste que par `super`. Le
+fichier reste dense, mais il n'a plus de traitement de faveur, et c'est ce que le cliquet
+demandait.
 
 ### T-043 — Tous les fournisseurs en « erreur réseau » sur un poste d'entreprise
 

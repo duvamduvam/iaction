@@ -11,6 +11,7 @@ import {
   baseDeVariante,
   construireListe,
   editeurDe,
+  estAgentRechercheIntegree,
   estGratuit,
   FILTRE_INITIAL,
   grouperParEditeur,
@@ -240,5 +241,57 @@ describe("construireListe — recherche et tri", () => {
       "anthropic/claude-sonnet-5",
     );
     expect(horsFavoris(liste).map((m) => m.id)).toEqual(["meta-llama/llama-3.1-70b-instruct"]);
+  });
+});
+
+/*
+ * T-025 — les agents qui cherchent DÉJÀ par eux-mêmes, écartés quand R9 cherche
+ * pour eux.
+ *
+ * Le ticket a mesuré la panne : `gemini-pro-with-search` échoue 2 fois sur 6 à
+ * requête identique, là où le modèle brut réussit 6 fois sur 6. La recherche
+ * est faite deux fois et c'est la seconde qui casse. Ces cas verrouillent le
+ * filtre ET sa règle de non-perte.
+ */
+describe("agents à recherche intégrée (T-025)", () => {
+  const catalogue: ModelDetail[] = [
+    { id: "gemini-pro-with-search" },
+    { id: "gemini-3-pro" },
+    { id: "deepseek-v3" },
+  ];
+
+  it("reconnaît un agent à recherche intégrée par son id", () => {
+    expect(estAgentRechercheIntegree("gemini-pro-with-search")).toBe(true);
+    expect(estAgentRechercheIntegree("GEMINI-PRO-WITH-SEARCH")).toBe(true);
+    expect(estAgentRechercheIntegree("gemini-3-pro")).toBe(false);
+    // Ne pas mordre sur un id qui contiendrait « search » autrement.
+    expect(estAgentRechercheIntegree("searchgpt")).toBe(false);
+    expect(estAgentRechercheIntegree("deepsearch-v2")).toBe(false);
+  });
+
+  it("les laisse tous passer quand la recherche web est inactive", () => {
+    const liste = construireListe(catalogue, [], FILTRE_INITIAL, "");
+    expect(liste.total).toBe(3);
+    expect(liste.agentsRechercheMasques).toBe(0);
+  });
+
+  it("les écarte quand R9 est active, et le COMPTE au lieu de les escamoter", () => {
+    const liste = construireListe(catalogue, [], { ...FILTRE_INITIAL, rechercheWebActive: true }, "");
+    expect(liste.total).toBe(2);
+    expect(liste.agentsRechercheMasques).toBe(1);
+    expect(ordreAffichage(liste).map((m) => m.id)).not.toContain("gemini-pro-with-search");
+  });
+
+  it("ne fait JAMAIS disparaître le modèle sélectionné", () => {
+    // Sinon le sélecteur affiche « — » sur une conversation qui tourne très
+    // bien — même règle de non-perte que pour les variantes.
+    const liste = construireListe(
+      catalogue,
+      [],
+      { ...FILTRE_INITIAL, rechercheWebActive: true },
+      "gemini-pro-with-search",
+    );
+    expect(ordreAffichage(liste).map((m) => m.id)).toContain("gemini-pro-with-search");
+    expect(liste.agentsRechercheMasques).toBe(0);
   });
 });

@@ -4,6 +4,7 @@ pub mod demarrage;
 mod fs_browse;
 mod journal_coquille;
 mod open_external;
+mod reseau;
 mod secrets;
 mod sidecar;
 mod state_store;

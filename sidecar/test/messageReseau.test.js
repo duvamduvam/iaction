@@ -60,3 +60,45 @@ await lancer("ce qui n'est pas une Error ne fait pas tomber le journal", async (
   assert(messageReseau(null) === "erreur réseau: null");
   assert(typeof messageReseau({ code: "EPERM" }) === "string");
 });
+
+/*
+ * ── Corps d'erreur : une page web n'est pas un diagnostic (T-007) ────────
+ *
+ * Le 2026-08-08, `ollama.ps` a reçu 24 fois le 404 HTML d'une plateforme
+ * d'hébergement : l'adresse enregistrée pour ce fournisseur désignait un site
+ * web. Chaque occurrence recopiait deux kilo-octets de balises dans le journal
+ * — beaucoup de bruit pour un fait qui tient en une ligne.
+ */
+
+const { estPageHtml, estResumePageHtml, resumerCorpsHttp } = await import(moduleCompile("base.js"));
+
+const PAGE_404 = `<!DOCTYPE html><html><head><title>404: NOT_FOUND</title>${"<div>x</div>".repeat(400)}</head></html>`;
+
+await lancer("une page web reçue au lieu d'une API est résumée, pas recopiée", async () => {
+  const resume = resumerCorpsHttp(PAGE_404, "text/html; charset=utf-8");
+  assert(resume.includes("404: NOT_FOUND"), `le titre porte le diagnostic : ${resume}`);
+  assert(resume.includes(String(PAGE_404.length)), `la taille dit que quelque chose a répondu : ${resume}`);
+  assert(!resume.includes("<div>"), `aucune balise ne doit survivre : ${resume}`);
+  assert(resume.length < 100, `le résumé doit rester court, reçu ${resume.length} caractères`);
+  assert(estResumePageHtml(resume), "l'appelant doit pouvoir reconnaître le cas pour proposer un remède");
+});
+
+await lancer("l'en-tête suffit, la forme du corps aussi", async () => {
+  // Aucun des deux indices ne suffit seul : un serveur mal configuré peut
+  // taire son content-type, et un JSON peut contenir du HTML — mais pas dès
+  // son premier caractère.
+  assert(estPageHtml("<html><body>hop</body></html>", null), "forme du corps seule");
+  assert(estPageHtml("n'importe quoi", "text/html"), "en-tête seul");
+  assert(!estPageHtml('{"error":"<html> dans une chaîne"}', "application/json"), "un JSON n'est pas une page");
+});
+
+await lancer("un corps d'API en erreur passe intact, seulement borné", async () => {
+  const json = '{"error":{"message":"quota dépassé"}}';
+  assert(resumerCorpsHttp(json, "application/json") === json, "un petit JSON ne doit pas être touché");
+
+  const enorme = "x".repeat(5000);
+  const borne = resumerCorpsHttp(enorme, "application/json");
+  assert(borne.length < 2100, `un corps énorme reste borné, reçu ${borne.length}`);
+  assert(borne.endsWith("…"), "la troncature doit se voir");
+  assert(!estResumePageHtml(borne), "un corps tronqué n'est pas une page web");
+});

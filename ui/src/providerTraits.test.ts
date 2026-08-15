@@ -94,19 +94,34 @@ describe("bodyExtrasRecevable", () => {
 });
 
 describe("PROFILS_CONNUS", () => {
-  it("le préréglage Swiftask porte les quatre traits mesurés le 2026-08-10", () => {
+  it("le préréglage Swiftask porte les six traits mesurés (2026-08-10, puis T-036)", () => {
     const swiftask = PROFILS_CONNUS.find((p) => p.id === "swiftask");
     expect(swiftask?.traits).toEqual({
       catalogUrl: "https://graphql.swiftask.ai/public/bots",
       catalogShape: "slugs",
       usageTrustworthy: false,
+      // T-036 — `usage.cost` est une extension OpenRouter : Swiftask ne la
+      // sert pas, et aucun réglage ne l'y fera apparaître. Déclaré, donc, au
+      // lieu d'être compté comme une mesure manquante.
+      coutRemonte: false,
+      billing: "paid",
       bodyExtras: { stateless: true },
     });
   });
 
-  it("les profils standard n'ont AUCUN trait — un profil vide n'est pas un oubli", () => {
-    expect(PROFILS_CONNUS.find((p) => p.id === "openrouter")?.traits).toBeUndefined();
-    expect(PROFILS_CONNUS.find((p) => p.id === "ollama")?.traits).toBeUndefined();
+  it("les profils standard ne déclarent QUE leur facturation (T-023)", () => {
+    // L'invariant d'origine — « un profil vide n'est pas un profil oublié » —
+    // visait les traits de DIALECTE : OpenRouter et Ollama parlent le cas
+    // standard, et rien ne doit laisser croire l'inverse. La facturation, elle,
+    // n'est pas un dialecte : c'est un fait du fournisseur, et T-023 demande
+    // précisément qu'il soit déclaré au lieu d'être deviné sur son nom.
+    expect(PROFILS_CONNUS.find((p) => p.id === "openrouter")?.traits).toEqual({
+      billing: "paid",
+      // T-023 — la jauge de solde est un chemin déclaré, plus un nom de marque
+      // inscrit dans le protocole.
+      creditsPath: "credits",
+    });
+    expect(PROFILS_CONNUS.find((p) => p.id === "ollama")?.traits).toEqual({ billing: "free" });
   });
 
   it("chaque préréglage survit à sa propre validation", () => {
