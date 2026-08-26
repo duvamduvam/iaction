@@ -1042,7 +1042,7 @@ function parseClaudeUsageSnapshot(data: Record<string, unknown>): ClaudeUsageSna
   };
 }
 
-/** Crédits restants OpenRouter (montants en dollars). Rejette si clé absente/erreur réseau. */
+/** Crédits restants OpenRouter ($). `usageCredits` est une SONDE (T-055, doctrine T-007) : appelée en boucle par l'encart de conso, son refus est une réponse (pas de clé, hors ligne) et se journalise en `debug`, pas en `error`. */
 export interface OpenrouterUsage {
   totalCredits: number;
   totalUsage: number;
@@ -1050,7 +1050,7 @@ export interface OpenrouterUsage {
 }
 
 export async function usageCredits(providerId: string): Promise<OpenrouterUsage> {
-  const { done } = request("usage.credits", { providerId });
+  const { done } = request("usage.credits", { providerId }, { sonde: true });
   const data = await done;
   return {
     totalCredits: typeof data.totalCredits === "number" ? data.totalCredits : 0,

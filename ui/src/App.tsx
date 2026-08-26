@@ -31,8 +31,9 @@ import {
 import { initRoutingPush } from "./routerAdmin";
 import { tachesList, tachesReports } from "./tachesClient";
 import { stateRead, stateWrite } from "./stateClient";
-import { openTerminal, systemStats, type SystemStats } from "./systemClient";
-import { providersDejaPousses, subscribeProvidersPushed } from "./providersBus";
+import { openTerminal } from "./systemClient";
+import { SystemStatsWidget } from "./SystemStatsWidget";
+import { cleConfigureePour, providersDejaPousses, subscribeProvidersPushed } from "./providersBus";
 import { subscribeUsageChanged } from "./usageBus";
 import { useProjects } from "./useProjects";
 import { useProviders } from "./useProviders";
@@ -234,6 +235,9 @@ interface UsageCache {
 
 const USAGE_RETRY_DELAY_MS = 15_000;
 
+/** Seul fournisseur dont l'encart de conso lit le crédit (endpoint `/credits`). */
+const OPENROUTER_PROVIDER_ID = "openrouter";
+
 function UsageWidget() {
   const [claudeSnapshot, setClaudeSnapshot] = useState<ClaudeUsageSnapshot | null>(null);
   const [openrouterUsage, setOpenrouterUsage] = useState<OpenrouterUsage | null>(null);
@@ -308,7 +312,20 @@ function UsageWidget() {
       // ligne d'erreur à chaque démarrage pour une simple course. L'abonnement
       // ci-dessous relance dès que la poussée a lieu.
       if (!providersDejaPousses()) return;
-      usageCredits("openrouter")
+      // Aucune clé OpenRouter enregistrée : l'appel ne peut QUE répondre « clé
+      // API manquante ». Le retenter toutes les 15 s remplissait le journal
+      // d'erreurs pour une configuration parfaitement volontaire (l'utilisateur
+      // n'a simplement pas de compte OpenRouter). L'encart affiche le même
+      // « OR : — » qu'avant, et l'abonnement `providers.set` relancera tout
+      // seul la sonde à la seconde où une clé sera saisie.
+      if (!cleConfigureePour(OPENROUTER_PROVIDER_ID)) {
+        setOpenrouterUsage((prev) => {
+          if (!prev) setOpenrouterError(true);
+          return prev;
+        });
+        return;
+      }
+      usageCredits(OPENROUTER_PROVIDER_ID)
         .then((usage) => {
           if (cancelled) return;
           const nextRef = nextOpenrouterRef(cacheRef.openrouterRef ?? null, usage);
@@ -421,99 +438,6 @@ function UsageWidget() {
     <div className="usage-widget" title="Consommation">
       <ClaudeUsageBlock snapshot={claudeSnapshot} initializing={claudeInitializing} onInit={handleClaudeInit} />
       <OpenrouterUsageBlock usage={openrouterUsage} refPoint={openrouterRef} error={openrouterError} />
-    </div>
-  );
-}
-
-/* ---------- Sonde système (CPU / RAM / GPU) ---------- */
-
-const SYSTEM_STATS_INTERVAL_MS = 5000;
-
-function formatGb(mb: number): string {
-  return (mb / 1024).toFixed(1).replace(".", ",");
-}
-
-/**
- * Plage de remplissage de l'anneau de température : 30 °C (machine au repos)
- * = anneau vide, 100 °C (limite thermique) = anneau plein. Nécessaire parce
- * que `usageLevel` raisonne en POURCENTAGE : lui passer 72 °C bruts le ferait
- * conclure « ok » à 72 % alors que 72 °C est déjà chaud.
- */
-const TEMP_MIN_C = 30;
-const TEMP_MAX_C = 100;
-
-function tempPct(celsius: number): number {
-  return ((celsius - TEMP_MIN_C) / (TEMP_MAX_C - TEMP_MIN_C)) * 100;
-}
-
-/** Vue minimale de l'utilisation machine dans l'en-tête (poll 5 s). */
-function SystemStatsWidget() {
-  const [stats, setStats] = useState<SystemStats | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const tick = () => {
-      systemStats()
-        .then((s) => {
-          if (!cancelled) setStats(s);
-        })
-        .catch(() => {
-          /* sonde indisponible : l'encart reste vide */
-        });
-    };
-    tick();
-    const interval = setInterval(tick, SYSTEM_STATS_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
-
-  if (!stats) return null;
-  const ramPct =
-    stats.memTotalMb > 0 ? (stats.memUsedMb / stats.memTotalMb) * 100 : 0;
-  const ramDetail = `${formatGb(stats.memUsedMb)}/${formatGb(stats.memTotalMb)}G`;
-  const gpuMemDetail =
-    stats.gpuMemUsedMb !== null && stats.gpuMemTotalMb !== null
-      ? ` — mémoire ${formatGb(stats.gpuMemUsedMb)}/${formatGb(stats.gpuMemTotalMb)}G`
-      : "";
-  return (
-    <div className="system-stats" title="Utilisation machine (rafraîchie toutes les 5 s)">
-      {stats.cpuPct !== null && (
-        <Donut label="CPU" pct={stats.cpuPct} title={`Processeur : ${Math.round(stats.cpuPct)} %`} />
-      )}
-      {stats.cpuTempC !== null && (
-        <Donut
-          label="T.CPU"
-          pct={tempPct(stats.cpuTempC)}
-          text={`${Math.round(stats.cpuTempC)}°`}
-          title={`Température processeur : ${Math.round(stats.cpuTempC)} °C`}
-        />
-      )}
-      <Donut label="RAM" pct={ramPct} title={`Mémoire : ${ramDetail}`} />
-      {stats.ramTempC !== null && (
-        <Donut
-          label="T.RAM"
-          pct={tempPct(stats.ramTempC)}
-          text={`${Math.round(stats.ramTempC)}°`}
-          title={`Température mémoire : ${Math.round(stats.ramTempC)} °C`}
-        />
-      )}
-      {stats.gpuPct !== null && (
-        <Donut
-          label="GPU"
-          pct={stats.gpuPct}
-          title={`Carte graphique : ${Math.round(stats.gpuPct)} %${gpuMemDetail}`}
-        />
-      )}
-      {stats.gpuTempC !== null && (
-        <Donut
-          label="T.GPU"
-          pct={tempPct(stats.gpuTempC)}
-          text={`${Math.round(stats.gpuTempC)}°`}
-          title={`Température carte graphique : ${Math.round(stats.gpuTempC)} °C`}
-        />
-      )}
     </div>
   );
 }

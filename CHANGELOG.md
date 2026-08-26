@@ -9,6 +9,28 @@ versions selon [SemVer](https://semver.org/lang/fr/).
 > Les entrées commencent à la 0.3.0 ; les versions antérieures ne sont pas
 > reconstituées après coup.
 
+## [0.4.1] — 2026-08-26
+
+### Corrigé
+
+- **Windows : plus de console noire qui clignote.** Une fenêtre de terminal
+  apparaissait et se refermait toutes les cinq secondes, en boucle, tant que
+  l'application tournait. La sonde GPU relançait `nvidia-smi` — un programme
+  console, à qui Windows alloue d'office une fenêtre — sans la masquer.
+  `CREATE_NO_WINDOW` la supprime ; la mesure, elle, continue à l'identique. Le
+  masquage n'était plus une ligne perdue au fond du lancement du moteur mais une
+  fonction partagée, pour que le prochain process console n'ait pas à la
+  redécouvrir. Au passage, une machine **sans** carte NVIDIA cesse de relancer un
+  binaire absent toutes les cinq secondes : le premier « introuvable » suffit
+  (T-054).
+- **Le journal cesse (encore) de crier au loup.** Sans clé OpenRouter, l'encart
+  de consommation réclamait le crédit toutes les quinze secondes et journalisait
+  chaque refus en `error` — pour une configuration parfaitement volontaire. Le
+  statut « clé enregistrée », déjà connu, voyage désormais avec la table des
+  fournisseurs : on n'interroge plus qui va refuser, et la sonde repart d'elle
+  même dès qu'une clé est saisie. La clé, elle, ne quitte pas le trousseau
+  (T-055).
+
 ## [0.4.0] — 2026-08-15
 
 ### Ajouté
