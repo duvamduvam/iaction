@@ -497,6 +497,7 @@ plus coûteuse.
 | ID    | Type | Prio | Statut | Titre |
 |-------|------|------|--------|-------|
 | T-056 | feat | P2   | fait   | Rien ne disait qu'une version existait : la page Système compare et ouvre la release, sans rien installer |
+| T-057 | feat | P3   | fait   | Panneaux latéraux non repliables, et « Arrêter » côte à côte avec « Envoyer » : deux largeurs prises à la saisie |
 | T-054 | bug  | P1   | fait   | Windows : une console noire clignotait toutes les 5 s — la sonde GPU relançait `nvidia-smi` sans masquer sa fenêtre |
 | T-055 | bug  | P2   | fait   | Sans clé OpenRouter, l'encart de conso réclamait le crédit toutes les 15 s et journalisait le refus en `error` |
 | T-052 | bug  | P2   | fait   | Les tours de projet partaient avec un prompt système VIDE : le preset Claude Code est demandé explicitement |
@@ -548,6 +549,39 @@ plus coûteuse.
 | T-001 | feat | P3   | fait   | Page « Tickets » dans l'app |
 
 ---
+
+### T-057 — Gagner de la place : panneaux repliables, et le bloc d'envoi empilé
+
+**Type** feat · **Prio** P3 · **Statut** fait · **Créé** 2026-08-26 · **Clos** 2026-08-26
+
+Deux demandes du même jour, et le même motif : rendre à la zone de travail la largeur que
+l'habillage lui prend.
+
+**Les panneaux latéraux se replient, chacun de son côté.** Les sections d'un panneau se
+repliaient déjà une à une (`SidebarSection`), mais le panneau lui-même occupait ses 300 pixels
+quoi qu'il arrive. Chaque panneau porte
+maintenant une poignée verticale et sa propre clé de persistance : replier celui de gauche ne
+touche pas celui de droite, et la préférence survit au redémarrage.
+
+Replié, le panneau n'est **pas** masqué en largeur nulle : il n'est plus rendu du tout — ses
+listes et ses champs cessent de coûter quoi que ce soit. En revanche la poignée, elle, ne
+disparaît jamais. C'est la seule règle non négociable du ticket : sans elle, « replier »
+deviendrait « perdre », et il faudrait vider le `localStorage` pour récupérer son panneau.
+
+**« Arrêter » passe au-dessus d'« Envoyer »** pendant un tour, au lieu d'être à côté. Deux
+boutons empilés ne mangent qu'une seule largeur de bouton. Ce n'est pas une idée neuve ici :
+c'est exactement ce que fait déjà la colonne d'icônes du composeur (trombone, micro, mode
+conversation), dont le commentaire dit mot pour mot « toute la place gagnée revient à la zone
+de saisie ». L'ordre du DOM suit l'ordre visuel — donc la tabulation aussi ; empiler à l'écran
+en gardant l'ancien ordre au clavier aurait été un piège pour qui n'utilise pas la souris.
+
+**Le cliquet a dicté la forme du correctif.** `AgentPage.tsx` (2896) et `ChatPage.tsx` (2631)
+sont à leur budget au caractère près : impossible d'y ajouter une ligne. D'où
+`SidebarRetractable`, qui encapsule l'`<aside>` et permet de remplacer une balise ouvrante par
+une balise ouvrante, et l'ajout du composant dans `SidebarSection.tsx` — déjà importé par les
+deux pages, donc pas même une ligne d'`import` en plus. Bilan : zéro ligne ajoutée aux deux
+fichiers dieux, toute la mécanique dans un module de 165 lignes. La contrainte a produit un
+meilleur découpage que celui qu'on aurait spontanément écrit.
 
 ### T-056 — Rien ne dit qu'une version plus récente existe
 

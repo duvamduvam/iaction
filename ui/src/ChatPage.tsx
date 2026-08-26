@@ -50,7 +50,7 @@ import { useFavorisModeles } from "./useFavorisModeles";
 import { ModelPicker, type OptionEpinglee } from "./ModelPicker";
 import { OllamaPanel } from "./OllamaPanel";
 import { capSessions, deriveTitleFromText, formatRelativeDate, newSessionMeta, sortByRecent } from "./sessionStore";
-import { SidebarSection } from "./SidebarSection";
+import { SidebarRetractable, SidebarSection } from "./SidebarSection";
 import { useComposerLiveDraft } from "./useComposerLiveDraft";
 import { useComposerUndo } from "./useComposerUndo";
 import { useRovingFocus } from "./useRovingFocus";
@@ -2133,7 +2133,7 @@ export const ChatPage = forwardRef<
   return (
     <div className="page chat-page agent-page">
       <div className="agent-layout">
-        <aside className="agent-sidebar agent-sidebar--left">
+        <SidebarRetractable id="chat-gauche" cote="left" libelle="de gauche">
           <SidebarSection id="chat-llm" title="LLM" defaultOpen={!isCompactViewport}>
             {/* Champs de config verrouillés pendant le streaming de la
                 conversation ACTIVE seulement : changer de fournisseur/modèle
@@ -2341,7 +2341,7 @@ export const ChatPage = forwardRef<
               </ul>
             )}
           </SidebarSection>
-        </aside>
+        </SidebarRetractable>
 
         <div className="agent-main__content">
           {/* Barre d'onglets de conversations — mêmes classes que la page
@@ -2551,9 +2551,12 @@ export const ChatPage = forwardRef<
                     : "Écrivez un message… (Entrée pour envoyer, Maj+Entrée pour un saut de ligne)"
                 }
               />
-              <div className="actions">
+              <div className="actions chat-composer__envoi">
                 {streaming ? (
                   <>
+                    <button type="button" className="btn btn--ghost" onClick={() => void handleAbort()}>
+                      Arrêter
+                    </button>
                     {/* Même libellé qu'au repos (choix utilisateur 2026-08-04) :
                         la mise en file est un détail d'exécution, dit dans
                         l'infobulle et le placeholder — pas un bouton à part. */}
@@ -2565,9 +2568,6 @@ export const ChatPage = forwardRef<
                       title="Mettre en file : envoyé automatiquement à la fin du tour en cours"
                     >
                       Envoyer
-                    </button>
-                    <button type="button" className="btn btn--ghost" onClick={() => void handleAbort()}>
-                      Arrêter
                     </button>
                   </>
                 ) : (

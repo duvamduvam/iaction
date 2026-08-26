@@ -120,7 +120,7 @@ import {
   type SlashCommandInfo,
 } from "./sidecar";
 import { sortByRecent } from "./sessionStore";
-import { SidebarSection } from "./SidebarSection";
+import { SidebarRetractable, SidebarSection } from "./SidebarSection";
 import { useComposerLiveDraft } from "./useComposerLiveDraft";
 import { useComposerUndo } from "./useComposerUndo";
 import { useRovingFocus } from "./useRovingFocus";
@@ -2337,7 +2337,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   return (
     <div className="page agent-page">
       <div className="agent-layout">
-        <aside className="agent-sidebar agent-sidebar--left">
+        <SidebarRetractable id="projets-gauche" cote="left" libelle="de gauche">
           <SidebarSection id="project" title="Projet" defaultOpen={!isCompactViewport}>
             <div className="field">
               <label htmlFor="agent-project">Projet</label>
@@ -2413,7 +2413,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
               />
             </div>
           </SidebarSection>
-        </aside>
+        </SidebarRetractable>
 
         <div className="agent-main__content">
           <div
@@ -2711,9 +2711,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                             : "Décrivez une tâche pour l'agent… (Entrée pour envoyer, Maj+Entrée pour un saut de ligne)"
                       }
                     />
-                    <div className="actions">
+                    <div className="actions chat-composer__envoi">
                       {streaming ? (
                         <>
+                          <button type="button" className="btn btn--ghost" onClick={() => void handleAbort()}>
+                            Arrêter
+                          </button>
                           {/* Un SEUL bouton d'envoi pendant un tour (choix
                               utilisateur 2026-08-04) : handleSend glisse la
                               demande dans le tour en cours quand c'est possible
@@ -2731,9 +2734,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                             }
                           >
                             Envoyer
-                          </button>
-                          <button type="button" className="btn btn--ghost" onClick={() => void handleAbort()}>
-                            Arrêter
                           </button>
                         </>
                       ) : (
@@ -2798,7 +2798,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
           </div>
         </div>
 
-        <aside className="agent-sidebar agent-sidebar--right">
+        <SidebarRetractable id="projets-droite" cote="right" libelle="des sessions">
           <SessionsSection
             sessions={sessions}
             sortedSessions={sortedSessions}
@@ -2879,7 +2879,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
               onServerCount={setMcpServerCount}
             />
           </SidebarSection>
-        </aside>
+        </SidebarRetractable>
       </div>
 
       {currentPermission && (
