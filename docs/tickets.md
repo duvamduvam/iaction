@@ -496,6 +496,7 @@ plus coûteuse.
 
 | ID    | Type | Prio | Statut | Titre |
 |-------|------|------|--------|-------|
+| T-056 | feat | P2   | fait   | Rien ne disait qu'une version existait : la page Système compare et ouvre la release, sans rien installer |
 | T-054 | bug  | P1   | fait   | Windows : une console noire clignotait toutes les 5 s — la sonde GPU relançait `nvidia-smi` sans masquer sa fenêtre |
 | T-055 | bug  | P2   | fait   | Sans clé OpenRouter, l'encart de conso réclamait le crédit toutes les 15 s et journalisait le refus en `error` |
 | T-052 | bug  | P2   | fait   | Les tours de projet partaient avec un prompt système VIDE : le preset Claude Code est demandé explicitement |
@@ -547,6 +548,46 @@ plus coûteuse.
 | T-001 | feat | P3   | fait   | Page « Tickets » dans l'app |
 
 ---
+
+### T-056 — Rien ne dit qu'une version plus récente existe
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Créé** 2026-08-26 · **Clos** 2026-08-26
+
+Demandé le 2026-08-26, en livrant [T-054](#t-054--une-console-noire-clignote-toutes-les-5-secondes-sous-windows) :
+« j'aimerais bien une option mise à jour dans l'installeur Windows ». L'installeur, lui, faisait
+déjà le travail — le gabarit NSIS embarqué porte la page « mettre à jour / réinstaller » de
+Tauri, qui détecte l'installation existante, compare les versions et met à jour en place. Ce
+qui manquait n'était pas la mise à jour : c'était de **savoir qu'elle existe**. Il fallait aller
+voir le dépôt.
+
+La page Système gagne donc un panneau qui compare la version installée à la dernière release
+publiée, et ouvre la page de téléchargement dans le navigateur déclaré (le registre
+d'applications de [T-049](#t-049--un-html-cité-dans-un-rapport-ne-souvre-pas-dans-firefox), pas celui du système).
+
+**Trois limites qui sont le ticket, pas des raccourcis.**
+
+1. **La sonde ne télécharge ni n'installe rien.** L'auto-update complet
+   (`tauri-plugin-updater`) impose une paire de clés de signature, une privée en secret de CI,
+   et des artefacts signés à chaque release — c'est-à-dire une application capable d'installer
+   du code venu du réseau. Ça se décide, ça ne se glisse pas dans un correctif de confort. La
+   demande a été explicitement scindée en deux temps ; ceci est le premier.
+2. **La sonde vit côté sidecar, pas dans la webview.** Un `fetch` depuis l'interface partirait
+   sans proxy ni autorité de certification — le mode de panne exact de
+   [T-043](#t-043--tous-les-fournisseurs-en--erreur-réseau--sur-un-poste-dentreprise).
+   Sur un poste à egress contrôlé, elle expirerait en silence et annoncerait « à jour » à une
+   machine qui ne l'est pas. Un faux « tout va bien » est pire que pas de sonde du tout.
+3. **Un numéro illisible fait taire la sonde.** Ni invitation à réinstaller, ni bandeau : la
+   comparaison se fait champ par champ en nombres (le tri alphabétique classerait `0.10.0`
+   avant `0.9.0`), et rend faux dès qu'un des deux côtés n'est pas un `X.Y.Z`. Le repli
+   « inconnue » du sidecar (T-016) tombe dans ce cas, et c'est voulu.
+
+Aucun sondage périodique : une vérification au montage de la page, une autre sur demande. Deux
+tickets clos le matin même — T-054 et T-055 — l'ont été pour avoir sondé trop souvent ; il
+aurait été singulier d'introduire la troisième boucle dans la journée.
+
+`PingPanel` sort de `SystemPage.tsx` au passage : la page était à son budget de taille au
+caractère près, et le cliquet a fait exactement son travail — obliger à sortir quelque chose
+plutôt que laisser un fichier dieu grossir d'un panneau de plus.
 
 ### T-054 — Une console noire clignote toutes les 5 secondes sous Windows
 
@@ -608,7 +649,7 @@ error … "clé API manquante pour openrouter"   (method: usage.credits)
 
 Le poste n'a pas de compte OpenRouter. Ce n'est donc pas une panne — c'est une configuration
 parfaitement volontaire, et l'application la journalisait en `error`, indéfiniment. Même
-maladie que [T-007](#t-007--ollamaps-répondait-une-page-web--une-sonde-dont-léchec-est-nominal-criait-error-140-fois),
+maladie que [T-007](#t-007--ollamaps-répond-404-avec-une-page-web),
 qui avait déjà noyé le journal sous 140 lignes attendues : un journal qui crie à chaque
 réponse normale n'est plus lisible, et c'est la VRAIE panne qui s'y perd.
 
