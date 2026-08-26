@@ -3,7 +3,8 @@
  * l'application par criticité, lues dans le journal persistant du sidecar
  * (voir docs/protocol.md § « Méthodes L1 — journal applicatif (logs) » et
  * docs/etude-logs.md § 2.6). En dessous, les panneaux de debug hérités du
- * Lot 0 (ping, stream d'écho brut) et le flux brut « Logs sidecar », replié :
+ * Lot 0 (ping — dans PingPanel.tsx —, stream d'écho brut), le panneau « Mise à
+ * jour » (T-056) et le flux brut « Logs sidecar », replié :
  * utile au debug vif, ce n'est plus la vue principale.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -33,6 +34,8 @@ import {
   type TicketStatut,
 } from "./ticketsClient";
 import { tachesReportRead, tachesReports, type TacheReportInfo } from "./tachesClient";
+import { MajPanel } from "./MajPanel";
+import { PingPanel } from "./PingPanel";
 import { useRovingFocus } from "./useRovingFocus";
 
 const MAX_LOG_LINES = 200;
@@ -40,56 +43,6 @@ const MAX_LOG_LINES = 200;
 const DEFAULT_STREAM_TEXT =
   "Bienvenue dans IAction. Ce texte est renvoyé mot à mot par le sidecar, " +
   "comme le ferait un modèle de langage en train de générer sa réponse.";
-
-/* ---------- Panneau Ping ---------- */
-
-type PingState = "idle" | "pending" | "error";
-
-function PingPanel() {
-  const [state, setState] = useState<PingState>("idle");
-  const [latencyMs, setLatencyMs] = useState<number | null>(null);
-  const [errorMessage, setErrorMessage] = useState("");
-
-  async function handlePing() {
-    setState("pending");
-    setErrorMessage("");
-    const startedAt = Date.now();
-    try {
-      const { done } = request("ping", {});
-      await done;
-      setLatencyMs(Date.now() - startedAt);
-      setState("idle");
-    } catch (err) {
-      setState("error");
-      setErrorMessage(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  let resultClass = "result-line";
-  let resultText = "Aucun ping envoyé pour l'instant.";
-  if (state === "error") {
-    resultClass += " result-line--error";
-    resultText = `Erreur : ${errorMessage}`;
-  } else if (latencyMs !== null) {
-    resultClass += " result-line--ok";
-    resultText = `Pong reçu en ${latencyMs} ms`;
-  }
-
-  return (
-    <section className="panel">
-      <h2 className="panel__title">Ping</h2>
-      <p className="empty-hint">
-        Envoie une requête <code>ping</code> minimale et mesure le temps jusqu'au <code>done</code>.
-      </p>
-      <div className="actions">
-        <button className="btn" onClick={handlePing} disabled={state === "pending"}>
-          {state === "pending" ? "Envoi…" : "Envoyer un ping"}
-        </button>
-      </div>
-      <div className={resultClass}>{resultText}</div>
-    </section>
-  );
-}
 
 /* ---------- Panneau Stream ---------- */
 
@@ -1138,7 +1091,7 @@ export function SystemPage() {
         <h1 className="page__title">Système</h1>
         <p className="empty-hint">
           Journal applicatif (erreurs par criticité, historisé sur ce poste), backlog des tickets du projet, et
-          panneaux de debug bas niveau : ping, écho streamé et flux brut du sidecar.
+          panneau de mise à jour, et panneaux de debug bas niveau : ping, écho streamé et flux brut du sidecar.
         </p>
       </div>
       {/* Le journal passe en tête : c'est la vue principale de la page. */}
@@ -1146,6 +1099,9 @@ export function SystemPage() {
       {/* Puis le backlog : on regarde les erreurs, puis ce qui est déjà connu
           et tracé — la suite logique de la lecture du journal. */}
       <TicketsPanel />
+      {/* La mise à jour vient après le backlog : « ce qui ne va pas », puis
+          « ce qui est déjà corrigé ailleurs ». */}
+      <MajPanel />
       <main className="panels">
         <PingPanel />
         <StreamPanel />

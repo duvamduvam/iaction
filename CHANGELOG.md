@@ -9,6 +9,22 @@ versions selon [SemVer](https://semver.org/lang/fr/).
 > Les entrées commencent à la 0.3.0 ; les versions antérieures ne sont pas
 > reconstituées après coup.
 
+## [0.5.0] — 2026-08-26
+
+### Ajouté
+
+- **L'application dit qu'une version existe.** Il fallait aller voir le dépôt :
+  la page Système compare maintenant la version installée à la dernière
+  publiée, montre les nouveautés, et ouvre la page de téléchargement dans le
+  navigateur déclaré. L'installeur Windows, lui, savait déjà mettre à jour en
+  place — c'est la nouvelle qui manquait, pas la mise à jour. **Rien n'est
+  téléchargé ni installé automatiquement** : l'installation reste un geste de
+  l'utilisateur, et le jour où l'application s'installera seule, ce sera une
+  décision explicite avec des clés de signature. La sonde interroge par le
+  moteur, donc à travers le proxy et l'autorité déclarés — sans quoi un poste
+  d'entreprise s'entendrait dire « à jour » sans que rien n'ait été vérifié
+  (T-056).
+
 ## [0.4.1] — 2026-08-26
 
 ### Corrigé

@@ -46,6 +46,34 @@ Réponses corrélées par `id` :
 | `ping` | `{}` | répond immédiatement `done` avec `data: {pong: true}` |
 | `stream.echo` | `{text: string, delayMs?: number}` (delayMs défaut 80, borné 0–1000) | découpe `text` en mots, émet un `chunk` `{text: "mot "}` par mot avec `delayMs` entre chaque, puis `done`. Simule un stream de tokens LLM. `text` manquant/vide → `error`. |
 
+## Méthode `maj.verifier` — une version plus récente est-elle publiée ?
+
+| method | params | comportement |
+|---|---|---|
+| `maj.verifier` | `{}` | lit la dernière release publiée et la compare à la version du sidecar. `done` avec `{courante, derniere, disponible, url, notes}`. Réseau injoignable, réponse de forme inconnue, HTTP non-2xx → `error`. |
+
+- `courante` : la version que le sidecar lit dans son `package.json` (T-016) —
+  `"inconnue"` si elle est illisible. Passée en argument par `index.ts`, jamais
+  relue par le module : deux lectures de la même vérité finissent par diverger.
+- `derniere` : `tag_name` de la release, débarrassé du `v` de l'étiquette
+  (`v0.4.1` → `0.4.1`).
+- `disponible` : vrai UNIQUEMENT si `derniere` est strictement plus récente,
+  comparée champ par champ en nombres (`0.10.0` > `0.9.0`, que le tri
+  alphabétique inverserait). **Règle : un numéro illisible d'un côté ou de
+  l'autre rend `false`** — une sonde qui ne sait pas comparer se tait plutôt
+  que d'inviter à réinstaller. Une `derniere` plus ANCIENNE rend `false` aussi
+  (construction locale en avance sur la release).
+- `url` : page de la release, `null` quand `disponible` est faux. `notes` : le
+  corps de la release, borné à 4000 caractères.
+
+Deux limites qui valent contrat. **La sonde ne télécharge rien et n'installe
+rien** : la mise à jour reste un geste de l'utilisateur, exécuté par
+l'installeur NSIS qui sait déjà mettre à jour en place. **Elle vit côté
+sidecar, pas dans la webview** : un `fetch` depuis l'interface ne franchirait
+ni le proxy ni l'autorité déclarés en Configuration → Réseau (T-043, T-045), et
+annoncerait « à jour » à un poste qui ne l'est pas. Côté interface c'est une
+SONDE au sens de T-007 — son échec se journalise en `debug`.
+
 ## Méthodes Lot 1 — moteur neutre (chat OpenAI-compatible)
 
 Le sidecar héberge le **moteur neutre** : un client streaming vers des endpoints

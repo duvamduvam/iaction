@@ -79,6 +79,7 @@ import { handleTachesTimerApply, handleTachesTimerRemove, handleTachesTimerStatu
 import { handleTicketsList } from "./tickets.js";
 import { handleSpeechConfigure, handleSpeechSynthesize, handleSpeechTranscribe } from "./speech.js";
 import { signalerPeremption } from "./peremption.js";
+import { handleMajVerifier } from "./maj.js";
 
 /**
  * T-016 — la version est LUE, plus recopiée.
@@ -187,6 +188,12 @@ async function dispatch(
     switch (method) {
       case "ping":
         await handlePing(id);
+        break;
+      // La version courante est passée EN ARGUMENT plutôt que relue par le
+      // module : `VERSION` est déjà la seule vérité du sidecar (T-016), et
+      // deux lectures du même package.json finiraient par diverger.
+      case "maj.verifier":
+        await handleMajVerifier(id, VERSION, engineEmitter);
         break;
       case "stream.echo":
         await handleStreamEcho(id, params);
