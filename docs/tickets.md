@@ -496,6 +496,8 @@ plus coûteuse.
 
 | ID    | Type | Prio | Statut | Titre |
 |-------|------|------|--------|-------|
+| T-054 | bug  | P1   | fait   | Windows : une console noire clignotait toutes les 5 s — la sonde GPU relançait `nvidia-smi` sans masquer sa fenêtre |
+| T-055 | bug  | P2   | fait   | Sans clé OpenRouter, l'encart de conso réclamait le crédit toutes les 15 s et journalisait le refus en `error` |
 | T-052 | bug  | P2   | fait   | Les tours de projet partaient avec un prompt système VIDE : le preset Claude Code est demandé explicitement |
 | T-012 | tech | P1   | fait   | Dependabot : les quatre paquets réellement livrés sont montés, le reste ne part pas dans le produit |
 | T-045 | tech | P2   | fait   | Réseau d'entreprise : un encart pour saisir proxy et autorité, et le PAC dit non lu |
@@ -543,6 +545,89 @@ plus coûteuse.
 | T-003 | bug  | P1   | fait   | L'allowlist `tools:` d'un agent n'est pas appliquée (moteur claude) |
 | T-002 | feat | P3   | fait   | Lien « dernier rapport qualité » dans la page Système |
 | T-001 | feat | P3   | fait   | Page « Tickets » dans l'app |
+
+---
+
+### T-054 — Une console noire clignote toutes les 5 secondes sous Windows
+
+**Type** bug · **Prio** P1 · **Statut** fait · **Créé** 2026-08-26 · **Clos** 2026-08-26
+
+Signalé le 2026-08-26 depuis un poste Windows 11 22621 (0.4.0 installée, RTX 4060 Laptop) :
+une fenêtre de console noire apparaît et se referme aussitôt, en boucle, tant qu'IAction
+tourne. Le rapport ne s'est pas arrêté au symptôme — il apporte la preuve, et elle est nette.
+Traçage des créations de process sur 20 secondes :
+
+```
+=== Parents de nvidia-smi capturés (20 s) ===
+   5x  iaction.exe | C:\Users\utilisateur\AppData\Local\IAction\iaction.exe
+```
+
+Cinq `nvidia-smi.exe` en vingt secondes, tous enfants d'`iaction.exe`, et autant de
+`conhost.exe` créés dans la foulée. C'est ce conhost qui est la fenêtre visible.
+
+La cause : `nvidia-smi.exe` est un programme **console**. Lancé depuis une application
+graphique, Windows lui alloue d'office une console — la même mécanique que celle déjà
+rencontrée pour `node.exe` au premier lancement Windows de la 0.1.1, où la fenêtre du sidecar
+restait affichée toute la session. Le drapeau `CREATE_NO_WINDOW` la supprime, et rien d'autre :
+la sortie de `nvidia-smi` reste capturée par `output()`, la sonde continue de mesurer.
+
+Le correctif ne se contente pas de poser le drapeau à l'endroit qui manquait, il **supprime la
+raison pour laquelle il pouvait manquer** : le masquage était écrit en dur au milieu de
+`commande_sidecar`, invisible depuis `system_probe.rs`. Il devient `hide_console_window()` dans
+`open_external.rs`, aux côtés de `prepare_detached()` — le module où vit déjà l'hygiène de
+spawn partagée. Le prochain process console lancé par la coquille trouvera la fonction plutôt
+que d'avoir à redécouvrir la constante.
+
+Deuxième défaut, révélé par le même rapport : sur une machine **sans** carte NVIDIA — la
+majorité des postes — la sonde tentait quand même de lancer un binaire absent toutes les cinq
+secondes, pour le même verdict à chaque fois. Un pilote n'apparaît pas en cours de session :
+l'échec de spawn en `NotFound` verrouille désormais la sonde pour de bon. Le verrou ne se pose
+**que** sur `NotFound` : un `nvidia-smi` présent mais en échec (pilote qui se recharge, carte
+occupée) reste réinterrogé, la sonde doit se rétablir toute seule.
+
+Le rapport suggérait aussi d'espacer le sondage (5 s → 15-30 s) et de rendre la surveillance
+GPU désactivable. Les deux sont écartés ici, et c'est un choix, pas un oubli : la fenêtre
+supprimée, il ne reste qu'un process court toutes les cinq secondes, ce qui est le prix normal
+d'une jauge vivante ; et un réglage pour éteindre une sonde devenue silencieuse n'aurait plus
+de client. Si le coût CPU se mesure un jour, il fera son propre ticket, avec son chiffre.
+
+Rien dans `logs/app.jsonl` ne mentionnait `nvidia` : la sonde GPU vit entièrement côté Rust et
+ne journalise pas. Le diagnostic a dû passer par le traçage de process — c'est une limite
+d'observabilité constatée, pas corrigée ici.
+
+### T-055 — Le crédit OpenRouter réclamé en boucle alors qu'aucune clé n'est configurée
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-08-26 · **Clos** 2026-08-26
+
+Relevé en annexe du rapport de [T-054](#t-054--une-console-noire-clignote-toutes-les-5-secondes-sous-windows) :
+`logs/app.jsonl` porte, toutes les quinze secondes, une ligne
+
+```
+error … "clé API manquante pour openrouter"   (method: usage.credits)
+```
+
+Le poste n'a pas de compte OpenRouter. Ce n'est donc pas une panne — c'est une configuration
+parfaitement volontaire, et l'application la journalisait en `error`, indéfiniment. Même
+maladie que [T-007](#t-007--ollamaps-répondait-une-page-web--une-sonde-dont-léchec-est-nominal-criait-error-140-fois),
+qui avait déjà noyé le journal sous 140 lignes attendues : un journal qui crie à chaque
+réponse normale n'est plus lisible, et c'est la VRAIE panne qui s'y perd.
+
+Deux causes, deux correctifs :
+
+1. **On demandait ce qu'on savait déjà.** `pushProviders` connaît, fournisseur par fournisseur,
+   si une clé est enregistrée — il rend ce booléen depuis toujours, mais seule la page
+   Configuration le lisait. Il voyage maintenant avec `notifyProvidersPushed()` sur le bus des
+   fournisseurs (`cleConfigureePour()`), et l'encart de conso s'abstient d'interroger un
+   fournisseur dont il sait qu'il refusera. **Le statut seul, jamais la valeur** : la clé ne
+   quitte pas le trousseau. Rien ne change à l'écran — l'encart affichait déjà « OR : — », avec
+   l'infobulle qui dit « aucune clé configurée, ou erreur réseau » — et la sonde repart d'elle
+   même à la seconde où une clé est saisie, l'abonnement `providers.set` étant déjà branché.
+2. **L'échec restant est une réponse.** Hors ligne, endpoint indisponible : `usage.credits` est
+   une SONDE au sens de T-007, appelée en boucle, dont le refus renseigne. Elle passe en
+   `sonde: true` et sa ligne descend en `debug`. Rien n'est tu — la ligne existe toujours.
+
+La boucle de relance de 15 s, elle, n'est pas touchée : elle sert au relevé d'abonnement Claude,
+qui a de bonnes raisons de retenter.
 
 ---
 

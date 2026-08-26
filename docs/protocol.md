@@ -2622,6 +2622,12 @@ Persistance d'état UI par clé (conversations par projet, etc.) dans
   hors Linux, ou faute de matériel de mesure (l'absence de capteur de
   barrette est le cas courant), et l'indicateur n'est alors pas affiché.
   Jamais d'erreur : les champs indisponibles sont null/0.
+  Deux règles portent sur le LANCEMENT de `nvidia-smi`, et elles valent
+  contrat (T-054) : il est lancé **sans fenêtre de console**
+  (`CREATE_NO_WINDOW` sous Windows — sans quoi la sonde fait clignoter un
+  terminal à chaque appel), et un binaire **introuvable** verrouille la sonde
+  pour la session (les champs GPU restent null, plus aucun process n'est
+  lancé). Un `nvidia-smi` présent mais en échec, lui, reste réinterrogé.
 
 ## Commandes Tauri hors relais (Lot 1)
 

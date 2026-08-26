@@ -12,6 +12,7 @@ type ProvidersPushedListener = () => void;
 
 const listeners = new Set<ProvidersPushedListener>();
 let dejaPousses = false;
+let cleParFournisseur: Record<string, boolean> = {};
 
 /**
  * La table a-t-elle DÉJÀ été poussée au moins une fois ?
@@ -25,8 +26,28 @@ export function providersDejaPousses(): boolean {
   return dejaPousses;
 }
 
-export function notifyProvidersPushed(): void {
+/**
+ * Une clé API est-elle enregistrée pour ce fournisseur ?
+ *
+ * Statut seul, JAMAIS la valeur : `pushProviders` rend déjà ce booléen par
+ * fournisseur, la clé, elle, ne quitte pas le trousseau.
+ *
+ * Sert à ne pas interroger un fournisseur dont on sait qu'il refusera. Le
+ * 2026-08-26, `app.jsonl` portait une ligne `error` toutes les 15 secondes —
+ * « clé API manquante pour openrouter », méthode `usage.credits` — parce que
+ * l'encart de conso relançait indéfiniment un appel qui ne POUVAIT pas
+ * aboutir : sans clé, ce n'est pas une panne à retenter, c'est une réponse.
+ *
+ * Rend `false` tant que la table n'a pas été poussée : garder `providersDejaPousses()`
+ * en garde amont reste donc nécessaire pour distinguer « pas de clé » de « pas encore su ».
+ */
+export function cleConfigureePour(providerId: string): boolean {
+  return cleParFournisseur[providerId] ?? false;
+}
+
+export function notifyProvidersPushed(keyStatus: Record<string, boolean> = {}): void {
   dejaPousses = true;
+  cleParFournisseur = keyStatus;
   for (const cb of listeners) cb();
 }
 

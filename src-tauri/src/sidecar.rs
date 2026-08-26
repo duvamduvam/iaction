@@ -235,15 +235,7 @@ fn commande_sidecar(node: &str, entry: &str, reseau: &crate::reseau::Reseau) -> 
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        /// `CREATE_NO_WINDOW` (winbase.h) : le process enfant n'obtient pas de
-        /// console. Valeur codée en dur plutôt que tirée d'une dépendance
-        /// Windows entière pour une seule constante.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::open_external::hide_console_window(&mut cmd);
     cmd
 }
 

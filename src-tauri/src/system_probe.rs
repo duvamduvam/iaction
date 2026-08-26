@@ -6,13 +6,15 @@
 //! (lecture /proc pour CPU/RAM, `nvidia-smi` optionnel pour le GPU).
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
 
-use crate::open_external::prepare_detached;
+use crate::open_external::{hide_console_window, prepare_detached};
 
 /// Émulateurs de terminal essayés dans l'ordre. Le répertoire de travail est
 /// donné via `current_dir` (portable : aucun flag spécifique nécessaire).
@@ -134,15 +136,43 @@ fn mem_mb() -> (u64, u64) {
     (total.saturating_sub(available), total)
 }
 
+/// `nvidia-smi` est-il introuvable sur ce poste ? Verrouillé au premier échec de
+/// SPAWN, et plus jamais relâché de la session.
+///
+/// Sans cette mémoire, une machine sans carte NVIDIA — le cas de la majorité des
+/// postes — tentait de lancer un binaire absent toutes les 5 secondes, pour le
+/// même verdict à chaque fois. C'est du bruit pur : le pilote n'apparaîtra pas en
+/// cours de session.
+///
+/// Ne verrouille QUE sur `NotFound`. Un `nvidia-smi` présent mais en échec (code
+/// de retour non nul, sortie muette) reste réinterrogé : ce peut être un pilote
+/// qui se recharge ou une carte momentanément occupée, et la sonde doit se
+/// rétablir toute seule.
+static NVIDIA_SMI_INTROUVABLE: AtomicBool = AtomicBool::new(false);
+
 fn gpu_stats() -> (Option<f64>, Option<u64>, Option<u64>, Option<f64>) {
+    if NVIDIA_SMI_INTROUVABLE.load(Ordering::Relaxed) {
+        return (None, None, None, None);
+    }
     let mut cmd = Command::new("nvidia-smi");
     cmd.args([
         "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
         "--format=csv,noheader,nounits",
     ]);
     // Pas de prepare_detached : on VEUT la sortie (process court, non interactif).
-    let Ok(output) = cmd.output() else {
-        return (None, None, None, None);
+    // Mais pas de fenêtre pour autant : `nvidia-smi.exe` est un programme console,
+    // et sans ce masquage Windows lui ouvrait un conhost à CHAQUE tick de la sonde
+    // — une fenêtre noire qui clignotait toutes les 5 secondes tant que l'app
+    // tournait (signalé le 2026-08-26). La sortie reste capturée par `output()`.
+    hide_console_window(&mut cmd);
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                NVIDIA_SMI_INTROUVABLE.store(true, Ordering::Relaxed);
+            }
+            return (None, None, None, None);
+        }
     };
     if !output.status.success() {
         return (None, None, None, None);
@@ -346,6 +376,23 @@ mod tests {
         let (used, total) = mem_mb();
         assert!(total > 0, "MemTotal illisible");
         assert!(used <= total, "used {used} > total {total}");
+    }
+
+    /// La sonde GPU doit rendre le MÊME verdict de présence d'un appel à
+    /// l'autre : GPU là = toujours des mesures, GPU absent (runners de CI,
+    /// machines sans NVIDIA) = toujours None. On compare la présence et non les
+    /// valeurs, qui varient légitimement entre deux instants.
+    ///
+    /// C'est ce qui garde honnête le verrou `NVIDIA_SMI_INTROUVABLE` : s'il se
+    /// déclenchait à tort sur un poste équipé, le second appel deviendrait muet
+    /// alors que le premier avait mesuré.
+    #[test]
+    fn gpu_verdict_stable_entre_deux_appels() {
+        let (pct, mem_used, mem_total, _) = gpu_stats();
+        let (pct2, mem_used2, mem_total2, _) = gpu_stats();
+        assert_eq!(pct.is_some(), pct2.is_some());
+        assert_eq!(mem_used.is_some(), mem_used2.is_some());
+        assert_eq!(mem_total.is_some(), mem_total2.is_some());
     }
 
     #[test]

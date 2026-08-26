@@ -61,6 +61,32 @@ pub(crate) fn prepare_detached(cmd: &mut Command) {
     }
 }
 
+/// Empêche Windows d'ouvrir une console pour le process enfant. No-op ailleurs.
+///
+/// Un programme CONSOLE (`node.exe`, `nvidia-smi.exe`…) lancé depuis une application graphique
+/// reçoit d'office une fenêtre de terminal. Pour le sidecar, elle restait affichée toute la
+/// session ; pour la sonde GPU, relancée toutes les 5 s, elle CLIGNOTAIT en permanence —
+/// signalé le 2026-08-26 sur Windows 11 : sur 20 s de traçage, cinq `nvidia-smi.exe` ayant tous
+/// `iaction.exe` pour parent, et autant de `conhost.exe` créés dans la foulée. C'est ce conhost
+/// qui était la fenêtre noire visible.
+///
+/// Rien n'est perdu côté observabilité : stdout et stderr restent capturés par l'appelant.
+/// Seule la fenêtre disparaît.
+pub(crate) fn hide_console_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// `CREATE_NO_WINDOW` (winbase.h) : le process enfant n'obtient pas de console. Valeur
+        /// codée en dur plutôt que tirer une dépendance Windows entière pour une constante.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
 /// Construit la commande à spawn : programme nettoyé de la pollution Snap, `path` en unique
 /// argument. Extrait de `open_external` pour être testable sans dépendre du système de fichiers
 /// réel (le spawn effectif reste testé séparément).

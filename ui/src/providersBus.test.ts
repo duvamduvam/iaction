@@ -15,7 +15,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { notifyProvidersPushed, providersDejaPousses, subscribeProvidersPushed } from "./providersBus";
+import {
+  cleConfigureePour,
+  notifyProvidersPushed,
+  providersDejaPousses,
+  subscribeProvidersPushed,
+} from "./providersBus";
 
 describe("mémoire de la poussée", () => {
   it("commence par ignorer que quoi que ce soit ait été poussé", () => {
@@ -62,5 +67,47 @@ describe("abonnement", () => {
     expect(vues).toBe(0);
     expect(providersDejaPousses()).toBe(true);
     off();
+  });
+});
+
+/*
+ * Statut « clé enregistrée » (T-055).
+ *
+ * Sans clé OpenRouter, l'encart de conso réclamait le crédit toutes les quinze
+ * secondes et le sidecar refusait — une ligne `error` par refus, indéfiniment,
+ * pour une configuration volontaire. Le bus transporte donc le statut que
+ * `pushProviders` connaît déjà, pour qu'on cesse d'interroger qui va refuser.
+ *
+ * Ces tests s'exécutent APRÈS ceux du dessus : l'état module n'est plus vierge,
+ * chacun pose donc le statut qu'il vérifie.
+ */
+describe("statut « clé enregistrée »", () => {
+  it("rend le statut poussé, fournisseur par fournisseur", () => {
+    notifyProvidersPushed({ openrouter: true, swiftask: false });
+    expect(cleConfigureePour("openrouter")).toBe(true);
+    expect(cleConfigureePour("swiftask")).toBe(false);
+  });
+
+  it("rend false pour un fournisseur inconnu de la dernière poussée", () => {
+    notifyProvidersPushed({ openrouter: true });
+    expect(cleConfigureePour("jamais-vu")).toBe(false);
+  });
+
+  it("REMPLACE le statut précédent : une clé effacée redevient absente", () => {
+    // Le vrai scénario du ticket, à l'envers : la table est re-poussée après
+    // chaque modification. Un statut qui ne ferait que s'accumuler laisserait
+    // l'encart interroger un fournisseur dont la clé vient d'être supprimée.
+    notifyProvidersPushed({ openrouter: true });
+    notifyProvidersPushed({ openrouter: false });
+    expect(cleConfigureePour("openrouter")).toBe(false);
+  });
+
+  it("sans argument, ne prétend aucune clé — l'appelant doit passer le statut", () => {
+    notifyProvidersPushed({ openrouter: true });
+    notifyProvidersPushed();
+    expect(cleConfigureePour("openrouter")).toBe(false);
+    // La mémoire de la poussée, elle, reste acquise : les deux informations
+    // sont distinctes (« su » n'est pas « configuré »).
+    expect(providersDejaPousses()).toBe(true);
   });
 });

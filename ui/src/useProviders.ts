@@ -63,8 +63,10 @@ export function useProviders(): UseProvidersResult {
     setErrorMessage("");
     // Signale aux consommateurs (listes de modèles, panneau Ollama…) que le
     // sidecar connaît désormais la table — ils relancent leurs requêtes
-    // parties trop tôt (« fournisseur inconnu » au démarrage sinon).
-    notifyProvidersPushed();
+    // parties trop tôt (« fournisseur inconnu » au démarrage sinon). Le statut
+    // « clé configurée » voyage avec : il évite aux mêmes consommateurs de
+    // lancer des requêtes vouées au refus (voir `cleConfigureePour`).
+    notifyProvidersPushed(result.keyStatus);
   }
 
   useEffect(() => {
