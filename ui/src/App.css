@@ -2368,6 +2368,18 @@
   gap: var(--space-2);
 }
 
+/* Bloc d'envoi : « Arrêter » AU-DESSUS d'« Envoyer » pendant un tour, et non
+   côte à côte. Même raisonnement que `.chat-composer__tools` juste au-dessus —
+   deux boutons empilés ne mangent qu'une seule largeur, et toute la place
+   gagnée revient à la zone de saisie. `stretch` leur donne d'office la même
+   largeur ; hors tour il n'y a qu'un bouton et la règle ne change rien.
+   L'ordre du DOM suit l'ordre visuel : c'est aussi celui de la tabulation. */
+.chat-composer__envoi {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
 .chat-composer textarea {
   flex: 1;
   /* Zone de saisie confortable (~5 lignes), redimensionnable à la souris
@@ -3226,6 +3238,39 @@
 .agent-sidebar--right {
   padding-right: 0;
   padding-left: 2px;
+}
+
+/* Poignée de repli d'un panneau latéral (SidebarRetractable) : un liseré
+   vertical pleine hauteur, entre le panneau et la zone principale. Assez
+   étroit pour ne rien coûter quand on ne s'en sert pas, assez large pour
+   rester une cible de souris honnête.
+
+   Elle reste affichée MÊME panneau replié — c'est le seul chemin de retour.
+   Chaque panneau a la sienne : gauche et droite se replient indépendamment. */
+.sidebar-rail {
+  flex: none;
+  align-self: stretch;
+  width: 14px;
+  padding: 0;
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+  color: var(--text-2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.sidebar-rail:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.sidebar-rail__chevron {
+  font-size: 14px;
+  line-height: 1;
 }
 
 .sidebar-section {
@@ -4537,8 +4582,27 @@
   .agent-sidebar--right {
     order: 2;
   }
-  .agent-main__content {
+  /* Chaque poignée suit SON panneau dans la pile. Sans `order` explicite elles
+     resteraient à 0 comme le panneau gauche, et la poignée de droite viendrait
+     se ranger avant le contenu, loin du panneau qu'elle commande. */
+  .sidebar-rail--left {
+    order: 1;
+  }
+  .sidebar-rail--right {
     order: 3;
+  }
+  .agent-main__content {
+    order: 4;
+  }
+  /* Empilée, la poignée devient horizontale : c'est vers le haut que le
+     panneau se range, plus vers le côté. */
+  .sidebar-rail {
+    align-self: auto;
+    width: 100%;
+    height: 14px;
+  }
+  .sidebar-rail__chevron {
+    transform: rotate(90deg);
   }
   .sidebar-filetree .file-tree {
     max-height: 30vh;

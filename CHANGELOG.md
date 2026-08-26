@@ -24,6 +24,18 @@ versions selon [SemVer](https://semver.org/lang/fr/).
   moteur, donc à travers le proxy et l'autorité déclarés — sans quoi un poste
   d'entreprise s'entendrait dire « à jour » sans que rien n'ait été vérifié
   (T-056).
+- **Les panneaux latéraux se replient**, chacun de son côté et indépendamment
+  de l'autre : une poignée verticale entre le panneau et la zone de travail,
+  et la préférence est retenue d'une session à l'autre. Replié, le panneau
+  n'est plus rendu du tout ; la poignée, elle, reste toujours là — c'est le
+  seul chemin de retour (T-057).
+
+### Modifié
+
+- **« Arrêter » passe au-dessus d'« Envoyer »** pendant un tour, au lieu d'être
+  à côté : deux boutons empilés ne prennent qu'une largeur, et la place gagnée
+  revient à la zone de saisie — la même règle que la colonne d'icônes du
+  composeur (T-057).
 
 ## [0.4.1] — 2026-08-26
 
