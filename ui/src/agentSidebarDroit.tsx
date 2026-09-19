@@ -9,7 +9,7 @@
 
 import type { FocusEvent, KeyboardEvent, RefObject } from "react";
 import { MODELES_ABONNEMENT_CLAUDE } from "./modelesAbonnementClaude";
-import { agentOptionValue, AUTO_MODEL, type AgentSelection, type ProjectSession } from "./modeleProjet";
+import { agentOptionValue, type AgentSelection, type ProjectSession } from "./modeleProjet";
 import { OllamaPanel } from "./OllamaPanel";
 import { PERMISSION_MODE_OPTIONS } from "./permissions";
 import { SidebarSection } from "./SidebarSection";
@@ -20,23 +20,30 @@ import type { DirEntry } from "./fsClient";
 import type { KnowledgeMode } from "./projectAdmin";
 import type { PinnedDoc } from "./connaissances";
 import { ModelPicker, type OptionEpinglee } from "./ModelPicker";
-import type { KnowledgeStatus, ModelDetail, PermissionMode } from "./sidecar";
+import { modeleSousAgentDeclare, sousAgentsVifs, type AgentTurn, type SousAgentVu } from "./agentTurns";
+import { useSousAgentsRecents } from "./useSousAgentsRecents";
+import type { ModelDetail, PermissionMode } from "./sidecar";
+import type { KnowledgeStatus } from "./connaissancesClient";
 
 /*
  * Modèles de l'abonnement Claude : ils ne viennent d'aucun catalogue
  * interrogeable, d'où leur présence en dur — épinglés dans le sélecteur, donc
  * jamais soumis aux filtres du catalogue neutre (T-032).
  */
-const MODEL_OPTIONS: OptionEpinglee[] = [
-  { value: "", label: "(défaut)" },
-  ...MODELES_ABONNEMENT_CLAUDE.map((m) => ({ value: m.id, label: m.id, title: m.note })),
-];
+const MODEL_OPTIONS: OptionEpinglee[] = MODELES_ABONNEMENT_CLAUDE.map((m) => ({
+  value: m.id,
+  label: m.id,
+  title: m.note,
+}));
 
-const AUTO_EPINGLE: OptionEpinglee = {
-  value: AUTO_MODEL,
-  label: "Auto (descendant)",
-  title: "Démarre sur le modèle le plus fort de la table ; descendre est un choix manuel.",
-};
+/*
+ * T-080 — plus de sentinelle « Auto (descendant) », ni d'option « (défaut) »
+ * muette. Les deux disaient la même chose — « quelqu'un d'autre choisira » —
+ * et ce quelqu'un ne choisissait rien : le mode Auto imposait le sommet de la
+ * table sans lire le prompt (T-079), et « (défaut) » laissait simplement le
+ * CLI décider sans que l'application sache dire quoi. Une session part
+ * désormais sur le modèle réglé dans Configuration, affiché en clair ici.
+ */
 
 export interface SessionsSectionProps {
   sessions: ProjectSession[];
@@ -212,17 +219,42 @@ export interface LlmSectionProps {
   setPermissionMode: (mode: PermissionMode) => void;
   model: string;
   setModel: (value: string) => void;
-  /** R2 — un modèle explicite efface l'affinité de session (voir le onChange). */
-  clearRoutedAffinity: () => void;
-  /** Bascule vers Auto : pièces jointes purgées (moteur réel inconnu). */
-  clearAttachments: () => void;
   neutralModelsState: "idle" | "loading" | "error";
   neutralModels: ModelDetail[];
   neutralFeaturedIds: string[];
   basculerFavoriNeutre: (modelId: string) => void;
   neutralModelsError: string;
-  sessionId: string | null;
+  /** T-077 — ce que la session fait VRAIMENT (voir `EtatVifLlm`). */
+  vif: EtatVifLlm;
   isCompactViewport: boolean;
+}
+
+/**
+ * T-077 — état vif de la session : ce qu'elle fait VRAIMENT, par opposition
+ * aux contrôles au-dessus qui disent ce qui est demandé.
+ *
+ * T-080 a retiré la ligne « modèle réellement routé » : depuis la suppression
+ * du mode Auto, le sélecteur affiche le modèle réel — il n'y a plus d'écart
+ * entre le demandé et l'exécuté. Restent les sous-agents, qui eux ne sont
+ * visibles nulle part ailleurs que dans le transcript.
+ */
+export interface EtatVifLlm {
+  sessionId: string | null;
+  /** Tours de la session — les sous-agents s'en déduisent (`sousAgentsVifs`). */
+  turns: AgentTurn[];
+}
+
+/** Marque d'état d'un sous-agent. Hors tour, un lancement sans résultat n'est
+ *  pas « en cours » : c'est un travail interrompu, et ça se dit. */
+function marqueSousAgent(agent: SousAgentVu, streaming: boolean): { signe: string; classe: string; etat: string } {
+  if (!agent.termine) {
+    return streaming
+      ? { signe: "◉", classe: " llm-vif__agent--vif", etat: "en cours" }
+      : { signe: "⚠", classe: " llm-vif__agent--interrompu", etat: "interrompu avant son terme" };
+  }
+  return agent.erreur
+    ? { signe: "✕", classe: " llm-vif__agent--erreur", etat: "terminé en erreur" }
+    : { signe: "✓", classe: "", etat: "terminé" };
 }
 
 export function LlmSection(props: Readonly<LlmSectionProps>) {
@@ -240,16 +272,16 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
     setPermissionMode,
     model,
     setModel,
-    clearRoutedAffinity,
-    clearAttachments,
     neutralModelsState,
     neutralModels,
     neutralFeaturedIds,
     basculerFavoriNeutre,
     neutralModelsError,
-    sessionId,
+    vif,
     isCompactViewport,
   } = props;
+  const sousAgents = sousAgentsVifs(vif.turns);
+  const sousAgentsRecents = useSousAgentsRecents(vif.sessionId, streaming);
   return (
     <SidebarSection id="llm" title="LLM" defaultOpen={!isCompactViewport}>
       <div className="field agent-preset">
@@ -352,31 +384,69 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
           id="agent-model"
           value={model}
           models={engineProviderId === null ? [] : neutralModels}
-          epingles={engineProviderId === null ? [AUTO_EPINGLE, ...MODEL_OPTIONS] : [AUTO_EPINGLE]}
+          epingles={engineProviderId === null ? MODEL_OPTIONS : []}
           favoris={neutralFeaturedIds}
           onToggleFavori={engineProviderId === null ? undefined : basculerFavoriNeutre}
-          // R2 — « Auto (routeur) » restant toujours proposé, le
-          // sélecteur n'est plus verrouillé quand la liste neutre est
-          // vide (seulement pendant son chargement). Verrouillé pendant
-          // le streaming (comme ChatPage) : changer de modèle en plein
-          // tour effacerait l'affinité de routage sous le tour en cours.
+          // Verrouillé pendant le streaming (comme ChatPage) : changer de
+          // modèle en plein tour enverrait la suite ailleurs que le début.
           disabled={streaming || (selectedAgent !== null && selectedAgent.model !== null)}
           chargement={engineProviderId !== null && neutralModelsState === "loading"}
-          onChange={(value) => {
-            setModel(value);
-            // R2 — choisir un modèle explicite efface l'affinité de
-            // session (override) ; revenir sur « Auto » re-route au
-            // prochain envoi (routedTarget redevenu null). Bascule vers
-            // Auto : pièces jointes purgées (moteur réel inconnu, voir
-            // `attachmentsSupported`).
-            if (value !== AUTO_MODEL) {
-              clearRoutedAffinity();
-            } else {
-              clearAttachments();
-            }
-          }}
+          onChange={setModel}
         />
       </div>
+
+      {/*
+        T-077 — les sous-agents du dernier tour. Le titre distingue « en cours »
+        de « dernier tour » : afficher les deux pareil laisserait croire qu'un
+        travail fini tourne encore.
+
+        T-091 — et la liste ne survit que quelques minutes au tour : passé ce
+        délai, ou sur une conversation simplement rechargée du disque, « dernier
+        tour » parlerait d'un travail vieux de plusieurs jours au présent.
+      */}
+      {sousAgents.length > 0 && sousAgentsRecents && (
+        <div className="llm-vif__agents">
+          <span className="llm-vif__agents-titre">
+            {streaming ? "Sous-agents en cours" : "Sous-agents du dernier tour"} · {sousAgents.length}
+          </span>
+          <ul>
+            {sousAgents.map((agent, i) => {
+              const marque = marqueSousAgent(agent, streaming);
+              // T-081 — le modèle que le MANIFESTE déclare pour ce type. Une
+              // intention, pas une mesure : le mot « déclaré » est dans
+              // l'infobulle, et un type inconnu (agent intégré du SDK)
+              // n'affiche rien plutôt qu'un modèle deviné.
+              const { modele, connu } = modeleSousAgentDeclare(agent.nom, projectAgentsByScope.claudeCode);
+              const libelleModele = modele ?? (connu ? "hérite du fil" : null);
+              const detailModele = libelleModele
+                ? ` · modèle déclaré : ${modele ?? "aucun, hérite du fil"}`
+                : "";
+              return (
+                <li
+                  key={`${agent.nom}-${i}`}
+                  className={`llm-vif__agent${marque.classe}`}
+                  title={
+                    (agent.description ? `${agent.description} — ${marque.etat}` : marque.etat) + detailModele
+                  }
+                  // Le signe est décoratif : l'état est porté par le libellé
+                  // accessible, sinon un lecteur d'écran annoncerait « ◉ ».
+                  aria-label={`${agent.nom} — ${marque.etat}${detailModele}`}
+                >
+                  <span className="llm-vif__agent-signe" aria-hidden="true">
+                    {marque.signe}
+                  </span>
+                  {agent.nom}
+                  {libelleModele && (
+                    <span className="llm-vif__agent-modele" aria-hidden="true">
+                      {libelleModele}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       {engineProviderId !== null && (
         <OllamaPanel providerId={engineProviderId} selectedModel={model} />
@@ -396,8 +466,8 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
         >
           {engineProviderId ? (providers.find((p) => p.id === engineProviderId)?.label ?? engineProviderId) : "Claude"}
         </span>
-        <span className={`agent-session-indicator${sessionId ? " agent-session-indicator--active" : ""}`}>
-          {sessionId ? `Session ${sessionId.slice(0, 8)}` : "Aucune session"}
+        <span className={`agent-session-indicator${vif.sessionId ? " agent-session-indicator--active" : ""}`}>
+          {vif.sessionId ? `Session ${vif.sessionId.slice(0, 8)}` : "Aucune session"}
         </span>
       </div>
     </SidebarSection>
@@ -502,7 +572,7 @@ export function ConnaissancesSection(props: Readonly<ConnaissancesSectionProps>)
             ? knowledgeIndexProgress
               ? `Indexation… ${knowledgeIndexProgress.done}/${knowledgeIndexProgress.total}`
               : "Indexation…"
-            : "Indexer maintenant"}
+            : "Reconstruire l'index"}
         </button>
         {knowledgeIndexError && <p className="knowledge-rag__error">{knowledgeIndexError}</p>}
       </div>

@@ -16,6 +16,8 @@ import {
   relativeToProject,
   sanitizeKnowledgeDoc,
 } from "./connaissances";
+import { autoIndexerConnaissances, fautAutoIndexer, marquerTenteSiNouveau } from "./useConnaissances";
+import type { KnowledgeStatus } from "./connaissancesClient";
 
 const doc = (path: string, name = path) => ({ path, name });
 
@@ -107,5 +109,88 @@ describe("buildKnowledgeBlock — les budgets sont VISIBLES", () => {
       throw new Error("disque");
     });
     expect(bloc).toContain("[illisible]");
+  });
+});
+
+/*
+ * T-115 — l'auto-réindexation en fond. Le constat : sur un poste où personne
+ * ne clique jamais « Reconstruire l'index », 3 index sur 4 dataient d'un
+ * mois alors que le sidecar calculait déjà `stale`. Trois propriétés à
+ * verrouiller : elle ne se déclenche QUE sur un index périmé (jamais sur un
+ * index absent — la création reste un choix humain), elle ne repart JAMAIS
+ * deux fois pour le même projet dans la même session, et un échec (Ollama
+ * arrêté, panne « fetch failed » connue) reste DISCRET.
+ */
+const statutIndex = (p: Partial<KnowledgeStatus>): KnowledgeStatus => ({
+  exists: true,
+  files: 3,
+  chunks: 12,
+  model: "nomic-embed-text",
+  builtAt: "2026-08-01T00:00:00Z",
+  stale: true,
+  ...p,
+});
+
+describe("fautAutoIndexer", () => {
+  it("se déclenche sur un index qui existe et est périmé", () => {
+    expect(fautAutoIndexer(statutIndex({}))).toBe(true);
+  });
+
+  it("ne se déclenche jamais sur un index inexistant — la création reste un choix de l'utilisateur", () => {
+    expect(fautAutoIndexer(statutIndex({ exists: false }))).toBe(false);
+    // Cas réel de `knowledge.status` sans index : stale vaut toujours false,
+    // mais le test ci-dessus doit rester vrai même si ça changeait un jour.
+    expect(fautAutoIndexer({ exists: false, files: 0, chunks: 0, model: null, builtAt: null, stale: false })).toBe(
+      false,
+    );
+  });
+
+  it("ne se déclenche pas sur un index à jour, ni sans statut connu", () => {
+    expect(fautAutoIndexer(statutIndex({ stale: false }))).toBe(false);
+    expect(fautAutoIndexer(null)).toBe(false);
+  });
+});
+
+describe("marquerTenteSiNouveau — au plus une tentative par cwd et par session", () => {
+  it("autorise la première tentative, bloque toutes les suivantes pour le même cwd", () => {
+    const tentes = new Set<string>();
+    expect(marquerTenteSiNouveau(tentes, "/projet-a")).toBe(true);
+    expect(marquerTenteSiNouveau(tentes, "/projet-a")).toBe(false);
+    expect(marquerTenteSiNouveau(tentes, "/projet-a")).toBe(false);
+  });
+
+  it("un autre projet reste indépendant — sa propre tentative n'est pas bloquée", () => {
+    const tentes = new Set<string>();
+    marquerTenteSiNouveau(tentes, "/projet-a");
+    expect(marquerTenteSiNouveau(tentes, "/projet-b")).toBe(true);
+  });
+});
+
+describe("autoIndexerConnaissances — un échec reste DISCRET", () => {
+  it("indexe avec succès sans rien journaliser", async () => {
+    const journaux: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+    const ok = await autoIndexerConnaissances("/p", ["docs/note.md"], {
+      indexer: async (cwd, pinned) => {
+        expect(cwd).toBe("/p");
+        expect(pinned).toEqual(["docs/note.md"]);
+        return { files: 1, chunks: 1, model: "nomic-embed-text" };
+      },
+      journaliser: (msg, fields) => journaux.push({ msg, fields }),
+    });
+    expect(ok).toBe(true);
+    expect(journaux).toEqual([]);
+  });
+
+  it("un échec (Ollama arrêté) ne jette jamais et ne produit qu'une ligne discrète", async () => {
+    const journaux: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+    const ok = await autoIndexerConnaissances("/p", [], {
+      indexer: async () => {
+        throw new Error("fetch failed");
+      },
+      journaliser: (msg, fields) => journaux.push({ msg, fields }),
+    });
+    expect(ok).toBe(false);
+    expect(journaux).toHaveLength(1);
+    expect(journaux[0].fields).toMatchObject({ cwd: "/p", erreur: "fetch failed" });
   });
 });

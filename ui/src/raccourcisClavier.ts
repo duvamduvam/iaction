@@ -8,8 +8,9 @@
  * en refusant l'encart « Réseau » (T-045). Il avait raison.
  *
  * Sources tenues à jour à la main : écouteur global et cycle F6 dans App.tsx et
- * focusZones.ts, useRovingFocus.ts (listes/onglets), FileTree.tsx (arbre),
- * Modal.tsx (<dialog>), composeurs d'AgentPage/ChatPage, CommandPalette.tsx.
+ * focusZones.ts, useRovingFocus.ts (listes/onglets), BarreOnglets.tsx
+ * (Alt+chiffre, voir raccourciOnglets.ts), FileTree.tsx (arbre), Modal.tsx
+ * (<dialog>), composeurs d'AgentPage/ChatPage, CommandPalette.tsx.
  */
 
 export interface ShortcutRow {
@@ -27,8 +28,9 @@ export interface ShortcutGroup {
 
 /**
  * Toute la navigation clavier, par thème. Sources : écouteur global et cycle
- * F6 dans App.tsx, useRovingFocus.ts (listes/onglets), FileTree.tsx (arbre),
- * Modal.tsx (<dialog>), composeurs d'AgentPage/ChatPage, CommandPalette.tsx.
+ * F6 dans App.tsx, useRovingFocus.ts (listes/onglets), BarreOnglets.tsx
+ * (Alt+chiffre), FileTree.tsx (arbre), Modal.tsx (<dialog>), composeurs
+ * d'AgentPage/ChatPage, CommandPalette.tsx.
  */
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
@@ -49,6 +51,11 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         note: "Pages Projets et Chat : ouvre une nouvelle conversation dans un ONGLET supplémentaire, les conversations déjà ouvertes le restent (même action que le bouton « + » de la barre d'onglets).",
       },
       {
+        combos: [["Ctrl", "Maj", "N"]],
+        action: "Nouvelle fenêtre",
+        note: "Une seconde fenêtre sur un AUTRE projet, à poser sur un second écran : même application, même moteur. Un projet déjà ouvert dans une autre fenêtre ne s'ouvre pas deux fois — c'est sa fenêtre qui passe devant.",
+      },
+      {
         combos: [
           ["Ctrl", "Tab"],
           ["Ctrl", "Maj", "Tab"],
@@ -57,9 +64,14 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         note: "Pages Projets et Chat : fait défiler les onglets de conversation ouverts. Une conversation dont l'onglet n'est pas affiché continue de travailler — un point cyan sur son onglet signale qu'un tour est en cours.",
       },
       {
+        combos: [["Alt", "1"]],
+        action: "Aller à l'onglet de cette position (1 à 8)",
+        note: "Pages Projets et Chat : chaque onglet (conversation, puis fichiers ouverts sur la page Projets) affiche discrètement son numéro de position. Alt et non Ctrl : Ctrl+1 à Ctrl+6 restent la navigation entre pages ci-dessus. Alt+9 va toujours au DERNIER onglet, quel que soit son numéro — même convention que Ctrl+9 dans Chrome et Firefox.",
+      },
+      {
         combos: [["Ctrl", "Suppr"]],
         action: "Fermer l'onglet de conversation",
-        note: "Pages Projets et Chat. L'HISTORIQUE EST CONSERVÉ : la conversation reste dans le panneau latéral (« Sessions »/« Historique ») et se rouvre d'un clic. Sa suppression définitive n'est possible que depuis ce panneau, avec confirmation. Refusé tant qu'un tour est en cours (un message l'indique) : arrêtez-le d'abord.",
+        note: "Pages Projets et Chat. À la souris : le « × » de l'onglet, le clic milieu, ou le clic DROIT pour fermer un ensemble d'un geste (les autres, ceux à droite, tous, et les fichiers déjà enregistrés). Un lot n'emporte jamais une conversation dont le tour est en cours ni un fichier non enregistré : ils restent, et un bandeau dit lesquels. L'HISTORIQUE EST CONSERVÉ : la conversation reste dans le panneau latéral (« Sessions »/« Historique ») et se rouvre d'un clic. Sa suppression définitive n'est possible que depuis ce panneau, avec confirmation. Refusé tant qu'un tour est en cours (un message l'indique) : arrêtez-le d'abord.",
       },
       {
         combos: [["Ctrl", "K"]],
@@ -68,8 +80,13 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
       },
       {
         combos: [["Ctrl", "L"]],
+        action: "Replier ou déployer les panneaux latéraux",
+        note: "Pages Projets et Chat. Un panneau encore ouvert → tout se replie ; les deux repliés → tout revient. Chaque panneau se replie aussi seul, par la poignée verticale collée à son bord (visible au survol, et en permanence quand le panneau est replié). L'état est mémorisé d'un lancement à l'autre.",
+      },
+      {
+        combos: [["Ctrl", "Maj", "L"]],
         action: "Placer le curseur dans la zone de saisie",
-        note: "Pages Projets et Chat. Le curseur y est déjà placé automatiquement à l'arrivée sur la page, après un vidage et après une nouvelle conversation.",
+        note: "Pages Projets et Chat. Le curseur y est déjà placé automatiquement à l'arrivée sur la page, après un vidage et après une nouvelle conversation. (Ce raccourci était Ctrl+L jusqu'au 20/08/2026.)",
       },
       {
         combos: [["Ctrl", "S"]],
@@ -227,6 +244,28 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
         note: "Ouvre la page Projets. Refusé si un run est en cours (un message l'indique).",
       },
       { combos: [["Échap"]], action: "Fermer la palette" },
+    ],
+  },
+  {
+    title: "Mesure de la frappe (diagnostic)",
+    intro:
+      "Instrument de T-095, éteint par défaut et sans effet tant qu'il n'est pas allumé. À utiliser quand la frappe paraît traîner : il donne une latence en millisecondes au lieu d'une impression, et sépare ce qui se paie dans l'application (« attente ») de ce qui se paie au dessin (« rendu »). Protocole : allumer, taper une phrase entière, lire p95 ; puis changer UN seul réglage, Ctrl+Maj+B, et retaper la MÊME phrase. Ctrl+Maj et non Ctrl+Alt : sur ce poste, GNOME a fait de Ctrl+Alt son lanceur d’applications (Ctrl+Alt+M ouvre Thunderbird), et un raccourci capté par le bureau n’atteint jamais l’application.",
+    rows: [
+      {
+        combos: [["Ctrl", "Maj", "M"]],
+        action: "Allumer ou éteindre la sonde de frappe",
+        note: "Un afficheur apparaît en bas à droite : médiane, 95ᵉ centile et maximum, pour l'attente, le rendu et le total. Il survit au rechargement tant qu'il n'est pas éteint.",
+      },
+      {
+        combos: [["Ctrl", "Maj", "D"]],
+        action: "Dénuder : retirer un suspect d'affichage (mode « nu »)",
+        note: "Fait tourner les paliers : aucun → sans ombres ni lueurs → + sans animations → + sans fonds ni arrondis → aucun. Le palier qui fait chuter la ligne « rendu » nomme le coupable ; si aucun ne la fait chuter, le coût n'est pas dans la feuille de style. Mode de mesure UNIQUEMENT — l'application n'est pas censée vivre comme ça.",
+      },
+      {
+        combos: [["Ctrl", "Maj", "B"]],
+        action: "Bilan : consigner le relevé, puis remettre les compteurs à zéro",
+        note: "Le relevé part au journal applicatif (page Système) avant l'effacement : une mesure qui ne laisse pas de trace est une mesure à refaire. Repli si une combinaison est un jour captée par le bureau : les mêmes commandes sont exposées sur « window.sondeFrappe » (allumer, eteindre, denuder, bilan).",
+      },
     ],
   },
 ];

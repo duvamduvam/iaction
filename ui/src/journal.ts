@@ -48,6 +48,8 @@ export const LOG_SCOPES = [
   "router",
   "usage",
   "mcp",
+  /** T-120 — réveil d'une conversation (docs/spec-reveil.md §6) : échéance honorée ou abandonnée. */
+  "reveil",
 ] as const;
 
 export type LogScope = (typeof LOG_SCOPES)[number];

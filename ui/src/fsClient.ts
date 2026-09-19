@@ -66,3 +66,17 @@ export async function fsDelete(path: string): Promise<void> {
 export async function fsFindByName(root: string, name: string, maxResults?: number): Promise<string[]> {
   return invoke<string[]>("fs_find_by_name", { root, name, maxResults: maxResults ?? null });
 }
+
+/**
+ * Les trois sondes de disque attendues par `ContexteOuverture` (refFichier.ts).
+ * Regroupées ici parce que c'est ce module qui les possède : les deux appelants
+ * — le clic gauche (AgentPage) et le menu contextuel (menuReference) — les
+ * câblaient à l'identique, et une sonde ajoutée (`listerDossier`, T-119) ne
+ * doit pouvoir être oubliée chez aucun des deux. Injectées plutôt qu'importées
+ * par `refFichier.ts` : c'est ce qui garde sa résolution testable sans Tauri.
+ */
+export const sondesDisque = {
+  lireFichier: fsReadFile,
+  listerDossier: fsListDir,
+  chercherParNom: fsFindByName,
+};

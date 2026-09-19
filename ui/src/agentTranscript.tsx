@@ -11,7 +11,10 @@
 
 import { memo } from "react";
 import { SentAttachments } from "./Attachments";
+import { formaterHeureDiscrete } from "./heureDiscrete";
 import { closeDanglingFence, Markdown } from "./Markdown";
+import { MenuReference } from "./menuReference";
+import type { ForcageOuverture } from "./refFichier";
 import { TtsButton } from "./VoiceControls";
 import {
   MESSAGE_ATTENTE_FOURNISSEUR,
@@ -22,6 +25,8 @@ import {
   hasVisibleContent,
   mcpServerFromToolName,
   prettyJson,
+  resumerTachesDeFond,
+  sousAgentOccupaitLeTour,
   spokenTextOfTurn,
   toolPreview,
   turnSubtypeNotice,
@@ -40,29 +45,59 @@ function ThinkingBlockView({ content }: Readonly<{ content: string }>) {
 
 /** `toolName` = "mcp__<serveur>__<outil>" pour un outil MCP (voir docs/protocol.md) — `null` sinon. */
 
+/**
+ * T-102 — ligne discrète du battement d'un sous-agent : un COMPTEUR d'outils
+ * et le dernier vu, jamais leur détail (T-092 l'a retiré du fil). L'heure
+ * réutilise `formaterHeureDiscrete`/`.heure` (T-101) plutôt que d'en refaire
+ * une — même unité de mesure que le reste du fil.
+ */
+function BattementSousAgentView({
+  sousAgent,
+}: Readonly<{ sousAgent: NonNullable<Extract<AgentBlock, { type: "tool" }>["sousAgent"]> }>) {
+  const heure = formaterHeureDiscrete(sousAgent.instant);
+  return (
+    <div className="tool-activity__battement">
+      sous-agent : {sousAgent.outils} outil{sousAgent.outils > 1 ? "s" : ""}
+      {sousAgent.dernierOutil && <> · dernier {sousAgent.dernierOutil}</>}
+      {heure && <> · <span className="heure">{heure}</span></>}
+    </div>
+  );
+}
+
 function ToolBlockView({ block }: Readonly<{ block: Extract<AgentBlock, { type: "tool" }> }>) {
   const preview = toolPreview(block.toolName, block.toolInput);
   const state = block.result ? (block.result.isError ? "error" : "ok") : "pending";
   const icon = state === "error" ? "✗" : state === "ok" ? "✓" : "…";
   const mcpServer = mcpServerFromToolName(block.toolName);
   return (
-    <details className="tool-activity">
-      <summary>
-        <span aria-hidden="true">🔧</span>
-        <span className="tool-activity__name">{block.toolName}</span>
-        {mcpServer && <span className="tool-activity__mcp-badge">MCP:{mcpServer}</span>}
-        <span className="tool-activity__preview">{preview}</span>
-        <span className={`tool-activity__status tool-activity__status--${state}`}>{icon}</span>
-      </summary>
-      <div className="tool-activity__detail">
-        <pre className="pretty-json">{prettyJson(block.toolInput)}</pre>
-        {block.result && (
-          <div className={`tool-activity__result${block.result.isError ? " tool-activity__result--error" : ""}`}>
-            {block.result.summary}
-          </div>
-        )}
-      </div>
-    </details>
+    <>
+      <details className="tool-activity">
+        <summary>
+          <span aria-hidden="true">🔧</span>
+          <span className="tool-activity__name">{block.toolName}</span>
+          {mcpServer && <span className="tool-activity__mcp-badge">MCP:{mcpServer}</span>}
+          <span className="tool-activity__preview">{preview}</span>
+          <span className={`tool-activity__status tool-activity__status--${state}`}>{icon}</span>
+        </summary>
+        <div className="tool-activity__detail">
+          <pre className="pretty-json">{prettyJson(block.toolInput)}</pre>
+          {block.result && (
+            <div className={`tool-activity__result${block.result.isError ? " tool-activity__result--error" : ""}`}>
+              {block.result.summary}
+            </div>
+          )}
+        </div>
+      </details>
+      {/* T-102 — le battement du sous-agent : SEUL signe de vie visible tant
+          qu'il tourne (T-092 a retiré le détail de ses outils du fil). Placé
+          en dehors du <details>, donc visible même replié — c'est le point du
+          ticket : 38 min de silence ne doivent plus ressembler à un blocage.
+          Disparaît dès que le tool_result du `Task`/`Agent` arrive (l'icône
+          ✓/✗ du bloc dit alors la fin, le compteur n'a plus d'intérêt). */}
+      {!block.result && block.sousAgent && (
+        <BattementSousAgentView sousAgent={block.sousAgent} />
+      )}
+    </>
   );
 }
 
@@ -73,7 +108,11 @@ const AgentBlockView = memo(function AgentBlockView({
   block,
   onFileRef,
   cwd,
-}: Readonly<{ block: AgentBlock; onFileRef: (ref: string) => void; cwd: string | null }>) {
+}: Readonly<{
+  block: AgentBlock;
+  onFileRef: (ref: string, forcer?: ForcageOuverture) => void;
+  cwd: string | null;
+}>) {
   // Rendu Markdown (GFM) pour le texte de l'assistant uniquement — voir
   // Markdown.tsx. `.agent-text-block` garde son rôle d'espacement entre
   // blocs consécutifs (`.agent-text-block + .agent-text-block`, App.css) ;
@@ -114,13 +153,20 @@ export const AgentTurnView = memo(function AgentTurnView({
   onFileRef,
   cwd,
   onReleaseBackground,
+  sousAgentEnCours,
 }: Readonly<{
   turn: AgentTurn;
-  onFileRef: (ref: string) => void;
+  onFileRef: (ref: string, forcer?: ForcageOuverture) => void;
   /** Racine du projet ouvert : décide de ce qui MÉRITE un bouton (T-024). */
   cwd: string | null;
   /** Rendre la main pendant l'attente des rapports de tâches de fond (claude.release). */
   onReleaseBackground?: () => void;
+  /** T-102 — ce tour est une demande glissée (`injected`) survenue pendant
+      qu'un sous-agent occupait le tour précédent : la note « en cours de
+      tour » doit le dire, plutôt que de laisser croire à une attente
+      ordinaire (voir `sousAgentOccupaitLeTour`, calculé par `AgentTranscript`
+      qui seul connaît le tour précédent). */
+  sousAgentEnCours?: boolean;
 }>) {
   // T-006 — streaming sans le moindre bloc reçu : l'attente devient visible.
   // Appelé AVANT le retour anticipé des tours utilisateur (règle des hooks).
@@ -137,8 +183,22 @@ export const AgentTurnView = memo(function AgentTurnView({
     return (
       <div className={`chat-bubble chat-bubble--user${turn.injected ? " chat-bubble--injected" : ""}`}>
         {/* S3 — demande glissée dans un tour déjà en cours : dite comme telle,
-            sinon on croirait à un tour normal (l'agent n'a pas « redémarré »). */}
-        {turn.injected && <div className="chat-bubble__note">en cours de tour</div>}
+            sinon on croirait à un tour normal (l'agent n'a pas « redémarré »).
+            T-102 — si un sous-agent occupait le tour au moment du push, le
+            dire précisément : ce message n'a aucun point d'injection avant
+            qu'il ne rende la main, parfois des dizaines de minutes. */}
+        {turn.injected && !turn.reporte && (
+          <div className="chat-bubble__note">
+            {sousAgentEnCours ? "en attente — un sous-agent occupe le tour" : "en cours de tour"}
+          </div>
+        )}
+        {/* T-087 — ce push n'a jamais été vu par le modèle (chunk `push_perdu`) :
+            la bulle ne doit plus affirmer que le message est parti. */}
+        {turn.reporte && (
+          <div className="chat-bubble__note chat-bubble__note--strong">
+            le tour s'est clos avant que ce message soit vu — renvoyé automatiquement
+          </div>
+        )}
         <div className="chat-bubble__content">{shown}</div>
         {turn.attachments && turn.attachments.length > 0 && <SentAttachments items={turn.attachments} />}
         {count > 0 && (
@@ -179,7 +239,9 @@ export const AgentTurnView = memo(function AgentTurnView({
                 : `${turn.backgroundTasks.count} tâche(s) de fond en cours`
               : `Tâche(s) de fond interrompue(s) avant leur terme (${turn.backgroundTasks.count}).`}
             {turn.status === "streaming" && turn.backgroundTasks.descriptions.length > 0 && (
-              <> : {turn.backgroundTasks.descriptions.join(" · ")}</>
+              // T-093 — aplaties et coupées : la description d'un `Bash` détaché
+              // est la commande entière, heredoc compris.
+              <> : {resumerTachesDeFond(turn.backgroundTasks.descriptions)}</>
             )}
             {/* Rendre la main : clôt le tour sans attendre les rapports (les
                 tâches de fond sont abandonnées — plafond auto par ailleurs,
@@ -212,9 +274,17 @@ export const AgentTurnView = memo(function AgentTurnView({
             {turn.status !== "streaming" && " — la session continue sur l'historique résumé."}
           </div>
         )}
+        {/* T-087 — bulle ouverte pour une demande glissée qui n'a jamais été
+            vue par le modèle (chunk `push_perdu`) : elle ne recevra jamais de
+            réponse, on le dit plutôt que de laisser croire à un tour bloqué. */}
+        {turn.reporte && (
+          <div className="chat-bubble__note chat-bubble__note--strong">
+            cette réponse n'aura jamais lieu : le message qui l'attendait n'a pas été vu par l'agent — renvoyé automatiquement
+          </div>
+        )}
         {/* Tour clos sans le moindre contenu : on le DIT, au lieu de laisser une
             bulle vide qui donne l'impression que l'application est bloquée. */}
-        {turn.status === "done" && !hasVisibleContent(blocks) && !turn.compacted && !turn.continued && (
+        {turn.status === "done" && !hasVisibleContent(blocks) && !turn.compacted && !turn.continued && !turn.reporte && (
           <div className="chat-bubble__note">
             L'agent a terminé sans produire de réponse (résultat vide du moteur). Renvoyez votre message ;
             si cela se reproduit, ouvrez une « Nouvelle session ».
@@ -238,5 +308,44 @@ export const AgentTurnView = memo(function AgentTurnView({
           l'ordre. Seul le texte est lu (voir `spokenTextOfTurn`). */}
       {turn.status === "done" && spokenTextOfTurn(turn) && <TtsButton text={spokenTextOfTurn(turn)} />}
     </div>
+  );
+});
+
+/**
+ * Le composant de LISTE (T-108) : tous les tours, plus le menu contextuel
+ * des références de fichiers (`<MenuReference>`) — monté ICI, une seule
+ * fois pour toute la conversation, jamais par tour (un menu par bouton
+ * serait autant d'écouteurs `mousedown`/`keydown` inutiles sur un long fil).
+ * `onFileRef` sert aux deux : au clic gauche via `AgentTurnView`, et au
+ * clic droit via `MenuReference.onOuvrir` — la MÊME politique d'ouverture.
+ */
+export const AgentTranscript = memo(function AgentTranscript({
+  turns,
+  onFileRef,
+  cwd,
+  onReleaseBackground,
+}: Readonly<{
+  turns: AgentTurn[];
+  onFileRef: (ref: string, forcer?: ForcageOuverture) => void;
+  cwd: string | null;
+  onReleaseBackground?: () => void;
+}>) {
+  return (
+    <>
+      {turns.map((turn, index) => (
+        <AgentTurnView
+          key={turn.id}
+          turn={turn}
+          onFileRef={onFileRef}
+          cwd={cwd}
+          onReleaseBackground={onReleaseBackground}
+          // T-102 — seul un tour injecté a besoin de savoir si le tour QUI LE
+          // PRÉCÈDE (celui qu'il vient de clore) portait un sous-agent encore
+          // en vol : inutile de le calculer pour les autres.
+          sousAgentEnCours={turn.injected ? sousAgentOccupaitLeTour(turns[index - 1]) : false}
+        />
+      ))}
+      <MenuReference cwd={cwd} turns={turns} onOuvrir={onFileRef} />
+    </>
   );
 });

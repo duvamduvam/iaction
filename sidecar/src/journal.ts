@@ -55,7 +55,9 @@ export type LogScope =
   | "speech"
   | "router"
   | "usage"
-  | "mcp";
+  | "mcp"
+  // T-120 — réveil d'une conversation (docs/spec-reveil.md §6) : échéance honorée ou abandonnée.
+  | "reveil";
 
 export const LOG_SCOPES: readonly LogScope[] = [
   "sidecar",
@@ -70,6 +72,7 @@ export const LOG_SCOPES: readonly LogScope[] = [
   "router",
   "usage",
   "mcp",
+  "reveil",
 ];
 
 /** Level inconnu → `error` : mieux vaut sur-signaler qu'avaler une entrée. */

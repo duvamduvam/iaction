@@ -74,7 +74,12 @@ export const DEFAULT_ROUTING_TABLE: RoutingTable = {
   trivial: { engine: "claude", model: "claude-haiku-4-5" },
   simple: { engine: "claude", model: "claude-sonnet-5" },
   moyen: { engine: "claude", model: "claude-opus-5" },
-  complexe: { engine: "claude", model: "claude-fable-5" },
+  // T-078 — sommet à `opus-5`, pas `fable-5` : la stratégie descendante des
+  // Projets impose `complexe` au PREMIER tour sans lire le prompt, donc le
+  // sommet n'est pas « ce qu'on sort pour les tâches dures », c'est « ce sur
+  // quoi tout tourne ». Mesuré le 2026-08-17 : fable = 23,8 % des tokens mais
+  // 39,3 % du coût, à 2,3× le tour opus. Fable se choisit désormais à la main.
+  complexe: { engine: "claude", model: "claude-opus-5" },
 };
 
 /** R2 — classificateur LLM local : provider (résolu via engine.ts) + modèle. `null` = désactivé.

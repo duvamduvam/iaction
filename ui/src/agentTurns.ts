@@ -18,6 +18,20 @@ import { asRecord } from "./base";
 import type { SentAttachment } from "./Attachments";
 import type { ChatMessage, ClaudeUsage, RouteTier } from "./sidecar";
 
+/**
+ * T-102 — battement d'un sous-agent en vol (chunk `sous_agent_battement`,
+ * voir docs/protocol.md) : un COMPTEUR d'outils vus et le dernier, jamais la
+ * liste — T-092 a retiré le détail des outils d'un sous-agent du fil, cette
+ * ligne discrète ne doit pas le rouvrir. Porté par le bloc `tool` Task/Agent
+ * qui a lancé ce sous-agent (même `toolUseId`).
+ */
+export interface BattementSousAgent {
+  outils: number;
+  dernierOutil: string | null;
+  /** Epoch ms de cette observation — voir `formaterHeureDiscrete` (T-101). */
+  instant: number;
+}
+
 export type AgentBlock =
   | { type: "text"; id: string; content: string }
   | { type: "thinking"; id: string; content: string }
@@ -28,6 +42,7 @@ export type AgentBlock =
       toolName: string;
       toolInput: unknown;
       result?: { isError: boolean; summary: string };
+      sousAgent?: BattementSousAgent;
     };
 
 export type TurnStatus = "streaming" | "done" | "error";
@@ -91,6 +106,13 @@ export interface AgentTurn {
    */
   suiteDeTour?: boolean;
   /**
+   * T-087 — ce tour affirmait « message parti » (`injected`) ou « réponse à
+   * venir » (`suiteDeTour`), mais le push correspondant n'a jamais été vu par
+   * le modèle (chunk `push_perdu`, aucun retour d'outil depuis). Le message
+   * est reposé en file (voir `withPushPerdu`) : la bulle ne doit plus mentir.
+   */
+  reporte?: boolean;
+  /**
    * Pièces jointes du tour utilisateur (voir Attachments.tsx). Uniquement
    * porté par le moteur Claude (voir le contrat, docs/protocol.md — ni
    * `neutral.start`) : le composeur désactive l'ajout de pièces tant que le
@@ -134,6 +156,37 @@ export function addToolBlock(blocks: AgentBlock[], toolUseId: string, toolName: 
 
 export function setToolResult(blocks: AgentBlock[], toolUseId: string, isError: boolean, summary: string): AgentBlock[] {
   return blocks.map((b) => (b.type === "tool" && b.toolUseId === toolUseId ? { ...b, result: { isError, summary } } : b));
+}
+
+/**
+ * T-102 — met à jour le battement d'un sous-agent en vol : le bloc `tool`
+ * Task/Agent identifié par `toolUseId` reçoit son compte d'outils observés et
+ * le dernier vu (chunk `sous_agent_battement`, voir docs/protocol.md).
+ * Cherche dans TOUS les tours (comme `withPushPerdu`) : le tour qui porte le
+ * bloc peut ne plus être le tour COURANT si une demande a été glissée entre
+ * temps (S3, `continued`/`suiteDeTour`) et redirigé le flux vers une bulle
+ * plus récente — le battement doit quand même atteindre le bon bloc, pas la
+ * bulle qui reçoit le flux à cet instant. Sans effet si aucun bloc ne porte ce
+ * `toolUseId` (bloc déjà clos/retiré, chunk hors ordre) : tolérant par
+ * construction, même politique que le reste de ce module.
+ */
+export function withSousAgentBattement(
+  turns: AgentTurn[],
+  toolUseId: string,
+  outils: number,
+  dernierOutil: string | null,
+  instant: number,
+): AgentTurn[] {
+  return turns.map((t) => {
+    const blocks = t.blocks;
+    if (!blocks || !blocks.some((b) => b.type === "tool" && b.toolUseId === toolUseId)) return t;
+    return {
+      ...t,
+      blocks: blocks.map((b) =>
+        b.type === "tool" && b.toolUseId === toolUseId ? { ...b, sousAgent: { outils, dernierOutil, instant } } : b,
+      ),
+    };
+  });
 }
 
 /**
@@ -265,6 +318,50 @@ export function withTurnError(turns: AgentTurn[], id: string, errorMessage: stri
   return turns.map((t) => (t.id === id ? { ...t, status: "error", errorMessage } : t));
 }
 
+/**
+ * T-087 — un push glissé en cours de tour (`injected: true`) jamais vu par le
+ * modèle (chunk `push_perdu`) : la bulle qui affirmait « message parti »
+ * cesse de mentir. Marque le tour injecté ET la bulle assistant qu'il avait
+ * ouverte (`suiteDeTour`, qui ne recevra donc jamais de réponse). FIFO : le
+ * PREMIER tour injecté non encore marqué portant ce contenu — même ordre que
+ * les `push_perdu` émis par le registre du sidecar (poussesEnAttente.ts).
+ * Contenu introuvable (état déjà purgé, HMR…) ⇒ tableau inchangé, jamais
+ * d'exception : un affichage qui ne se corrige pas reste moins grave qu'un
+ * fil qui casse.
+ */
+export function withPushPerdu(turns: AgentTurn[], contenu: string): AgentTurn[] {
+  const index = turns.findIndex((t) => t.role === "user" && t.injected === true && t.content === contenu && !t.reporte);
+  if (index === -1) return turns;
+  const suivant = turns[index + 1];
+  const marqueSuivant = suivant?.role === "assistant" && suivant.suiteDeTour === true;
+  return turns.map((t, i) => {
+    if (i === index) return { ...t, reporte: true };
+    if (marqueSuivant && i === index + 1) return { ...t, reporte: true, status: "done" as const };
+    return t;
+  });
+}
+
+/** Une pièce poussée (T-064) gardée en mémoire le temps du tour, pour pouvoir
+ *  la restaurer dans le composeur si son push est signalé perdu (T-087). */
+export interface PushEnCoursDeTour<A> {
+  contenu: string;
+  attachments: A[];
+}
+
+/**
+ * FIFO — retire et rend la PREMIÈRE entrée dont le contenu correspond (même
+ * ordre que `withPushPerdu`) ; `trouve: undefined` si aucune pièce
+ * n'accompagnait ce push (rien à restaurer, seul le texte est reposé).
+ */
+export function retirerPushCorrespondant<A>(
+  enCours: PushEnCoursDeTour<A>[],
+  contenu: string,
+): { trouve: PushEnCoursDeTour<A> | undefined; reste: PushEnCoursDeTour<A>[] } {
+  const index = enCours.findIndex((p) => p.contenu === contenu);
+  if (index === -1) return { trouve: undefined, reste: enCours };
+  return { trouve: enCours[index], reste: [...enCours.slice(0, index), ...enCours.slice(index + 1)] };
+}
+
 /* ---------- Aperçus / rendu JSON ---------- */
 
 export function prettyJson(value: unknown, maxLen = 800): string {
@@ -297,6 +394,174 @@ export function mcpServerFromToolName(toolName: string): string | null {
   if (!toolName.startsWith("mcp__")) return null;
   const server = toolName.split("__")[1];
   return server || null;
+}
+
+/*
+ * T-077 — sous-agents lancés par un tour.
+ *
+ * ── Pourquoi lire les blocs plutôt qu'ouvrir un canal ───────────────────
+ * Déléguer, côté SDK, c'est appeler un outil dont l'entrée porte
+ * `subagent_type` : la trace existe DÉJÀ dans les blocs du tour, reçue et
+ * stockée depuis toujours. Elle passait dans le transcript sans jamais être
+ * totalisée — donc « qui travaille pour ce tour » n'était visible nulle part.
+ * Rien à ajouter au sidecar : une lecture pure suffit.
+ *
+ * ⚠ Ce que ça dit, et rien de plus : le LANCEMENT d'un sous-agent, pas le
+ * modèle sur lequel il tourne (le SDK ne l'annonce pas ici). Le modèle réel
+ * par délégation reste l'affaire de la ventilation T-066, et son minorant
+ * assumé. Deux mesures distinctes, jamais confondues.
+ */
+const OUTILS_DELEGATION = new Set(["Task", "Agent"]);
+
+export interface SousAgentVu {
+  /** `subagent_type` demandé — jamais deviné (voir le repli ci-dessous). */
+  nom: string;
+  /** Description passée à l'outil : ce que le sous-agent est censé faire. */
+  description: string | null;
+  /** L'outil a rendu son résultat — le sous-agent a fini, bien ou mal. */
+  termine: boolean;
+  /** Fini EN ERREUR : un sous-agent mort ne doit pas se lire comme un sous-agent réussi. */
+  erreur: boolean;
+}
+
+export function sousAgentsDuTour(turn: AgentTurn | undefined): SousAgentVu[] {
+  const vus: SousAgentVu[] = [];
+  for (const bloc of turn?.blocks ?? []) {
+    if (bloc.type !== "tool" || !OUTILS_DELEGATION.has(bloc.toolName)) continue;
+    const input = asRecord(bloc.toolInput);
+    const type = typeof input.subagent_type === "string" ? input.subagent_type.trim() : "";
+    const description = typeof input.description === "string" ? input.description.trim() : "";
+    vus.push({
+      // Un lancement sans `subagent_type` reste « sous-agent » : mieux vaut un
+      // nom générique qu'un nom inventé (même règle que T-023).
+      nom: type || "sous-agent",
+      description: description || null,
+      termine: bloc.result !== undefined,
+      erreur: bloc.result?.isError === true,
+    });
+  }
+  return vus;
+}
+
+/**
+ * Sous-agents du DERNIER tour assistant : ce qui tourne pendant un tour, ce
+ * qui vient de tourner sinon. Volontairement pas un cumul de session — la
+ * question posée est « qui travaille pour moi maintenant », pas « qui a
+ * travaillé depuis ce matin » (ça, c'est la page Supervision).
+ */
+export function sousAgentsVifs(turns: AgentTurn[]): SousAgentVu[] {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (turn.role === "assistant") return sousAgentsDuTour(turn);
+  }
+  return [];
+}
+
+/**
+ * T-102 — un push glissé PENDANT qu'un sous-agent occupe le tour n'a aucun
+ * point d'injection avant qu'il ne rende la main (parfois des dizaines de
+ * minutes, constat du 2026-08-29) : la bulle « en cours de tour » doit le
+ * dire, plutôt que de laisser croire à une attente ordinaire.
+ *
+ * Le tour PRÉCÉDENT (celui que l'injection vient de clore, `continued: true`
+ * — voir envoiProjet.ts) porte encore son bloc `Task`/`Agent` SANS résultat :
+ * c'est le signe direct qu'un sous-agent tournait au moment du push, sans
+ * qu'il faille un seul bit d'état de plus côté sidecar — `sousAgentsDuTour`
+ * (T-077) le sait déjà en lisant les blocs.
+ */
+export function sousAgentOccupaitLeTour(turnPrecedent: AgentTurn | undefined): boolean {
+  if (!turnPrecedent) return false;
+  return sousAgentsDuTour(turnPrecedent).some((s) => !s.termine);
+}
+
+/*
+ * T-093 — descriptions des tâches de fond, ramenées à une ligne.
+ *
+ * Constat du 2026-08-27 (capture) : l'encart « en attente des rapports de 7
+ * tâche(s) de fond » affichait quinze lignes de shell — un `curl` avec
+ * heredoc et un `python3 -c` complets, retours à la ligne compris. La
+ * description d'une tâche de fond, côté SDK, est ce que le modèle a écrit :
+ * pour un `Bash` détaché, c'est la commande entière. Le bouton « Rendre la
+ * main » se retrouvait noyé au milieu du pavé.
+ *
+ * L'encart répond à une seule question — « qu'est-ce qui tourne encore ? ».
+ * Une ligne par tâche, aplatie et coupée, y répond ; le détail exact vit dans
+ * le bloc d'outil correspondant, plus haut dans la transcription.
+ */
+
+/** Longueur au-delà de laquelle une description est coupée. */
+const LONGUEUR_TACHE_FOND = 60;
+
+/** Nombre de tâches nommées avant de compter le reste. */
+const TACHES_FOND_NOMMEES = 3;
+
+export function resumerTachesDeFond(descriptions: readonly string[]): string {
+  const propres = descriptions
+    .map((d) => d.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .map((d) => (d.length > LONGUEUR_TACHE_FOND ? `${d.slice(0, LONGUEUR_TACHE_FOND - 1)}…` : d));
+  if (propres.length === 0) return "";
+  const nommees = propres.slice(0, TACHES_FOND_NOMMEES);
+  const reste = propres.length - nommees.length;
+  // « +4 autres » plutôt que rien : une liste tronquée en silence se lit comme
+  // une liste complète (même règle que partout ailleurs dans ce produit).
+  return reste > 0 ? `${nommees.join(" · ")} · +${reste} autre${reste > 1 ? "s" : ""}` : nommees.join(" · ");
+}
+
+/*
+ * T-081 — le modèle d'un type de sous-agent, DÉCLARÉ et jamais mesuré.
+ *
+ * ── Ce que ça dit, et surtout ce que ça ne dit pas ───────────────────────
+ * Le lancement d'un sous-agent (`Task`/`Agent`) n'annonce pas le modèle —
+ * c'est la limite énoncée plus haut, elle ne change pas. Mais le manifeste
+ * de l'agent, lui, le déclare (`model:` du frontmatter), et le moteur projet
+ * charge ces manifestes puisqu'il passe `settingSources: ["user","project",
+ * "local"]` (sidecar/src/claude.ts). `agents.list` les rend déjà, modèle
+ * compris : la donnée est là, elle n'était simplement pas rapprochée du
+ * lancement.
+ *
+ * ⚠ C'est donc une INTENTION, pas une mesure — même distinction que T-035 et
+ * T-066 : la ventilation `modelUsage` dit ce qui a réellement consommé, ce
+ * champ dit ce que le manifeste demande. L'affichage doit le nommer
+ * « déclaré », et les deux ne se somment jamais.
+ */
+
+/** T-081 — modèle déclaré pour un type de sous-agent. */
+export interface ModeleSousAgent {
+  /** Alias ou id tel qu'écrit dans le manifeste — `null` = rien de déclaré. */
+  modele: string | null;
+  /** Un manifeste porte bien ce nom (sinon : type inconnu, agent intégré du SDK). */
+  connu: boolean;
+}
+
+/** Comparaison des noms d'agents : le `subagent_type` demandé par le modèle
+ *  peut différer du manifeste par la casse ou une espace de bord. */
+function memeNomAgent(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * T-081 — modèle DÉCLARÉ du type de sous-agent `nom`, cherché dans les
+ * manifestes connus (`agents.list`).
+ *
+ * Trois issues, toutes distinctes et aucune devinée (leçon T-023) :
+ * - manifeste trouvé avec `model` → `{ modele, connu: true }` ;
+ * - manifeste trouvé sans `model` → `{ modele: null, connu: true }` : l'agent
+ *   hérite du modèle du fil, ce qui est une information, pas une absence ;
+ * - aucun manifeste → `{ modele: null, connu: false }` : type intégré au SDK
+ *   (`general-purpose`, `Explore`…) ou nom inconnu. On n'affiche alors rien
+ *   plutôt qu'un modèle inventé.
+ */
+export function modeleSousAgentDeclare(
+  nom: string,
+  manifestes: readonly { name: string; model: string | null }[],
+): ModeleSousAgent {
+  for (const m of manifestes) {
+    if (!memeNomAgent(m.name, nom)) continue;
+    const modele = (m.model ?? "").trim();
+    return { modele: modele === "" ? null : modele, connu: true };
+  }
+  return { modele: null, connu: false };
 }
 
 /**

@@ -7,18 +7,6 @@ import { CommandPalette } from "./CommandPalette";
 // jamais ensuite — voir pagesParesseuses.tsx (T-029).
 import { ChatPage, OrchestrationPage, ProvidersPage, SlotPage, SupervisionPage, SystemPage } from "./pagesParesseuses";
 import {
-  subscribeReady,
-  fetchStatus,
-  restartSidecar,
-  subscribeStatus,
-  usageClaude,
-  usageClaudeInit,
-  usageCredits,
-  type ClaudeUsageSnapshot,
-  type ClaudeUsageWindow,
-  type OpenrouterUsage,
-} from "./sidecar";
-import {
   COMPACT_BUTTON_MIN_TOKENS,
   COMPACT_BUTTON_RATIO,
   contextWindowFor,
@@ -30,414 +18,139 @@ import {
 } from "./contextBus";
 import { initRoutingPush } from "./routerAdmin";
 import { tachesList, tachesReports } from "./tachesClient";
-import { stateRead, stateWrite } from "./stateClient";
-import { openTerminal } from "./systemClient";
-import { SystemStatsWidget } from "./SystemStatsWidget";
-import { cleConfigureePour, providersDejaPousses, subscribeProvidersPushed } from "./providersBus";
-import { subscribeUsageChanged } from "./usageBus";
+import { openTerminal, systemStats, type SystemStats } from "./systemClient";
 import { useProjects } from "./useProjects";
 import { useProviders } from "./useProviders";
-import { useRovingFocus } from "./useRovingFocus";
 import { useSpeech } from "./useSpeech";
 import { Donut } from "./Donut";
 import { NAV_ITEMS, type PageId } from "./navigation";
 import { handleFocusCycleKey, handleZoneArrowKey } from "./focusZones";
+import { BandeauCoquilleMuette, SidecarMortBanner } from "./bandeaux";
+import { Nav, ouvrirNouvelleFenetre } from "./barreNavigation";
+import { basculerTousPanneaux } from "./panneauxLateraux";
+import { UsageWidget } from "./encartConso";
 
-/* ---------- Encart conso ---------- */
+/* ---------- Sonde système (CPU / RAM / GPU) ---------- */
 
-/** « Cron » de l'encart conso : relevé actif (micro-tour compris) toutes les 5 min. */
-const USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-/** Garde anti-rafale du micro-tour d'initialisation (ready + statut + cron). */
-const CLAUDE_INIT_MIN_GAP_MS = 60 * 1000;
+const SYSTEM_STATS_INTERVAL_MS = 5000;
 
-function formatResetTime(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+function formatGb(mb: number): string {
+  return (mb / 1024).toFixed(1).replace(".", ",");
 }
 
 /**
- * Temps restant avant une réinitialisation, compact : « 3h » / « 45min »
- * (mode heures — fenêtre session) ou « 6j » / « 12h » (mode jours — hebdo).
+ * Plage de remplissage de l'anneau de température : 30 °C (machine au repos)
+ * = anneau vide, 100 °C (limite thermique) = anneau plein. Nécessaire parce
+ * que `usageLevel` raisonne en POURCENTAGE : lui passer 72 °C bruts le ferait
+ * conclure « ok » à 72 % alors que 72 °C est déjà chaud.
  */
-function remainingUntil(iso: string, mode: "hours" | "days"): string {
-  const ms = new Date(iso).getTime() - Date.now();
-  if (!Number.isFinite(ms) || ms <= 0) return "0";
-  if (mode === "hours") {
-    if (ms < 3_600_000) return `${Math.ceil(ms / 60_000)}min`;
-    return `${Math.ceil(ms / 3_600_000)}h`;
-  }
-  if (ms < 86_400_000) return `${Math.ceil(ms / 3_600_000)}h`;
-  return `${Math.ceil(ms / 86_400_000)}j`;
+const TEMP_MIN_C = 30;
+const TEMP_MAX_C = 100;
+
+function tempPct(celsius: number): number {
+  return ((celsius - TEMP_MIN_C) / (TEMP_MAX_C - TEMP_MIN_C)) * 100;
 }
 
-/**
- * Fenêtre spécifique à un modèle (hebdo Opus/Fable…) : toute fenêtre relayée
- * par le sidecar qui n'est ni la session 5h ni l'hebdo globale. Le nommage de
- * cette API expérimentale n'étant pas garanti, on privilégie une clé évoquant
- * un modèle, sinon la première venue.
- */
-function findModelWindow(
-  windows: Record<string, ClaudeUsageWindow>,
-): ClaudeUsageWindow | null {
-  const entries = Object.entries(windows).filter(([k]) => k !== "five_hour" && k !== "seven_day");
-  if (entries.length === 0) return null;
-  const preferred = entries.find(([k]) => /opus|fable|sonnet|model/i.test(k)) ?? entries[0];
-  return preferred[1];
-}
-
-function ClaudeInitButton({
-  initializing,
-  onInit,
-}: Readonly<{ initializing: boolean; onInit: () => void }>) {
-  return (
-    <span className="usage-widget__placeholder">
-      {"Claude : — "}
-      <button
-        type="button"
-        className="usage-widget__init"
-        disabled={initializing}
-        onClick={onInit}
-        title="Initialiser le relevé d'abonnement (micro-tour Claude économique)"
-        aria-label="Initialiser le relevé d'abonnement Claude"
-      >
-        {initializing ? "…" : "↻"}
-      </button>
-    </span>
-  );
-}
-
-/** Seuil à partir duquel une fenêtre est considérée saturée (plus de marge utile). */
-const USAGE_SATURATED_PCT = 98;
-
-/** Première fenêtre saturée, session (5h) d'abord — `null` si tout va bien. */
-function pickSaturatedWindow(
-  snapshot: ClaudeUsageSnapshot,
-): { label: string; resetsAt: string; mode: "hours" | "days" } | null {
-  if (snapshot.fiveHour && snapshot.fiveHour.utilization >= USAGE_SATURATED_PCT) {
-    return { label: "Session 5h", resetsAt: snapshot.fiveHour.resetsAt, mode: "hours" };
-  }
-  if (snapshot.sevenDay && snapshot.sevenDay.utilization >= USAGE_SATURATED_PCT) {
-    return { label: "Fenêtre 7 jours", resetsAt: snapshot.sevenDay.resetsAt, mode: "days" };
-  }
-  return null;
-}
-
-function ClaudeUsageBlock({
-  snapshot,
-  initializing,
-  onInit,
-}: Readonly<{ snapshot: ClaudeUsageSnapshot | null; initializing: boolean; onInit: () => void }>) {
-  const modelWindow = snapshot?.available ? findModelWindow(snapshot.windows) : null;
-  const hasAny = snapshot?.available && (snapshot.fiveHour || snapshot.sevenDay || modelWindow);
-  if (!snapshot?.available || !hasAny) {
-    return <ClaudeInitButton initializing={initializing} onInit={onInit} />;
-  }
-  // Seuil d'alerte : la session (5h) prime sur l'hebdo si les deux saturent —
-  // c'est elle qui débloque le plus vite.
-  const saturated = pickSaturatedWindow(snapshot);
-  return (
-    <div
-      className="usage-widget__claude"
-      title={snapshot.capturedAt ? `Dernier relevé : ${formatResetTime(snapshot.capturedAt)}` : undefined}
-    >
-      {snapshot.fiveHour && (
-        <Donut
-          label="Session"
-          pct={snapshot.fiveHour.utilization}
-          text={`${Math.round(snapshot.fiveHour.utilization)}% · ${remainingUntil(snapshot.fiveHour.resetsAt, "hours")}`}
-          title={`Fenêtre 5h — réinitialisation : ${formatResetTime(snapshot.fiveHour.resetsAt)}`}
-        />
-      )}
-      {snapshot.sevenDay && (
-        <Donut
-          label="Semaine"
-          pct={snapshot.sevenDay.utilization}
-          text={`${Math.round(snapshot.sevenDay.utilization)}% · ${remainingUntil(snapshot.sevenDay.resetsAt, "days")}`}
-          title={`Fenêtre 7 jours — réinitialisation : ${formatResetTime(snapshot.sevenDay.resetsAt)}`}
-        />
-      )}
-      {modelWindow && (
-        <Donut
-          label="Fable"
-          pct={modelWindow.utilization}
-          title={`Fenêtre hebdo du modèle — réinitialisation : ${formatResetTime(modelWindow.resetsAt)}`}
-        />
-      )}
-      {/* Fenêtre saturée : la jauge seule passait inaperçue — on le dit en
-          toutes lettres, avec le temps restant avant réinitialisation. */}
-      {saturated && (
-        <span className="usage-widget__alert" title={`Réinitialisation : ${formatResetTime(saturated.resetsAt)}`}>
-          ⚠ {saturated.label} saturée — réinitialisation dans {remainingUntil(saturated.resetsAt, saturated.mode)}
-        </span>
-      )}
-    </div>
-  );
-}
-
-/**
- * Référence de « réservoir » OpenRouter : le solde disponible constaté juste
- * après la dernière recharge. total_credits/total_usage de l'API étant des
- * cumuls à vie du compte, leur ratio tend vers 100 % pour toujours — jauger
- * là-dessus affiche un badge éternellement plein. On jauge donc la
- * consommation du réservoir courant, réamorcé à chaque recharge.
- */
-interface OpenrouterRef {
-  peakRemaining: number;
-  totalCredits: number;
-}
-
-function nextOpenrouterRef(prev: OpenrouterRef | null, usage: OpenrouterUsage): OpenrouterRef {
-  // Recharge (total_credits a monté) ou solde au-dessus du pic connu : le
-  // réservoir repart de ce solde. Sinon la référence ne bouge pas.
-  if (!prev || usage.totalCredits > prev.totalCredits || usage.remaining > prev.peakRemaining) {
-    return { peakRemaining: Math.max(usage.remaining, 0), totalCredits: usage.totalCredits };
-  }
-  return prev;
-}
-
-function OpenrouterUsageBlock({
-  usage,
-  refPoint,
-  error,
-}: Readonly<{ usage: OpenrouterUsage | null; refPoint: OpenrouterRef | null; error: boolean }>) {
-  if (error || !usage) {
-    return (
-      <span className="usage-widget__placeholder" title="Aucune clé OpenRouter configurée, ou erreur réseau">
-        OR : —
-      </span>
-    );
-  }
-  // Camembert : part consommée du réservoir courant (solde depuis la dernière
-  // recharge). Sans référence (premier relevé), rien n'a été consommé depuis.
-  const peak = refPoint?.peakRemaining ?? 0;
-  const pct = peak > 0 ? ((peak - usage.remaining) / peak) * 100 : 0;
-  return (
-    <Donut
-      label="OR"
-      pct={pct}
-      text={`reste ${usage.remaining.toFixed(2)}$`}
-      title={`Depuis la dernière recharge : consommé ${Math.max(peak - usage.remaining, 0).toFixed(2)} $ sur ${peak.toFixed(2)} $ (${Math.round(Math.min(100, Math.max(0, pct)))} %) · Reste ${usage.remaining.toFixed(2)} $ · Historique du compte : ${usage.totalUsage.toFixed(2)} $ consommés sur ${usage.totalCredits.toFixed(2)} $ chargés`}
-    />
-  );
-}
-
-/**
- * Dernier relevé conso persisté sur disque (state store) : affiché dès le
- * lancement, avant qu'un tour Claude n'ait produit un instantané frais ou que
- * le moteur soit prêt à interroger OpenRouter.
- */
-interface UsageCache {
-  claude: ClaudeUsageSnapshot | null;
-  openrouter: OpenrouterUsage | null;
-  openrouterRef?: OpenrouterRef | null;
-}
-
-const USAGE_RETRY_DELAY_MS = 15_000;
-
-/** Seul fournisseur dont l'encart de conso lit le crédit (endpoint `/credits`). */
-const OPENROUTER_PROVIDER_ID = "openrouter";
-
-function UsageWidget() {
-  const [claudeSnapshot, setClaudeSnapshot] = useState<ClaudeUsageSnapshot | null>(null);
-  const [openrouterUsage, setOpenrouterUsage] = useState<OpenrouterUsage | null>(null);
-  const [openrouterRef, setOpenrouterRef] = useState<OpenrouterRef | null>(null);
-  const [openrouterError, setOpenrouterError] = useState(false);
-  const [claudeInitializing, setClaudeInitializing] = useState(false);
-
-  function handleClaudeInit() {
-    if (claudeInitializing) return;
-    setClaudeInitializing(true);
-    usageClaudeInit()
-      .then((snap) => {
-        if (!snap.available) return;
-        setClaudeSnapshot(snap);
-        // Persistance : fusion avec le cache existant (l'OpenRouter éventuel y reste).
-        stateRead<Partial<UsageCache>>("usage-cache")
-          .catch(() => ({}) as Partial<UsageCache>)
-          .then((cache) => stateWrite("usage-cache", { ...cache, claude: snap }))
-          .catch(() => {
-            /* best effort */
-          });
-      })
-      .catch(() => {
-        /* micro-tour en échec (hors ligne, non connecté…) : l'encart reste à « — » */
-      })
-      .finally(() => setClaudeInitializing(false));
-  }
+/** Vue minimale de l'utilisation machine dans l'en-tête (poll 5 s). */
+function SystemStatsWidget() {
+  const [stats, setStats] = useState<SystemStats | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    // Relais vers le cache disque : on ne réécrit que ce qui a été rafraîchi
-    // avec succès (l'autre moitié garde sa dernière valeur connue).
-    const cacheRef: UsageCache = { claude: null, openrouter: null, openrouterRef: null };
-
-    function persistCache() {
-      stateWrite("usage-cache", cacheRef).catch(() => {
-        /* best effort : l'encart reste fonctionnel sans persistance */
-      });
-    }
-
-    function scheduleRetry() {
-      if (cancelled || retryTimer !== null) return;
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        refresh();
-      }, USAGE_RETRY_DELAY_MS);
-    }
-
-    function refresh() {
-      usageClaude()
-        .then((snap) => {
-          if (cancelled) return;
-          // Un instantané « indisponible » (aucun tour Claude joué depuis le
-          // démarrage du sidecar) ne doit pas écraser le dernier relevé réel
-          // (frais ou restauré du cache disque).
-          setClaudeSnapshot((prev) => {
-            if (snap.available) {
-              cacheRef.claude = snap;
-              persistCache();
-              return snap;
-            }
-            return prev?.available ? prev : (prev ?? snap);
-          });
-          if (!snap.available) scheduleRetry();
+    const tick = () => {
+      systemStats()
+        .then((s) => {
+          if (!cancelled) setStats(s);
         })
         .catch(() => {
-          if (!cancelled) scheduleRetry();
+          /* sonde indisponible : l'encart reste vide */
         });
-      // T-008 — ne RIEN demander au sujet d'un fournisseur tant que la table
-      // n'a pas atteint le sidecar : sinon il répond « fournisseur inconnu »,
-      // ligne d'erreur à chaque démarrage pour une simple course. L'abonnement
-      // ci-dessous relance dès que la poussée a lieu.
-      if (!providersDejaPousses()) return;
-      // Aucune clé OpenRouter enregistrée : l'appel ne peut QUE répondre « clé
-      // API manquante ». Le retenter toutes les 15 s remplissait le journal
-      // d'erreurs pour une configuration parfaitement volontaire (l'utilisateur
-      // n'a simplement pas de compte OpenRouter). L'encart affiche le même
-      // « OR : — » qu'avant, et l'abonnement `providers.set` relancera tout
-      // seul la sonde à la seconde où une clé sera saisie.
-      if (!cleConfigureePour(OPENROUTER_PROVIDER_ID)) {
-        setOpenrouterUsage((prev) => {
-          if (!prev) setOpenrouterError(true);
-          return prev;
-        });
-        return;
-      }
-      usageCredits(OPENROUTER_PROVIDER_ID)
-        .then((usage) => {
-          if (cancelled) return;
-          const nextRef = nextOpenrouterRef(cacheRef.openrouterRef ?? null, usage);
-          setOpenrouterUsage(usage);
-          setOpenrouterRef(nextRef);
-          setOpenrouterError(false);
-          cacheRef.openrouter = usage;
-          cacheRef.openrouterRef = nextRef;
-          persistCache();
-        })
-        .catch(() => {
-          if (cancelled) return;
-          // Pas de clé/erreur réseau : on garde l'éventuel relevé restauré
-          // du cache plutôt que de basculer sur « — », et on retentera.
-          setOpenrouterUsage((prev) => {
-            if (!prev) setOpenrouterError(true);
-            return prev;
-          });
-          scheduleRetry();
-        });
-    }
-
-    // Récupération ACTIVE du relevé d'abonnement (micro-tour économique, voir
-    // usage.claude.init) : au démarrage dès que le sidecar est prêt, puis via
-    // le cron de 20 min. Garde anti-rafale (ready + statut + cron peuvent se
-    // chevaucher) et une seule requête en vol.
-    let initInFlight = false;
-    let lastInitAt = 0;
-    function autoInit() {
-      if (cancelled || initInFlight) return;
-      if (Date.now() - lastInitAt < CLAUDE_INIT_MIN_GAP_MS) return;
-      initInFlight = true;
-      lastInitAt = Date.now();
-      usageClaudeInit()
-        .then((snap) => {
-          if (cancelled || !snap.available) return;
-          setClaudeSnapshot(snap);
-          cacheRef.claude = snap;
-          persistCache();
-        })
-        .catch(() => {
-          /* hors ligne / non connecté : le prochain passage du cron retentera */
-        })
-        .finally(() => {
-          initInFlight = false;
-        });
-    }
-
-    // Restauration du dernier relevé connu, puis premier rafraîchissement.
-    stateRead<Partial<UsageCache>>("usage-cache")
-      .then((cache) => {
-        if (cancelled || !cache) return;
-        if (cache.claude?.available) {
-          cacheRef.claude = cache.claude;
-          setClaudeSnapshot((prev) => prev ?? cache.claude ?? null);
-        }
-        if (cache.openrouter && typeof cache.openrouter.remaining === "number") {
-          cacheRef.openrouter = cache.openrouter;
-          setOpenrouterUsage((prev) => prev ?? cache.openrouter ?? null);
-          setOpenrouterError(false);
-        }
-        if (cache.openrouterRef && typeof cache.openrouterRef.peakRemaining === "number") {
-          cacheRef.openrouterRef = cache.openrouterRef;
-          setOpenrouterRef((prev) => prev ?? cache.openrouterRef ?? null);
-        }
-      })
-      .catch(() => {
-        /* pas de cache : l'encart démarre à « — » comme avant */
-      })
-      .finally(() => {
-        if (cancelled) return;
-        refresh();
-        // Couvre le cas où le sidecar était déjà prêt avant nos abonnements
-        // (rechargement à chaud) : aucun event ready/statut ne viendra.
-        autoInit();
-      });
-
-    const interval = setInterval(() => {
-      refresh();
-      autoInit();
-    }, USAGE_REFRESH_INTERVAL_MS);
-    const offUsageChanged = subscribeUsageChanged(refresh);
-    const offProviders = subscribeProvidersPushed(refresh);
-    // Le premier essai part souvent avant que le sidecar ne soit joignable :
-    // on relance dès qu'il annonce « ready » (ou repasse « running »), avec la
-    // récupération active du relevé d'abonnement au passage.
-    const offReady = subscribeReady(() => {
-      refresh();
-      autoInit();
-    });
-    const offStatus = subscribeStatus((s) => {
-      if (s.state === "running") {
-        refresh();
-        autoInit();
-      }
-    });
-
+    };
+    tick();
+    const interval = setInterval(tick, SYSTEM_STATS_INTERVAL_MS);
     return () => {
       cancelled = true;
-      if (retryTimer !== null) clearTimeout(retryTimer);
       clearInterval(interval);
-      offUsageChanged();
-      offProviders();
-      offReady();
-      offStatus();
     };
   }, []);
 
+  if (!stats) return null;
+  const ramPct =
+    stats.memTotalMb > 0 ? (stats.memUsedMb / stats.memTotalMb) * 100 : 0;
+  const ramDetail = `${formatGb(stats.memUsedMb)}/${formatGb(stats.memTotalMb)}G`;
+  const gpuMemDetail =
+    stats.gpuMemUsedMb !== null && stats.gpuMemTotalMb !== null
+      ? ` — mémoire ${formatGb(stats.gpuMemUsedMb)}/${formatGb(stats.gpuMemTotalMb)}G`
+      : "";
+  // T-094 — une pastille PAR ORGANE (processeur, mémoire, carte graphique),
+  // chacune avec sa charge et sa température. Cinq à six anneaux dans un seul
+  // cadre se lisaient comme une bande indifférenciée : il fallait relire les
+  // étiquettes pour savoir laquelle chauffait. Un groupe sans aucune sonde
+  // n'est pas rendu — un cadre vide dirait « rien à signaler » là où il n'y a
+  // rien à dire.
+  const gpuPresent = stats.gpuPct !== null || stats.gpuTempC !== null;
+  // T-129 — le GPU peut ne plus répondre (pilote qui a bougé sans redémarrage,
+  // carte occupée…) sans pour autant être ABSENT du poste : `gpuIndisponible`
+  // porte alors la cause verbatim de `nvidia-smi`. Sans pastille, le groupe
+  // disparaissait purement et simplement, sans que l'utilisateur puisse
+  // savoir pourquoi depuis l'application. Une seule pastille d'alerte, pas de
+  // bandeau : elle s'intègre au même cadre que les mesures qu'elle remplace.
+  const gpuMuet = !gpuPresent && stats.gpuIndisponible !== null;
   return (
-    <div className="usage-widget" title="Consommation">
-      <ClaudeUsageBlock snapshot={claudeSnapshot} initializing={claudeInitializing} onInit={handleClaudeInit} />
-      <OpenrouterUsageBlock usage={openrouterUsage} refPoint={openrouterRef} error={openrouterError} />
+    <div className="system-stats" title="Utilisation machine (rafraîchie toutes les 5 s)">
+      {(stats.cpuPct !== null || stats.cpuTempC !== null) && (
+        <div className="system-stats__organe system-stats__organe--cpu">
+          {stats.cpuPct !== null && (
+            <Donut label="CPU" pct={stats.cpuPct} title={`Processeur : ${Math.round(stats.cpuPct)} %`} />
+          )}
+          {stats.cpuTempC !== null && (
+            <Donut
+              label="T.CPU"
+              pct={tempPct(stats.cpuTempC)}
+              text={`${Math.round(stats.cpuTempC)}°`}
+              title={`Température processeur : ${Math.round(stats.cpuTempC)} °C`}
+            />
+          )}
+        </div>
+      )}
+      <div className="system-stats__organe system-stats__organe--ram">
+        <Donut label="RAM" pct={ramPct} title={`Mémoire : ${ramDetail}`} />
+        {stats.ramTempC !== null && (
+          <Donut
+            label="T.RAM"
+            pct={tempPct(stats.ramTempC)}
+            text={`${Math.round(stats.ramTempC)}°`}
+            title={`Température mémoire : ${Math.round(stats.ramTempC)} °C`}
+          />
+        )}
+      </div>
+      {(gpuPresent || gpuMuet) && (
+        <div className="system-stats__organe system-stats__organe--gpu">
+          {stats.gpuPct !== null && (
+            <Donut
+              label="GPU"
+              pct={stats.gpuPct}
+              title={`Carte graphique : ${Math.round(stats.gpuPct)} %${gpuMemDetail}`}
+            />
+          )}
+          {stats.gpuTempC !== null && (
+            <Donut
+              label="T.GPU"
+              pct={tempPct(stats.gpuTempC)}
+              text={`${Math.round(stats.gpuTempC)}°`}
+              title={`Température carte graphique : ${Math.round(stats.gpuTempC)} °C`}
+            />
+          )}
+          {gpuMuet && (
+            <Donut
+              label="GPU"
+              pct={100}
+              text="!"
+              title={`GPU non mesuré : ${stats.gpuIndisponible}`}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -514,66 +227,8 @@ function contextSourceFor(page: PageId): ContextSource | null {
 
 /* ---------- Navigation ---------- */
 
-
-
 /** Clé localStorage : mtime du dernier rapport de tâche « vu » (l'ouverture d'Orchestration marque vu). */
 const TACHE_REPORTS_SEEN_KEY = "iastudio.tacheReportsSeenMs";
-
-function Nav({
-  active,
-  onSelect,
-  onOpenTerminal,
-  orchestrationAlert,
-}: Readonly<{
-  active: PageId;
-  onSelect: (id: PageId) => void;
-  onOpenTerminal: () => void;
-  /** Libellé du dernier rapport de tâche non vu (null = rien à signaler) — pastille sur l'onglet Orchestration. */
-  orchestrationAlert: string | null;
-}>) {
-  // Roving tabindex : ←/→ (et Début/Fin) parcourent la barre, Entrée ou Espace
-  // active — se DÉPLACER ne change pas de page (activation manuelle, APG). Le
-  // bouton « Terminal » fait partie du parcours : il est dans la barre, et
-  // l'en sortir laisserait un arrêt de tabulation isolé au bout du menu.
-  const roving = useRovingFocus<HTMLElement>({ selector: ".nav-item", orientation: "horizontal" });
-  return (
-    <nav
-      className="app-nav"
-      aria-label="Navigation principale"
-      ref={roving.containerRef}
-      onKeyDown={roving.onKeyDown}
-      onFocus={roving.onFocus}
-    >
-      {NAV_ITEMS.map((item) => {
-        const alerted = item.id === "orchestration" && orchestrationAlert !== null;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            className={`nav-item${active === item.id ? " nav-item--active" : ""}${alerted ? " nav-item--alert" : ""}`}
-            onClick={() => onSelect(item.id)}
-            aria-current={active === item.id ? "page" : undefined}
-            tabIndex={active === item.id ? 0 : -1}
-            title={alerted ? `Nouveau rapport de tâche : ${orchestrationAlert}` : undefined}
-          >
-            {item.label}
-          </button>
-        );
-      })}
-      {/* Action (pas un onglet) : lance un terminal système — dans le projet
-          en cours quand la vue Projets est active, sinon dans le home. */}
-      <button
-        type="button"
-        className="nav-item nav-item--action"
-        onClick={onOpenTerminal}
-        tabIndex={-1}
-        title="Ouvrir un terminal (dans le projet en cours depuis la vue Projets)"
-      >
-        Terminal
-      </button>
-    </nav>
-  );
-}
 
 /*
  * En-tête + navigation principale : la barre d'onglets (Projets/Chat/
@@ -619,63 +274,6 @@ function Header({
 }
 
 /* ---------- App ---------- */
-
-/* ---------- Bannière « sidecar mort » ---------- */
-
-/**
- * Bandeau global proposant de relancer le sidecar quand il est mort.
- *
- * L'état `dead` (cinq échecs rapprochés) n'offrait aucune issue dans
- * l'application : il fallait la quitter entièrement — donc perdre fenêtre,
- * onglets et session en cours — pour une panne le plus souvent passagère
- * (sidecar recompilé sous les pieds de l'application, par exemple). La
- * bannière est volontairement au niveau de la coquille : le sidecar sert
- * TOUTES les pages, l'information n'appartient à aucune.
- */
-function SidecarMortBanner() {
-  const [dead, setDead] = useState(false);
-  const [relance, setRelance] = useState(false);
-  const [erreur, setErreur] = useState("");
-
-  useEffect(() => {
-    fetchStatus()
-      .then((s) => setDead(s.state === "dead"))
-      .catch(() => {});
-    return subscribeStatus((s) => {
-      setDead(s.state === "dead");
-      if (s.state !== "dead") {
-        setRelance(false);
-        setErreur("");
-      }
-    });
-  }, []);
-
-  if (!dead) return null;
-  return (
-    <div className="sidecar-dead-banner">
-      <span>
-        Le moteur de l'application (sidecar) s'est arrêté après plusieurs échecs. Les conversations
-        enregistrées sont intactes.
-      </span>
-      <button
-        type="button"
-        className="btn"
-        disabled={relance}
-        onClick={() => {
-          setRelance(true);
-          setErreur("");
-          restartSidecar().catch((err) => {
-            setRelance(false);
-            setErreur(err instanceof Error ? err.message : String(err));
-          });
-        }}
-      >
-        {relance ? "Relance…" : "Relancer le moteur"}
-      </button>
-      {erreur && <span className="sidecar-dead-banner__error">{erreur}</span>}
-    </div>
-  );
-}
 
 function App() {
   const [page, setPage] = useState<PageId>("projects");
@@ -794,6 +392,14 @@ function App() {
         setPage("chat");
         return;
       }
+      // Ctrl+Maj+N : nouvelle FENÊTRE (T-062) — à distinguer de Ctrl+N, qui
+      // ouvre une nouvelle conversation. Testé AVANT lui, sinon la présence de
+      // Maj passerait inaperçue et créerait une session de plus.
+      if (key === "n" && e.shiftKey) {
+        e.preventDefault();
+        ouvrirNouvelleFenetre();
+        return;
+      }
       if (key === "n") {
         e.preventDefault();
         if (page === "projects") agentPageRef.current?.newSession();
@@ -806,12 +412,24 @@ function App() {
         return;
       }
 
-      // Ctrl+L : ramener le curseur dans la zone de saisie (sans effet hors
-      // des pages de conversation, qui seules en possèdent une).
+      // Ctrl+L : replier / déployer les DEUX panneaux latéraux (voir
+      // panneauxLateraux.tsx). Valable partout, même si seules les pages de
+      // conversation en possèdent — l'état est mémorisé et les y attend.
+      //
+      // Ctrl+Maj+L : ramener le curseur dans la zone de saisie (sans effet
+      // hors des pages de conversation, qui seules en possèdent une). Ce
+      // raccourci tenait Ctrl+L jusqu'au 2026-08-20 ; il lui cède la place —
+      // dégager l'écran est demandé bien plus souvent que reposer un curseur
+      // que la page place déjà d'elle-même à l'arrivée, après un vidage et
+      // après une nouvelle conversation.
       if (key === "l") {
         e.preventDefault();
-        if (page === "projects") agentPageRef.current?.focusComposer();
-        else if (page === "chat") chatPageRef.current?.focusComposer();
+        if (e.shiftKey) {
+          if (page === "projects") agentPageRef.current?.focusComposer();
+          else if (page === "chat") chatPageRef.current?.focusComposer();
+        } else {
+          basculerTousPanneaux();
+        }
         return;
       }
 
@@ -875,6 +493,7 @@ function App() {
     <div className="app-shell">
       <Header page={page} onSelectPage={setPage} onOpenTerminal={handleOpenTerminal} orchestrationAlert={tacheAlert} />
       <SidecarMortBanner />
+      <BandeauCoquilleMuette />
       <main className="app-content">
         {/*
           Une page reste montée une fois visitée (masquée via CSS) pour ne pas

@@ -279,7 +279,7 @@ async function testOrchRunRouterAuto() {
 
     // s3 démarre après s1 : son template court aurait donné `trivial` (motif
     // « merci ») mais le RENDU volumineux (sortie de s1) doit donner
-    // `complexe` -> claude/claude-fable-5 (défaut du tier complexe) — LA
+    // `complexe` -> claude/claude-opus-5 (défaut du tier complexe, T-078) — LA
     // preuve que le routage se fait au démarrage, sur le texte rendu.
     const stepStartedS3 = await waitFor6(
       (e) => e.id === runId && e.event === "chunk" && e.data.kind === "step_started" && e.data.stepId === "s3",
@@ -288,7 +288,7 @@ async function testOrchRunRouterAuto() {
     );
     assert(
       stepStartedS3.data.engine === "claude" &&
-        stepStartedS3.data.model === "claude-fable-5" &&
+        stepStartedS3.data.model === "claude-opus-5" &&
         stepStartedS3.data.routeTier === "complexe",
       `step_started s3 : cible claude routée (tier complexe, texte rendu) attendue, reçu ${JSON.stringify(stepStartedS3.data)}`,
     );

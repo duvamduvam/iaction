@@ -5,6 +5,7 @@
  * sidecar est simplement omis/neutralisé plutôt que de faire planter l'UI.
  */
 import { request } from "./sidecar";
+import type { TourPourEscalade } from "./escaladeSignal";
 
 export type UsageBucketKind = "day" | "week" | "month";
 
@@ -12,8 +13,13 @@ export interface UsageTotals {
   tours: number;
   orchTours: number;
   conversations: number;
-  /** `null` si aucun `promptTokens` non nul sur la période. */
-  avgPromptTokens: number | null;
+  /**
+   * T-067 — médiane de l'occupation RÉELLE du contexte (`contextTokens`).
+   * `null` si aucun tour de la période n'a de contexte relevé. Remplace
+   * `avgPromptTokens`, qui mesurait `input_tokens` hors cache : médiane de
+   * 6 tokens sur 1 031 tours, soit rien.
+   */
+  contexteMedian: number | null;
   totalTokens: number;
 }
 
@@ -23,7 +29,8 @@ export interface UsageBucket {
   tours: number;
   orchTours: number;
   conversations: number;
-  avgPromptTokens: number | null;
+  /** T-067 — voir `UsageTotals.contexteMedian`. */
+  contexteMedian: number | null;
   totalTokens: number;
 }
 
@@ -40,8 +47,17 @@ export interface UsageRoutage {
   parTier: Record<string, { tours: number }>;
   /** Tours portant un `routeTier` (envoyés en « Auto »). */
   toursAuto: number;
-  /** Part des tours à coût nul (abonnement Claude + providers locaux), `null` si aucun tour. */
+  /**
+   * Part des tours hors facturation API (abonnement Claude + providers locaux),
+   * `null` si aucun tour. **Vrai pour le portefeuille, faux pour la ressource** :
+   * un tour d'abonnement consomme le quota, la seule chose qui sature ici — d'où
+   * les deux moitiés ci-dessous, servies avec (T-068).
+   */
   partCoutNulPct: number | null;
+  /** T-068 — part des tours d'ABONNEMENT : gratuite en dollars, payée en quota. */
+  partAbonnementPct: number | null;
+  /** T-068 — part des tours LOCAUX : ni dollars, ni quota. */
+  partLocalPct: number | null;
   /** Mix intra-abonnement : tours moteur claude par modèle, trié décroissant. */
   mixAbo: Array<{ model: string; tours: number }>;
   /** Dépense de débord du mois calendaire courant (USD), comparée au plafond. */
@@ -76,6 +92,46 @@ export interface UsageProjet {
   autonomePct: number | null;
 }
 
+/**
+ * T-071 — agrégat « sobriété » (voir docs/etude-supervision.md §6).
+ *
+ * Deux régimes cohabitent, et l'UI DOIT les distinguer :
+ * - la fiabilité et les heures se calculent sur tout l'historique ;
+ * - tout ce qui vient de la ventilation T-066 n'existe que pour les tours
+ *   enregistrés depuis. D'où `toursVentiles` : un pourcentage sans son
+ *   dénominateur serait un chiffre faux qui a l'air juste (leçon T-035).
+ */
+export interface UsageSobriete {
+  toursErreur: number;
+  toursAbandon: number;
+  parCause: Array<{ cause: string; tours: number }>;
+  /** T-082 — ventilation des tours INTERROMPUS, tenue à part des pannes. */
+  parCauseAbandon: Array<{ cause: string; tours: number }>;
+  /** Dénominateur des grandeurs de ventilation. `0` = rien à afficher, et le dire. */
+  toursVentiles: number;
+  toursAvecDelegation: number;
+  tokensFil: number;
+  tokensDelegue: number;
+  tokensRoleInconnu: number;
+  parModeleReel: Array<{ model: string; tokens: number; costUsd: number; toursDelegue: number }>;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** `null` tant qu'aucune entrée n'a été mesurée — jamais 0 %. */
+  cacheHitPct: number | null;
+  coutVentileUsd: number;
+  toursAvecCout: number;
+  /** Part du coût portée par les 10 % de tours les plus chers. */
+  concentrationTop10Pct: number | null;
+  coutTourMedianUsd: number | null;
+  coutTourMaxUsd: number | null;
+  contexteMedian: number | null;
+  contexteP90: number | null;
+  dureeMedianeMs: number | null;
+  dureeP90Ms: number | null;
+  /** 24 entrées, heure LOCALE. */
+  heures: number[];
+}
+
 export interface UsageStats {
   totals: UsageTotals;
   buckets: UsageBucket[];
@@ -84,6 +140,18 @@ export interface UsageStats {
   routage: UsageRoutage | null;
   /** S2 — `null` avec un sidecar antérieur (champ absent). */
   parProjet: UsageProjet[] | null;
+  /** T-071 — `null` avec un sidecar antérieur (champ absent). */
+  sobriete: UsageSobriete | null;
+  /**
+   * T-074 — projection MINIMALE par tour {conversationId, ts, model, erreur},
+   * juste ce dont `calculerSignalEscalade` (escaladeSignal.ts) a besoin pour
+   * repérer une escalade — jamais un pré-calcul côté sidecar : l'algorithme
+   * ne vit qu'à un seul endroit, testé. `null` avec un sidecar antérieur
+   * (champ absent), `[]` si le sidecar répond mais qu'aucun tour de la
+   * période ne porte de `conversationId` exploitable — les deux ne se
+   * confondent jamais (T-035).
+   */
+  escaladeTours: TourPourEscalade[] | null;
 }
 
 function toNum(value: unknown): number {
@@ -107,7 +175,7 @@ function parseTotals(value: unknown): UsageTotals {
     tours: toNum(v.tours),
     orchTours: toNum(v.orchTours),
     conversations: toNum(v.conversations),
-    avgPromptTokens: toNumOrNull(v.avgPromptTokens),
+    contexteMedian: toNumOrNull(v.contexteMedian),
     totalTokens: toNum(v.totalTokens),
   };
 }
@@ -121,7 +189,7 @@ function parseBucket(value: unknown): UsageBucket | null {
     tours: toNum(v.tours),
     orchTours: toNum(v.orchTours),
     conversations: toNum(v.conversations),
-    avgPromptTokens: toNumOrNull(v.avgPromptTokens),
+    contexteMedian: toNumOrNull(v.contexteMedian),
     totalTokens: toNum(v.totalTokens),
   };
 }
@@ -162,6 +230,8 @@ function parseRoutage(value: unknown): UsageRoutage | null {
     parTier,
     toursAuto: toNum(v.toursAuto),
     partCoutNulPct: toNumOrNull(v.partCoutNulPct),
+    partAbonnementPct: toNumOrNull(v.partAbonnementPct),
+    partLocalPct: toNumOrNull(v.partLocalPct),
     mixAbo,
     debordMoisUsd: toNum(v.debordMoisUsd),
     // S3 — absents d'un sidecar antérieur : 0, la carte affiche « — ».
@@ -192,6 +262,94 @@ function parseParProjet(value: unknown): UsageProjet[] | null {
   return out;
 }
 
+/** T-071 — parsing défensif de l'agrégat `sobriete` (absent/mal formé → null). */
+function parseSobriete(value: unknown): UsageSobriete | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  // T-082 — deux listes de même forme (pannes, interruptions) : un sidecar
+  // antérieur n'envoie pas la seconde, elle vaut alors [] et l'encart se tait.
+  const listeCauses = (brut: unknown): Array<{ cause: string; tours: number }> => {
+    const out: Array<{ cause: string; tours: number }> = [];
+    if (!Array.isArray(brut)) return out;
+    for (const raw of brut) {
+      if (raw && typeof raw === "object") {
+        const c = raw as Record<string, unknown>;
+        out.push({ cause: toStr(c.cause, "(inconnue)"), tours: toNum(c.tours) });
+      }
+    }
+    return out;
+  };
+  const causes = listeCauses(v.parCause);
+  const modeles: UsageSobriete["parModeleReel"] = [];
+  if (Array.isArray(v.parModeleReel)) {
+    for (const raw of v.parModeleReel) {
+      if (raw && typeof raw === "object") {
+        const m = raw as Record<string, unknown>;
+        modeles.push({
+          model: toStr(m.model, "(inconnu)"),
+          tokens: toNum(m.tokens),
+          costUsd: toNum(m.costUsd),
+          toursDelegue: toNum(m.toursDelegue),
+        });
+      }
+    }
+  }
+  // 24 cases toujours, même si le sidecar en renvoie moins : un graphe d'heures
+  // à trous se dessinerait de travers sans que rien ne le signale.
+  const heures = new Array<number>(24).fill(0);
+  if (Array.isArray(v.heures)) {
+    v.heures.slice(0, 24).forEach((h, i) => {
+      heures[i] = toNum(h);
+    });
+  }
+  return {
+    toursErreur: toNum(v.toursErreur),
+    toursAbandon: toNum(v.toursAbandon),
+    parCause: causes,
+    parCauseAbandon: listeCauses(v.parCauseAbandon),
+    toursVentiles: toNum(v.toursVentiles),
+    toursAvecDelegation: toNum(v.toursAvecDelegation),
+    tokensFil: toNum(v.tokensFil),
+    tokensDelegue: toNum(v.tokensDelegue),
+    tokensRoleInconnu: toNum(v.tokensRoleInconnu),
+    parModeleReel: modeles,
+    cacheReadTokens: toNum(v.cacheReadTokens),
+    cacheCreationTokens: toNum(v.cacheCreationTokens),
+    cacheHitPct: toNumOrNull(v.cacheHitPct),
+    coutVentileUsd: toNum(v.coutVentileUsd),
+    toursAvecCout: toNum(v.toursAvecCout),
+    concentrationTop10Pct: toNumOrNull(v.concentrationTop10Pct),
+    coutTourMedianUsd: toNumOrNull(v.coutTourMedianUsd),
+    coutTourMaxUsd: toNumOrNull(v.coutTourMaxUsd),
+    contexteMedian: toNumOrNull(v.contexteMedian),
+    contexteP90: toNumOrNull(v.contexteP90),
+    dureeMedianeMs: toNumOrNull(v.dureeMedianeMs),
+    dureeP90Ms: toNumOrNull(v.dureeP90Ms),
+    heures,
+  };
+}
+
+/**
+ * T-074 — parsing défensif de la projection `escaladeTours` (absent → null :
+ * sidecar antérieur ; mal formé → ligne ignorée plutôt que devinée).
+ */
+function parseEscaladeTours(value: unknown): TourPourEscalade[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: TourPourEscalade[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const v = raw as Record<string, unknown>;
+    if (typeof v.conversationId !== "string" || typeof v.ts !== "string") continue;
+    out.push({
+      conversationId: v.conversationId,
+      ts: v.ts,
+      model: toStr(v.model, "(inconnu)"),
+      erreur: v.erreur === true,
+    });
+  }
+  return out;
+}
+
 /**
  * Statistiques agrégées sur une plage (`from`/`to` dates locales `YYYY-MM-DD`
  * incluses, `bucket` = granularité du regroupement). Voir `usage.stats`.
@@ -209,6 +367,8 @@ export async function usageStats(from: string, to: string, bucket: UsageBucketKi
     models,
     routage: parseRoutage(data.routage),
     parProjet: parseParProjet(data.parProjet),
+    sobriete: parseSobriete(data.sobriete),
+    escaladeTours: parseEscaladeTours(data.escaladeTours),
   };
 }
 

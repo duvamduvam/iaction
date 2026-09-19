@@ -69,9 +69,10 @@ import {
   encodeWavPcm16,
   isRecording,
   releaseMicrophone,
-  resampleLinear,
+  resamplePcm,
   toMicError,
 } from "./audioCapture";
+import { journalPanneTranscriptionSegment, journalSegmentTranscrit } from "./journalVoix";
 import { formatSpeechProgress, speechTranscribe } from "./speechAdmin";
 import { isLikelyHallucination } from "./transcriptFilter";
 
@@ -870,9 +871,10 @@ async function drainQueue(): Promise<void> {
 }
 
 async function transcribeSegment(s: Session, samples: Float32Array): Promise<void> {
+  const dureeMs = Math.round((samples.length / s.sampleRate) * 1000);
   let text: string;
   try {
-    const resampled = resampleLinear(samples, s.sampleRate, TARGET_SAMPLE_RATE);
+    const resampled = resamplePcm(samples, s.sampleRate, TARGET_SAMPLE_RATE);
     const audioBase64 = bytesToBase64(new Uint8Array(encodeWavPcm16(resampled)));
     text = await speechTranscribe(audioBase64, (progress) => {
       // Première utilisation d'un modèle local : le téléchargement peut durer.
@@ -885,6 +887,7 @@ async function transcribeSegment(s: Session, samples: Float32Array): Promise<voi
   } catch (err) {
     // Erreur NON fatale : réseau, clé absente, service indisponible… L'écoute
     // continue, la phrase suivante peut très bien passer.
+    journalPanneTranscriptionSegment(dureeMs, describe(err));
     if (session === s && !s.stopped) s.callbacks.onError(`Transcription : ${describe(err)}`);
     return;
   }
@@ -893,15 +896,18 @@ async function transcribeSegment(s: Session, samples: Float32Array): Promise<voi
 
   const trimmed = text.trim();
   if (!trimmed) {
+    journalSegmentTranscrit("", 0, dureeMs, "vide");
     notice(s, "Segment ignoré : transcription vide.");
     return;
   }
   if (isLikelyHallucination(trimmed)) {
     // Whisper a comblé du silence avec une formule toute faite (cf.
     // transcriptFilter.ts) : on jette, sans en faire une erreur.
+    journalSegmentTranscrit(trimmed, trimmed.length, dureeMs, "hallucination");
     notice(s, `Segment ignoré (hallucination probable) : « ${trimmed} »`);
     return;
   }
+  journalSegmentTranscrit(trimmed, trimmed.length, dureeMs, "transmis");
   s.callbacks.onUtterance(trimmed);
 }
 

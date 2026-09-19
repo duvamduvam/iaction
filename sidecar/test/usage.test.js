@@ -11,7 +11,8 @@
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { lancer, assert, entry, fail, fakeClaudeWithUsageModule } from "./harness.mjs";
+import path from "node:path";
+import { lancer, assert, entry, fail, fakeClaudeWithUsageModule, dossierTest } from "./harness.mjs";
 
 /**
  * usage.claude, cas (fake AVEC usage_EXPERIMENTAL...) : nécessite un second
@@ -162,7 +163,90 @@ async function testUsageClaudeWithFakeSdk() {
   }
 }
 
+/**
+ * T-059 — usage.claude.init sur un compte SATURÉ : le refus (message SDK)
+ * doit devenir un `done` structuré `{available:false, saturation:{...}}`,
+ * jamais une `error` générique. Sidecar dédié, fake dédié (fakeClaudeSaturation.mjs).
+ */
+async function testUsageClaudeInitSaturation() {
+  const child3 = spawn(process.execPath, [entry], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      IACTION_FAKE_CLAUDE: "1",
+      IACTION_FAKE_CLAUDE_MODULE: path.join(dossierTest, "fakeClaudeSaturation.mjs"),
+    },
+  });
+  const received3 = [];
+  const waiters3 = [];
+  function notifyWaiters3(evt) {
+    for (let i = waiters3.length - 1; i >= 0; i--) {
+      const w = waiters3[i];
+      if (w.predicate(evt)) {
+        clearTimeout(w.timer);
+        waiters3.splice(i, 1);
+        w.resolve(evt);
+      }
+    }
+  }
+  function waitFor3(predicate, timeoutMs = 3000, label = "événement") {
+    const existing = received3.find(predicate);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve, reject) => {
+      const w = { predicate, resolve };
+      w.timer = setTimeout(() => {
+        const idx = waiters3.indexOf(w);
+        if (idx >= 0) waiters3.splice(idx, 1);
+        reject(new Error(`timeout en attendant ${label}`));
+      }, timeoutMs);
+      waiters3.push(w);
+    });
+  }
+  const stdoutRl3 = createInterface({ input: child3.stdout, crlfDelay: Infinity });
+  stdoutRl3.on("line", (line) => {
+    if (line.trim().length === 0) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      fail(`stdout du troisième sidecar (fakeClaudeSaturation) a émis une ligne non-JSON: ${line}`);
+      return;
+    }
+    received3.push(parsed);
+    notifyWaiters3(parsed);
+  });
+  function send3(obj) {
+    child3.stdin.write(JSON.stringify(obj) + "\n");
+  }
+  try {
+    await waitFor3((e) => e.event === "ready", 3000, "ready (troisième sidecar)");
+    send3({ id: "uci-sature", method: "usage.claude.init", params: {} });
+    const doneUciSature = await waitFor3(
+      (e) => e.id === "uci-sature" && (e.event === "done" || e.event === "error"),
+      3000,
+      "usage.claude.init uci-sature",
+    );
+    assert(
+      doneUciSature.event === "done",
+      `un compte saturé doit répondre 'done', jamais 'error', reçu '${doneUciSature.event}': ${JSON.stringify(doneUciSature.data)}`,
+    );
+    assert(
+      doneUciSature.data.available === false,
+      `aucun relevé chiffré sur un refus de saturation, reçu ${JSON.stringify(doneUciSature.data)}`,
+    );
+    assert(
+      doneUciSature.data.saturation &&
+        doneUciSature.data.saturation.fenetre === "session" &&
+        typeof doneUciSature.data.saturation.resetsAt === "string",
+      `saturation structurée attendue, reçu ${JSON.stringify(doneUciSature.data.saturation)}`,
+    );
+  } finally {
+    if (child3.exitCode === null) child3.kill();
+  }
+}
+
 await lancer(
   "usage.claude",
   testUsageClaudeWithFakeSdk,
+  testUsageClaudeInitSaturation,
 );

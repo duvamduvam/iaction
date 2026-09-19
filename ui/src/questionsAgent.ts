@@ -65,6 +65,13 @@ export interface AskQuestion {
   header: string;
   multiSelect: boolean;
   options: AskOption[];
+  /**
+   * Faits vérifiés joints par l'agent pour qu'on puisse trancher SANS aller
+   * voir ailleurs (listing, tailles, extrait). Ajouté le 2026-08-27 (T-089) :
+   * l'agent demandait d'arbitrer sur des objets qu'on n'avait pas sous les
+   * yeux, et la modale interdisait justement d'aller les regarder.
+   */
+  context?: string;
 }
 
 /** Parseur défensif : toute forme inattendue est ignorée plutôt que de casser la modale. */
@@ -90,6 +97,7 @@ export function parseAskQuestions(toolInput: unknown): AskQuestion[] {
       header: typeof q.header === "string" ? q.header : "",
       multiSelect: q.multiSelect === true,
       options,
+      ...(typeof q.context === "string" && q.context ? { context: q.context } : {}),
     });
   }
   return questions;

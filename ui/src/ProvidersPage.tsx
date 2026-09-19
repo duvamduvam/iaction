@@ -7,14 +7,7 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import {
-  addApp,
-  deleteApp,
-  parseExtensions,
-  readApps,
-  updateApp,
-  type AppEntry,
-} from "./appsAdmin";
+import { SectionApplications } from "./SectionApplications";
 import { listMicrophones, micLevelStyle, startRecording, stopRecording, type MicrophoneDevice } from "./audioCapture";
 import { startPlayback } from "./audioPlayback";
 import {
@@ -46,6 +39,7 @@ import {
   writeRoutingTable,
   type SummarizerSetting,
 } from "./routerAdmin";
+import { ModeleDefautProjets } from "./ModeleDefautProjets";
 import {
   modelsDetail,
   modelsList,
@@ -725,139 +719,6 @@ function OpenRouterModelsSection({
   );
 }
 
-/* ---------- Section Applications (Lot 5) ---------- */
-
-type AppsLoadState = "loading" | "ready" | "error";
-
-interface AppFormValues {
-  label: string;
-  command: string;
-  extensionsRaw: string;
-}
-
-function AppForm({
-  mode,
-  initial,
-  onSubmit,
-  onCancel,
-}: Readonly<{
-  mode: "add" | "edit";
-  initial?: AppFormValues;
-  onSubmit: (values: { label: string; command: string; extensions: string[] }) => Promise<void>;
-  onCancel: () => void;
-}>) {
-  const [label, setLabel] = useState(initial?.label ?? "");
-  const [command, setCommand] = useState(initial?.command ?? "");
-  const [extensionsRaw, setExtensionsRaw] = useState(initial?.extensionsRaw ?? "");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  const canSubmit = label.trim().length > 0 && command.trim().length > 0;
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!canSubmit || saving) return;
-    setSaving(true);
-    setError("");
-    try {
-      await onSubmit({
-        label: label.trim(),
-        command: command.trim(),
-        extensions: parseExtensions(extensionsRaw),
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <form className="app-form" onSubmit={(e) => void handleSubmit(e)}>
-      <div className="field">
-        <label htmlFor={`af-label-${mode}`}>Libellé</label>
-        <input
-          id={`af-label-${mode}`}
-          value={label}
-          onChange={(e) => setLabel(e.currentTarget.value)}
-          placeholder="ex. KiCad"
-        />
-      </div>
-      <div className="field">
-        <label htmlFor={`af-command-${mode}`}>Commande</label>
-        <input
-          id={`af-command-${mode}`}
-          value={command}
-          onChange={(e) => setCommand(e.currentTarget.value)}
-          placeholder="ex. kicad"
-        />
-      </div>
-      <div className="field">
-        <label htmlFor={`af-ext-${mode}`}>Extensions</label>
-        <input
-          id={`af-ext-${mode}`}
-          value={extensionsRaw}
-          onChange={(e) => setExtensionsRaw(e.currentTarget.value)}
-          placeholder="ex. kicad_pcb, kicad_sch pdf"
-        />
-      </div>
-      {error && <div className="result-line result-line--error">Erreur : {error}</div>}
-      <div className="actions">
-        <button type="submit" className="btn" disabled={!canSubmit || saving}>
-          {saving ? "Enregistrement…" : mode === "add" ? "Ajouter" : "Enregistrer"}
-        </button>
-        <button type="button" className="btn btn--ghost" onClick={onCancel} disabled={saving}>
-          Annuler
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function AppCard({
-  app,
-  onEdit,
-  onDelete,
-}: Readonly<{
-  app: AppEntry;
-  onEdit: () => void;
-  onDelete: () => void;
-}>) {
-  return (
-    <article className="app-card">
-      <div className="app-card__head">
-        <span className="app-card__label">{app.label}</span>
-        <div className="actions">
-          <button type="button" className="btn btn--ghost" onClick={onEdit} aria-label={`Modifier ${app.label}`} title="Modifier">
-            ✎
-          </button>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={onDelete}
-            aria-label={`Supprimer ${app.label}`}
-            title="Supprimer"
-          >
-            Supprimer
-          </button>
-        </div>
-      </div>
-      <div className="app-card__command">{app.command}</div>
-      <div className="app-card__extensions">
-        {app.extensions.length === 0 ? (
-          <span className="empty-hint">Aucune extension associée.</span>
-        ) : (
-          app.extensions.map((ext) => (
-            <span className="app-extension-badge" key={ext}>
-              .{ext}
-            </span>
-          ))
-        )}
-      </div>
-    </article>
-  );
-}
-
 /* ---------- Section Routage automatique (R1, « model: auto ») ---------- */
 
 const ROUTING_TIER_LABELS: Record<RouteTier, string> = {
@@ -1130,8 +991,7 @@ function RoutingSection({
     <section className="config-section">
       <h2 className="config-section__title">Routage automatique (model: auto)</h2>
       <p className="empty-hint">
-        Table du sélecteur « Auto » : chaque niveau de complexité part vers ce moteur/modèle. Un
-        projet peut la surcharger via son fichier .iaction/routage.yaml.
+        Table du sélecteur « Auto » du Chat : chaque niveau part vers ce moteur/modèle.
       </p>
 
       {error && <div className="result-line result-line--error">Erreur : {error}</div>}
@@ -1436,99 +1296,6 @@ function RoutingSection({
             )}
           </div>
         </>
-      )}
-    </section>
-  );
-}
-
-function AppsSection() {
-  const [apps, setApps] = useState<AppEntry[]>([]);
-  const [loadState, setLoadState] = useState<AppsLoadState>("loading");
-  const [errorMessage, setErrorMessage] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
-  const initialized = useRef(false);
-
-  useEffect(() => {
-    // StrictMode-safe : même pattern que useProjects/useProviders (voir leur en-tête).
-    if (initialized.current) return;
-    initialized.current = true;
-    readApps()
-      .then((list) => {
-        setApps(list);
-        setLoadState("ready");
-      })
-      .catch((err: unknown) => {
-        setErrorMessage(err instanceof Error ? err.message : String(err));
-        setLoadState("error");
-      });
-  }, []);
-
-  const editingApp = apps.find((a) => a.id === editingId) ?? null;
-
-  return (
-    <section className="config-section">
-      <h2 className="config-section__title">Applications</h2>
-      <p className="empty-hint">
-        Ouvrir un fichier de l'arborescence avec une application externe (KiCad, LibreOffice…),
-        selon son extension. Sans règle correspondante, IAction utilise l'application système
-        par défaut (xdg-open sous Linux).
-      </p>
-
-      {loadState === "loading" && <p className="empty-hint">Chargement…</p>}
-      {loadState === "error" && (
-        <div className="result-line result-line--error">Erreur de chargement : {errorMessage}</div>
-      )}
-
-      <div className="app-list">
-        {apps.map((app) =>
-          editingId === app.id && editingApp ? (
-            <article className="app-card" key={app.id}>
-              <AppForm
-                mode="edit"
-                initial={{ label: editingApp.label, command: editingApp.command, extensionsRaw: editingApp.extensions.join(", ") }}
-                onSubmit={async (values) => {
-                  const next = await updateApp(app.id, values);
-                  setApps(next);
-                  setEditingId(null);
-                }}
-                onCancel={() => setEditingId(null)}
-              />
-            </article>
-          ) : (
-            <AppCard
-              key={app.id}
-              app={app}
-              onEdit={() => setEditingId(app.id)}
-              onDelete={() => {
-                if (window.confirm(`Supprimer la règle « ${app.label} » ?`)) {
-                  void deleteApp(app.id).then(setApps);
-                }
-              }}
-            />
-          ),
-        )}
-        {apps.length === 0 && loadState === "ready" && <p className="empty-hint">Aucune application déclarée.</p>}
-      </div>
-
-      {adding ? (
-        <article className="app-card app-card--new">
-          <AppForm
-            mode="add"
-            onSubmit={async (values) => {
-              const next = await addApp(values.label, values.command, values.extensions);
-              setApps(next);
-              setAdding(false);
-            }}
-            onCancel={() => setAdding(false)}
-          />
-        </article>
-      ) : (
-        <div className="actions">
-          <button className="btn" onClick={() => setAdding(true)}>
-            + Ajouter une application
-          </button>
-        </div>
       )}
     </section>
   );
@@ -2776,9 +2543,12 @@ function VoiceSection({
             resté ouvert n'envoie une longue plage d'audio à la transcription. En mode mot-clé,
             chaque phrase dictée s'ajoute au brouillon du composeur — visible et modifiable — et
             rien ne part tant qu'une dictée ne se TERMINE pas par le mot-clé. Le défaut
-            « transmets » est choisi pour être rare en fin de phrase et stable à la transcription
-            (« transmet » et « transmets » sont acceptés) ; les tournures réelles comme « que je te
-            transmets » ne déclenchent pas. Si vous préférez « envoie », ses homophones
+            « banane » n'est pas une plaisanterie : un NOM COMMUN ne se conjugue pas et n'appelle
+            pas de pronom, là où un verbe (« transmets », « envoie ») ressort de la transcription
+            en « transmettre », « je transmets » ou « très prends » — et ne déclenche jamais. Un
+            mot absurde en fin de consigne n'apparaît par ailleurs jamais par accident dans un
+            vrai prompt. Répéter le mot-clé est sans risque : les occurrences successives sont
+            toutes retirées du message. Si vous préférez « envoie », ses homophones
             (« l'envoi », « en voie »…) sont reconnus aussi, mais ce mot courant est plus exposé
             aux déclenchements imprévus. La dictée ponctuelle 🎤 obéit toujours au mot-clé, que ce
             réglage soit actif ou non.
@@ -2957,8 +2727,8 @@ export function ProvidersPage({
           )}
         </section>
 
-        {/* R1 — table de routage du sélecteur « Auto » du Chat (niveau page,
-            indépendante du formulaire fournisseur ci-dessus). */}
+        <ModeleDefautProjets />
+        {/* R1 — table du sélecteur « Auto » du CHAT seul (T-080). */}
         <RoutingSection providers={providers} active={configTab === "providers"} />
       </div>
 
@@ -2981,7 +2751,7 @@ export function ProvidersPage({
       </div>
 
       <div className={configPanelClass(configTab === "apps")}>
-        <AppsSection />
+        <SectionApplications />
       </div>
 
       <div className={configPanelClass(configTab === "reseau")}>

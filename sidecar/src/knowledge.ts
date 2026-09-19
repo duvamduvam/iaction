@@ -35,6 +35,15 @@ import { formatChatSearchResults, sanitizeLimit, searchChatHistory } from "./cha
 import * as journal from "./journal.js";
 import { getEmbeddingsConfig } from "./router.js";
 import { projectDir } from "./appPaths.js";
+import { formatSearchResults } from "./rechercheFormat.js";
+import {
+  indexDir,
+  knowledgeIndexExists,
+  loadChunks,
+  loadMeta,
+  type IndexChunk,
+  type IndexMeta,
+} from "./knowledgeIndexStore.js";
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -64,11 +73,6 @@ const INDEX_ABSENT_MESSAGE = "index absent — lancer l'indexation";
 // Utilitaires
 // ---------------------------------------------------------------------------
 
-
-/** Dossier de l'index d'un projet : `<cwd>/.iaction/connaissances-index/`. */
-function indexDir(cwd: string): string {
-  return projectDir(cwd, "connaissances-index");
-}
 
 /** Écriture atomique (même patron que neutralAgent.ts::atomicWriteFile). */
 async function atomicWriteFile(absPath: string, content: string): Promise<void> {
@@ -363,145 +367,24 @@ export async function embedTexts(texts: string[]): Promise<EmbedResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Index sur disque — chunks.jsonl + meta.json
+// Index sur disque — sorti dans knowledgeIndexStore.ts (cliquet de taille) :
+// format des fichiers, cache, chunks.jsonl + meta.json. Ne reste ici que
+// isIndexStale, qui a besoin de collectSources (section précédente).
 // ---------------------------------------------------------------------------
 
-interface IndexChunk {
-  file: string;
-  chunkId: string;
-  mtimeMs: number;
-  text: string;
-  embedding: number[];
-}
-
-interface IndexMeta {
-  model: string;
-  dim: number;
-  builtAt: string;
-  files: Record<string, number>;
-}
-
-function parseMeta(raw: string): IndexMeta | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!isPlainObject(parsed) || !isNonEmptyString(parsed.model) || !isPlainObject(parsed.files)) {
-    return null;
-  }
-  const files: Record<string, number> = {};
-  for (const [key, value] of Object.entries(parsed.files)) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      files[key] = value;
-    }
-  }
-  return {
-    model: parsed.model,
-    dim: typeof parsed.dim === "number" && Number.isFinite(parsed.dim) ? parsed.dim : 0,
-    builtAt: isNonEmptyString(parsed.builtAt) ? parsed.builtAt : "",
-    files,
-  };
-}
-
-async function loadMeta(cwd: string): Promise<IndexMeta | null> {
-  try {
-    const raw = await fsp.readFile(path.join(indexDir(cwd), "meta.json"), "utf8");
-    return parseMeta(raw);
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Index chargé, gardé en mémoire tant que le fichier n'a pas changé.
- *
- * Sans ce cache, CHAQUE recherche relisait et re-parsait l'index entier —
- * texte ET vecteurs. Mesuré sur un projet réel : 13 Mo pour 747 chunks, soit
- * 100-200 ms et 747 tableaux de doubles alloués puis jetés, à chaque appel.
- * Un agent fait 2 à 5 recherches par tour : sur une session de plusieurs
- * heures, cela représente des centaines de Mo de churn et une latence d'outil
- * parfaitement inutile, pour un fichier qui ne change qu'à la réindexation.
- *
- * Clé de fraîcheur : (mtime, taille) du fichier. Une réindexation réécrit
- * chunks.jsonl et invalide donc le cache d'elle-même — aucun couplage à
- * maintenir entre l'indexation et la recherche.
- *
- * Un seul projet en cache : le cas d'usage est une session de travail sur un
- * projet à la fois, et garder N index de 13 Mo en mémoire coûterait plus cher
- * que la relecture qu'on évite.
+ * Un document source a changé (mtime différent), est apparu (absent de
+ * `meta.files`) ou a disparu depuis la construction de l'index — factorisé
+ * entre `knowledge.status` (avec les `pinned` de l'UI) et `searchKnowledge`
+ * (sans, voir son commentaire).
  */
-let indexCache: { chemin: string; mtimeMs: number; taille: number; chunks: IndexChunk[] } | null = null;
-
-/** Lecture défensive de chunks.jsonl : une ligne difforme est ignorée. */
-async function loadChunks(cwd: string): Promise<IndexChunk[]> {
-  const chemin = path.join(indexDir(cwd), "chunks.jsonl");
-
-  let signature: { mtimeMs: number; taille: number } | null = null;
-  try {
-    const stat = await fsp.stat(chemin);
-    signature = { mtimeMs: stat.mtimeMs, taille: stat.size };
-  } catch {
-    // Index absent : on laisse la lecture ci-dessous rendre [] comme avant.
-  }
-
-  if (
-    signature &&
-    indexCache &&
-    indexCache.chemin === chemin &&
-    indexCache.mtimeMs === signature.mtimeMs &&
-    indexCache.taille === signature.taille
-  ) {
-    return indexCache.chunks;
-  }
-
-  let raw: string;
-  try {
-    raw = await fsp.readFile(chemin, "utf8");
-  } catch {
-    return [];
-  }
-  const chunks: IndexChunk[] = [];
-  for (const line of raw.split("\n")) {
-    if (line.trim().length === 0) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (
-      isPlainObject(parsed) &&
-      isNonEmptyString(parsed.file) &&
-      isNonEmptyString(parsed.chunkId) &&
-      typeof parsed.mtimeMs === "number" &&
-      typeof parsed.text === "string" &&
-      Array.isArray(parsed.embedding) &&
-      parsed.embedding.every((v) => typeof v === "number")
-    ) {
-      chunks.push({
-        file: parsed.file,
-        chunkId: parsed.chunkId,
-        mtimeMs: parsed.mtimeMs,
-        text: parsed.text,
-        embedding: parsed.embedding as number[],
-      });
-    }
-  }
-
-  // Mise en cache seulement si le fichier a pu être daté : sans signature, on
-  // ne saurait pas détecter sa prochaine modification, et un cache qu'on ne
-  // sait pas invalider est pire que pas de cache du tout.
-  if (signature) {
-    indexCache = { chemin, mtimeMs: signature.mtimeMs, taille: signature.taille, chunks };
-  }
-  return chunks;
-}
-
-/** L'index du projet existe-t-il ? (gate de l'outil MCP côté moteur Claude.) */
-export async function knowledgeIndexExists(cwd: string): Promise<boolean> {
-  return (await loadMeta(cwd)) !== null;
+async function isIndexStale(cwd: string, meta: IndexMeta, pinned: string[]): Promise<boolean> {
+  const sources = await collectSources(cwd, pinned);
+  const sourceLabels = new Set(sources.map((s) => s.label));
+  return (
+    sources.some((s) => meta.files[s.label] !== s.mtimeMs) ||
+    Object.keys(meta.files).some((label) => !sourceLabels.has(label))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -509,7 +392,7 @@ export async function knowledgeIndexExists(cwd: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 export type KnowledgeSearchOutcome =
-  | { ok: true; results: SearchResult[] }
+  | { ok: true; results: SearchResult[]; builtAt: string; stale: boolean }
   | { ok: false; message: string };
 
 /** Borne topK : entier 1..MAX_TOP_K, défaut DEFAULT_TOP_K. */
@@ -523,6 +406,13 @@ export function sanitizeTopK(value: unknown): number {
 /**
  * Recherche dans l'index du projet : embed de la requête + cosinus brute-force.
  * Index absent/vide → erreur lisible (spec R5 §2), jamais d'exception.
+ *
+ * `stale` (T-115) est calculé sans les chemins épinglés — cette fonction sert
+ * des outils d'agent (moteur neutre, MCP) qui n'ont que `cwd` et `query` : ils
+ * ne connaissent pas la liste `pinned` (état côté UI). L'estimation reste
+ * pertinente pour les sources automatiques/détectées, ce qui suffit à motiver
+ * la mention « sources modifiées depuis » — `knowledge.status`, lui, reçoit
+ * `pinned` et reste la mesure de référence pour le panneau Connaissances.
  */
 export async function searchKnowledge(
   cwd: string,
@@ -538,16 +428,14 @@ export async function searchKnowledge(
   if (!embedded.ok) {
     return embedded;
   }
-  return { ok: true, results: rankChunks(embedded.embeddings[0], chunks, topK) };
+  const stale = await isIndexStale(cwd, meta, []);
+  return { ok: true, results: rankChunks(embedded.embeddings[0], chunks, topK), builtAt: meta.builtAt, stale };
 }
 
-/** Rendu textuel des résultats, commun aux deux moteurs (tool_result lisible par le modèle). */
-export function formatSearchResults(results: SearchResult[]): string {
-  if (results.length === 0) {
-    return "Aucun résultat dans les connaissances indexées.";
-  }
-  return results.map((r) => `--- ${r.file} (score ${r.score}) ---\n${r.excerpt}`).join("\n\n");
-}
+// Rendu textuel des résultats (en-tête daté compris) : sorti dans
+// rechercheFormat.ts (cliquet de taille, T-115), ré-exporté ici pour que
+// `formatSearchResults` reste consommable comme avant depuis knowledge.js.
+export { formatSearchResults };
 
 // ---------------------------------------------------------------------------
 // Serveur MCP in-process du moteur Claude (spec R5 §3) — construit via
@@ -606,7 +494,9 @@ export async function buildKnowledgeMcpServer(cwd: string): Promise<unknown | nu
         if (!outcome.ok) {
           return { content: [{ type: "text" as const, text: outcome.message }], isError: true };
         }
-        return { content: [{ type: "text" as const, text: formatSearchResults(outcome.results) }] };
+        return {
+          content: [{ type: "text" as const, text: formatSearchResults(outcome.results, outcome.builtAt, outcome.stale) }],
+        };
       },
     );
     return sdk.createSdkMcpServer({ name: "iaction", tools: [chatTool, searchTool] });
@@ -643,15 +533,26 @@ export async function handleKnowledgeIndex(
     return;
   }
   const pinned = sanitizePinned(params.pinned);
+  // T-115 : `force` fait du bouton une RÉPARATION — voir le commentaire sur
+  // `reusable` ci-dessous pour ce qu'il répare.
+  const force = params.force === true;
 
   const sources = await collectSources(cwd, pinned);
   const config = getEmbeddingsConfig();
 
   // Incrémental : les chunks existants ne sont réutilisables que si le modèle
   // d'embeddings n'a pas changé (des vecteurs de modèles différents ne sont
-  // pas comparables) — sinon reconstruction complète.
+  // pas comparables) et que `force` n'a pas été demandé — sinon reconstruction
+  // complète.
+  //
+  // L'incrémentalité repose entièrement sur `mtimeMs`, jamais sur une
+  // empreinte de contenu : un fichier dont le CONTENU a changé mais dont le
+  // mtime a été préservé (restauration d'une sauvegarde, synchro Nextcloud qui
+  // réécrit sans toucher la date, `cp -p`…) laisserait un chunk FAUX dans
+  // l'index, indéfiniment — rien ne le détecterait jamais. `force:true` est
+  // la réparation : il ignore la réutilisation par mtime et ré-embarque tout.
   const previousMeta = await loadMeta(cwd);
-  const reusable = previousMeta && previousMeta.model === config.model ? previousMeta : null;
+  const reusable = !force && previousMeta && previousMeta.model === config.model ? previousMeta : null;
   const previousByFile = new Map<string, IndexChunk[]>();
   if (reusable) {
     for (const chunk of await loadChunks(cwd)) {
@@ -786,13 +687,7 @@ export async function handleKnowledgeStatus(
   }
 
   const chunks = await loadChunks(cwd);
-  // `stale` : un document source a changé (mtime différent), est apparu
-  // (absent de meta.files) ou a disparu depuis la construction de l'index.
-  const sources = await collectSources(cwd, sanitizePinned(params.pinned));
-  const sourceLabels = new Set(sources.map((s) => s.label));
-  const stale =
-    sources.some((s) => meta.files[s.label] !== s.mtimeMs) ||
-    Object.keys(meta.files).some((label) => !sourceLabels.has(label));
+  const stale = await isIndexStale(cwd, meta, sanitizePinned(params.pinned));
 
   emitter.done(id, {
     exists: true,

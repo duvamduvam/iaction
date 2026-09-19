@@ -10,6 +10,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { micLevelStyle } from "./audioCapture";
 import { stopPlayback } from "./audioPlayback";
+import { formaterHeureDiscrete, NoticeEnQueue, suivreInstant, type InstantSuivi } from "./heureDiscrete";
 import {
   abonnerEtatVoix,
   dicteeUtilisable,
@@ -182,29 +183,67 @@ function ConversationStatus({ voice }: Readonly<{ voice: VoiceComposer }>) {
  * Volontairement placées là (et non dans la colonne d'icônes) : ce sont des
  * textes qui ont besoin de toute la largeur pour rester lisibles.
  */
+/*
+ * T-101 — ces trois lignes viennent de `useVoiceComposer.ts` (hors périmètre :
+ * T-125 y journalise la chaîne voix EN CE MOMENT) sans le moindre horodatage.
+ * L'heure retenue est donc celle de la RÉCEPTION par CE composant — le repli
+ * prévu par le ticket. `suivreInstant` ne l'avance que quand la valeur change
+ * réellement (micError posé, pourcentage de transcription qui progresse,
+ * nouveau message de mode conversation) : un rendu qui ne change rien à ces
+ * trois valeurs ne fait donc pas dériver l'heure affichée.
+ */
 export function VoiceStatus({ voice }: Readonly<{ voice: VoiceComposer }>) {
+  const maintenant = Date.now();
+  const micErrorAtRef = useRef<InstantSuivi<string> | null>(null);
+  micErrorAtRef.current = suivreInstant(micErrorAtRef.current, voice.micError, maintenant);
+  const micErrorHeure = formaterHeureDiscrete(micErrorAtRef.current?.instant ?? null);
+
+  const transcriptionValeur = voice.micState === "transcribing" ? voice.micProgress || "…" : null;
+  const micProgressAtRef = useRef<InstantSuivi<string> | null>(null);
+  micProgressAtRef.current = suivreInstant(micProgressAtRef.current, transcriptionValeur, maintenant);
+
+  const conversationNoticeAtRef = useRef<InstantSuivi<string> | null>(null);
+  conversationNoticeAtRef.current = suivreInstant(
+    conversationNoticeAtRef.current,
+    voice.conversationNotice || null,
+    maintenant,
+  );
+
   return (
     <>
       {voice.micError && (
-        <div className="result-line result-line--error">
-          {voice.micError}
-          <button
-            type="button"
-            className="btn btn--ghost result-line__dismiss"
-            onClick={voice.dismissMicError}
-            aria-label="Masquer l'erreur"
-          >
-            ×
-          </button>
+        <div className="result-line result-line--error ligne-queue">
+          <span>{voice.micError}</span>
+          <span className="result-line__meta">
+            {micErrorHeure && <span className="heure heure--queue">{micErrorHeure}</span>}
+            <button
+              type="button"
+              className="btn btn--ghost result-line__dismiss"
+              onClick={voice.dismissMicError}
+              aria-label="Masquer l'erreur"
+            >
+              ×
+            </button>
+          </span>
         </div>
       )}
       {voice.micState === "transcribing" && (
-        <div className="result-line">{voice.micProgress || "Transcription en cours…"}</div>
+        <div className="result-line ligne-queue">
+          <NoticeEnQueue instant={micProgressAtRef.current?.instant ?? null}>
+            {voice.micProgress || "Transcription en cours…"}
+          </NoticeEnQueue>
+        </div>
       )}
       {/* Mode conversation : état lisible en permanence — écoute (micro
           ouvert) et lecture doivent se distinguer d'un coup d'œil. */}
       {voice.conversationOn && <ConversationStatus voice={voice} />}
-      {voice.conversationNotice && <div className="conversation-notice">{voice.conversationNotice}</div>}
+      {voice.conversationNotice && (
+        <div className="conversation-notice ligne-queue">
+          <NoticeEnQueue instant={conversationNoticeAtRef.current?.instant ?? null}>
+            {voice.conversationNotice}
+          </NoticeEnQueue>
+        </div>
+      )}
     </>
   );
 }

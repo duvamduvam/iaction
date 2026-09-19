@@ -316,8 +316,224 @@ async function testClaudePush() {
   }
 }
 
+/**
+ * T-087/T-064 — harnais spawn+JSONL factorisé : les trois scénarios suivants
+ * (push perdu, push acquitté, push avec pièces) partagent le même besoin que
+ * testClaudeBackgroundRelease/testClaudePush avaient chacun réinventé.
+ */
+function spawnFakeSidecar(fakeModule, extraEnv = {}) {
+  const child = spawn(process.execPath, [entry], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, IACTION_FAKE_CLAUDE: "1", IACTION_FAKE_CLAUDE_MODULE: fakeModule, ...extraEnv },
+  });
+  const received = [];
+  const waiters = [];
+  function notify(evt) {
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      const w = waiters[i];
+      if (w.predicate(evt)) {
+        clearTimeout(w.timer);
+        waiters.splice(i, 1);
+        w.resolve(evt);
+      }
+    }
+  }
+  function waitFor(predicate, timeoutMs = 3000, label = "événement") {
+    const existing = received.find(predicate);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve, reject) => {
+      const w = { predicate, resolve };
+      w.timer = setTimeout(() => {
+        const idx = waiters.indexOf(w);
+        if (idx >= 0) waiters.splice(idx, 1);
+        reject(new Error(`timeout en attendant ${label}`));
+      }, timeoutMs);
+      waiters.push(w);
+    });
+  }
+  createInterface({ input: child.stdout, crlfDelay: Infinity }).on("line", (line) => {
+    if (line.trim().length === 0) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      fail(`stdout du sidecar ${fakeModule} a émis une ligne non-JSON: ${line}`);
+      return;
+    }
+    received.push(parsed);
+    notify(parsed);
+  });
+  const stderrChunks = [];
+  child.stderr.on("data", (d) => stderrChunks.push(d.toString()));
+  return {
+    received,
+    waitFor,
+    send: (obj) => child.stdin.write(JSON.stringify(obj) + "\n"),
+    fermer: (err) => {
+      if (err && stderrChunks.length > 0) {
+        console.error(`--- stderr du sidecar ${fakeModule} ---`);
+        console.error(stderrChunks.join(""));
+      }
+      if (child.exitCode === null) child.kill();
+    },
+  };
+}
+
+const fakeClaudePushPerduModule = path.join(dossierTest, "fakeClaudePushPerdu.mjs");
+
+/** T-087 — push jamais suivi d'un tool_result du fil : `push_perdu` AVANT le `done`. */
+async function testClaudePushPerdu() {
+  const h = spawnFakeSidecar(fakeClaudePushPerduModule);
+  try {
+    await h.waitFor((e) => e.event === "ready", 3000, "ready (fakeClaudePushPerdu)");
+    h.send({ id: "cl-perdu", method: "claude.start", params: { cwd: "/tmp", prompt: "tour initial" } });
+    await h.waitFor((e) => e.id === "cl-perdu" && e.event === "chunk" && e.data.kind === "init", 3000, "chunk init");
+
+    h.send({ id: "push-perdu-1", method: "claude.push", params: { targetId: "cl-perdu", content: "et le CHANGELOG" } });
+    const donePush = await h.waitFor((e) => e.id === "push-perdu-1" && e.event === "done", 3000, "claude.push done");
+    assert(donePush.data.pushed === true, `push accepté attendu, reçu ${JSON.stringify(donePush.data)}`);
+
+    // Le push_perdu doit arriver AVANT le done du tour — waitFor le trouve
+    // dans les deux ordres, mais on vérifie ici explicitement sa position.
+    const doneTurn = await h.waitFor((e) => e.id === "cl-perdu" && e.event === "done", 3000, "done du tour");
+    const perdu = h.received.find((e) => e.id === "cl-perdu" && e.event === "chunk" && e.data.kind === "push_perdu");
+    assert(perdu, "chunk push_perdu attendu, jamais reçu");
+    assert(
+      perdu.data.contenu === "et le CHANGELOG" && perdu.data.avaitPieces === false,
+      `push_perdu incorrect: ${JSON.stringify(perdu?.data)}`,
+    );
+    assert(
+      h.received.indexOf(perdu) < h.received.indexOf(doneTurn),
+      "push_perdu doit être émis AVANT le done du tour, jamais après",
+    );
+  } catch (err) {
+    h.fermer(err);
+    throw err;
+  }
+  h.fermer(null);
+}
+
+/** T-087 — un outil rappelé (donc un tool_result DU FIL) après le push l'acquitte : pas de `push_perdu`. */
+async function testClaudePushAcquitteParOutil() {
+  const h = spawnFakeSidecar(fakeClaudePushPerduModule, { IACTION_FAKE_PUSH_OUTIL_APRES: "1" });
+  try {
+    await h.waitFor((e) => e.event === "ready", 3000, "ready (fakeClaudePushPerdu, outil après)");
+    h.send({ id: "cl-acquitte", method: "claude.start", params: { cwd: "/tmp", prompt: "tour initial" } });
+    await h.waitFor((e) => e.id === "cl-acquitte" && e.event === "chunk" && e.data.kind === "init", 3000, "chunk init");
+
+    h.send({ id: "push-ok-1", method: "claude.push", params: { targetId: "cl-acquitte", content: "et le CHANGELOG" } });
+    await h.waitFor((e) => e.id === "push-ok-1" && e.event === "done", 3000, "claude.push done");
+
+    await h.waitFor((e) => e.id === "cl-acquitte" && e.event === "chunk" && e.data.kind === "tool_result", 3000, "tool_result du fil");
+    await h.waitFor((e) => e.id === "cl-acquitte" && e.event === "done", 3000, "done du tour");
+
+    const perdu = h.received.find((e) => e.id === "cl-acquitte" && e.event === "chunk" && e.data.kind === "push_perdu");
+    assert(!perdu, `aucun push_perdu attendu (push acquitté par le tool_result), reçu ${JSON.stringify(perdu?.data)}`);
+  } catch (err) {
+    h.fermer(err);
+    throw err;
+  }
+  h.fermer(null);
+}
+
+/** T-064 — un push AVEC pièces jointes les porte jusqu'à l'entrée streamée ; T-087 — perdu, il les signale (`avaitPieces: true`). */
+async function testClaudePushAvecPieces() {
+  const h = spawnFakeSidecar(fakeClaudePushPerduModule);
+  try {
+    await h.waitFor((e) => e.event === "ready", 3000, "ready (fakeClaudePushPerdu, pièces)");
+    h.send({ id: "cl-pieces", method: "claude.start", params: { cwd: "/tmp", prompt: "tour initial" } });
+    await h.waitFor((e) => e.id === "cl-pieces" && e.event === "chunk" && e.data.kind === "init", 3000, "chunk init");
+
+    h.send({
+      id: "push-img-1",
+      method: "claude.push",
+      params: {
+        targetId: "cl-pieces",
+        content: "regarde cette capture",
+        attachments: [{ kind: "image", name: "capture.png", mediaType: "image/png", data: "aGVsbG8=" }],
+      },
+    });
+    await h.waitFor((e) => e.id === "push-img-1" && e.event === "done", 3000, "claude.push done");
+
+    // Le faux moteur rend compte des TYPES de blocs du message poussé : voir
+    // le bloc image y prouve que buildUserMessage l'a bien construit.
+    const echo = await h.waitFor((e) => e.id === "cl-pieces" && e.event === "chunk" && e.data.kind === "text", 3000, "écho des blocs poussés");
+    assert(echo.data.delta.includes("image"), `le bloc image doit avoir traversé l'entrée streamée, reçu ${JSON.stringify(echo.data)}`);
+
+    await h.waitFor((e) => e.id === "cl-pieces" && e.event === "done", 3000, "done du tour");
+    const perdu = h.received.find((e) => e.id === "cl-pieces" && e.event === "chunk" && e.data.kind === "push_perdu");
+    assert(perdu && perdu.data.avaitPieces === true, `push_perdu avec avaitPieces:true attendu, reçu ${JSON.stringify(perdu?.data)}`);
+  } catch (err) {
+    h.fermer(err);
+    throw err;
+  }
+  h.fermer(null);
+}
+
+const fakeClaudeModule = path.join(dossierTest, "fakeClaude.mjs");
+
+/**
+ * T-102 — un « arrêt demandé » ne laissait AUCUNE trace : ni qui, ni quand.
+ * `claude.abort` doit désormais journaliser une ligne `info` sur CHAQUE
+ * réception, rattachée au tour visé (`reqId` = targetId), avec l'origine
+ * qu'on en connaît (protocole direct ici : l'id de la requête d'abandon
+ * diffère du tour visé — voir handleClaudeAbort).
+ */
+async function testClaudeAbortJournalise() {
+  const h = spawnFakeSidecar(fakeClaudeModule);
+  try {
+    await h.waitFor((e) => e.event === "ready", 3000, "ready (fakeClaude, abandon journalisé)");
+    h.send({ id: "cl-abandon", method: "claude.start", params: { cwd: "/tmp", prompt: "Bonjour" } });
+    // fakeClaude.mjs bloque sur canUseTool avant son tool_use "Bash" : même
+    // point d'arrêt que le scénario cl3 de protocol.test.js.
+    await h.waitFor(
+      (e) => e.id === "cl-abandon" && e.event === "chunk" && e.data.kind === "permission_request",
+      3000,
+      "chunk permission_request (fakeClaude)",
+    );
+
+    h.send({ id: "ab-abandon", method: "claude.abort", params: { targetId: "cl-abandon" } });
+    const doneAbort = await h.waitFor((e) => e.id === "ab-abandon" && e.event === "done", 3000, "claude.abort done");
+    assert(
+      doneAbort.data.aborted === true,
+      `claude.abort doit répondre aborted:true, reçu ${JSON.stringify(doneAbort.data)}`,
+    );
+
+    // Relit le journal jusqu'à y trouver la ligne (écriture mise en file,
+    // même attente que claudeSilence.test.js).
+    let ligne = null;
+    for (let essai = 0; essai < 40 && !ligne; essai++) {
+      h.send({ id: `log-abandon-${essai}`, method: "log.read", params: { minLevel: "info", scope: "claude" } });
+      const lu = await h.waitFor(
+        (e) => e.id === `log-abandon-${essai}` && e.event === "done",
+        3000,
+        "log.read",
+      );
+      ligne = lu.data.entries.find((en) => en.reqId === "cl-abandon" && en.msg === "abandon demandé");
+      if (!ligne) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert(ligne, "le journal doit contenir une ligne « abandon demandé » rattachée au tour visé");
+    assert(
+      ligne.fields.demandeur === "protocole",
+      `un abandon posé directement (id de requête ≠ tour visé) doit se journaliser 'protocole', reçu ${JSON.stringify(ligne.fields)}`,
+    );
+    assert(
+      ligne.fields.trouve === true,
+      `le tour ciblé était en vie, 'trouve' attendu à true, reçu ${JSON.stringify(ligne.fields)}`,
+    );
+  } catch (err) {
+    h.fermer(err);
+    throw err;
+  }
+  h.fermer(null);
+}
+
 await lancer(
   "tours claude (arrière-plan, push)",
   testClaudeBackgroundRelease,
   testClaudePush,
+  testClaudePushPerdu,
+  testClaudePushAcquitteParOutil,
+  testClaudePushAvecPieces,
+  testClaudeAbortJournalise,
 );

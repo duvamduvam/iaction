@@ -21,7 +21,7 @@
 
 import type { EngineEmitter } from "./engine.js";
 import * as journal from "./journal.js";
-import { recordUsageEvent } from "./usageStats.js";
+import { recordUsageEvent, type UsageStatus, type UsageVentilationLine } from "./usageStats.js";
 import type { Usage } from "./claude.js";
 
 /**
@@ -67,12 +67,21 @@ export interface PlafondSilence {
  * tâches de fond (`BACKGROUND_WAIT_TIMEOUT_MS`) et le micro-tour vide
  * supposent tous qu'un message est arrivé — ce plafond, lui, ne vit que tant
  * qu'il n'en est arrivé aucun.
+ *
+ * T-076 — un tour mort de silence n'écrivait AUCUN événement d'usage : le
+ * journal et l'interface le disaient, mais le taux d'erreur de la
+ * supervision, lui, ne le voyait jamais. L'événement est écrit ICI, seule
+ * fois où le plafond signale ; les deux gardes en aval (`claude.ts`, sur
+ * l'exception qui suit et sur la clôture sans résultat) s'effacent devant
+ * `aSignale()` pour ne jamais en écrire un second.
  */
 export function armerPlafondSilence(p: {
   id: string;
   emitter: EngineEmitter;
   model: string | null;
   sessionId: string | null;
+  /** `params.meta` du tour, transmis tel quel au magasin d'usage si le plafond signale. */
+  meta: unknown;
   /** Libération du tour (fermeture de l'entrée, interrupt du CLI), appelée APRÈS le signalement. */
   auSilence: () => void;
 }): PlafondSilence {
@@ -82,7 +91,8 @@ export function armerPlafondSilence(p: {
     minuteur = null;
     signale = true;
     const attenteMs = Date.now() - debut;
-    // Journal d'abord (il survit à tout), interface ensuite, nettoyage enfin.
+    const attenteS = Math.round(attenteMs / 1000);
+    // Journal d'abord (il survit à tout), usage ensuite, interface enfin.
     journal.error("claude", "tour Claude sans aucun message du SDK", {
       reqId: p.id,
       fields: {
@@ -92,9 +102,21 @@ export function armerPlafondSilence(p: {
         plafondMs: SILENCE_DEMARRAGE_TIMEOUT_MS,
       },
     });
+    recordUsageEvent({
+      id: p.id,
+      engine: "claude",
+      method: "claude.start",
+      providerId: null,
+      model: p.model,
+      promptTokens: null,
+      completionTokens: null,
+      status: "error",
+      errorMessage: `tour interrompu par le plafond de silence de ${attenteS} s`,
+      meta: p.meta,
+    });
     p.emitter.error(
       p.id,
-      `Le moteur Claude n'a donné aucun signe de vie en ${Math.round(attenteMs / 1000)} s : ` +
+      `Le moteur Claude n'a donné aucun signe de vie en ${attenteS} s : ` +
         "le tour est abandonné (processus CLI jamais démarré, ou bloqué).",
     );
     p.auSilence();
@@ -111,6 +133,130 @@ export function armerPlafondSilence(p: {
       return signale;
     },
   };
+}
+
+/* ---------------------------------------------------------------------------
+ * T-082 — une interruption volontaire n'est pas une panne.
+ *
+ * Le SDK rend `error_during_execution` dans DEUX situations que rien ne
+ * distingue dans le message : le tour s'est cassé, ou le tour a été coupé.
+ * Le code versait les deux dans `status: "error"`, et l'encart Fiabilité
+ * affichait 13,3 % de tours en erreur pour la semaine du 17 août — dont
+ * 11 sur 11 étaient, transcripts du SDK à l'appui, des interruptions de
+ * l'utilisateur (8 arrêts, 3 refus de permission d'outil). Zéro panne.
+ * Le KPI le plus alarmant de la page mesurait un usage normal, pendant que
+ * `toursAbandon`, qui aurait dû les porter, restait structurellement à zéro.
+ *
+ * La correction tient dans un indicateur posé sur les deux chemins qui
+ * coupent un tour, et LU ici. Le classement est volontairement le seul
+ * endroit qui en décide — les deux appelants (result final, et le repli de
+ * fin de flux) partageaient déjà le même défaut, ils partagent le remède.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Pourquoi un tour s'est arrêté avant d'avoir fini, quand ce n'est pas une
+ * panne. `null` = aucune interruption connue, donc un non-succès EST une
+ * panne et doit être crié comme telle.
+ */
+export type Interruption = "abandon" | "refus" | null;
+
+/** Ce que la fin d'un tour doit laisser derrière elle : un statut d'usage, sa
+ *  raison, et la trace de journal correspondante (`null` = rien à dire). */
+export interface IssueDeTour {
+  status: UsageStatus;
+  /** Raison de la fin anormale — panne OU interruption. `null` sur un succès. */
+  errorMessage: string | null;
+  trace: { niveau: "error" | "info"; message: string } | null;
+}
+
+/** Libellés stables : ils deviennent des CLASSES dans l'agrégat de sobriété
+ *  (usageSobriete.ts, `classerCause`), donc les changer renomme l'historique.
+ *  Exporté : T-076 réutilise `abandon` pour le moteur neutre (`neutralAgent.ts`)
+ *  et `chat.send` (`engine.ts`), qui ne connaissent que l'arrêt utilisateur —
+ *  jamais le refus de permission, propre au moteur Claude. */
+export const LIBELLE_INTERRUPTION: Readonly<Record<"abandon" | "refus", string>> = {
+  abandon: "interrompu: arrêt demandé",
+  refus: "interrompu: permission d'outil refusée",
+};
+
+/**
+ * T-076 — même correction que ci-dessus, réduite au SEUL cas que connaissent
+ * le moteur neutre et `chat.send` : ils n'ont pas de notion de « refus »
+ * (côté moteur neutre, un refus de permission redevient un simple résultat
+ * d'outil, sans couper le tour). Pure, pour un test sans process ni SDK.
+ */
+export function libelleAbandonUtilisateur(status: UsageStatus): string | null {
+  return status === "aborted" ? LIBELLE_INTERRUPTION.abandon : null;
+}
+
+/**
+ * Classe la fin d'un tour. Pure, et c'est le point : la règle qui décide
+ * « panne ou interruption » doit être lisible d'un seul endroit et testable
+ * sans faux SDK.
+ *
+ * ⚠ LIMITE ASSUMÉE sur `refus`. L'indicateur est posé au refus de permission,
+ * or un refus ne coupe pas TOUJOURS le tour : le modèle peut encaisser le
+ * refus et continuer. L'appelant efface donc l'indicateur dès que le modèle
+ * reparle (voir claude.ts, cas `assistant`) — sans quoi une vraie panne
+ * survenant plus tard dans le même tour serait maquillée en interruption.
+ * `abandon`, lui, ne s'efface jamais : `claude.abort` interrompt le CLI.
+ */
+export function classerIssueDeTour(subtype: string, interruption: Interruption): IssueDeTour {
+  if (subtype === "success") {
+    return { status: "done", errorMessage: null, trace: null };
+  }
+  if (interruption !== null) {
+    // Journalisé en `info` : c'est un usage normal, et le noyer dans les
+    // `error` rendrait le journal illisible le jour d'une vraie panne. Mais
+    // journalisé quand même — un tour qui s'arrête laisse toujours une trace.
+    return {
+      status: "aborted",
+      errorMessage: LIBELLE_INTERRUPTION[interruption],
+      trace: { niveau: "info", message: "tour Claude interrompu" },
+    };
+  }
+  return {
+    status: "error",
+    // L4 — le `subtype` du SDK EST la cause ; `message.result` n'entre jamais
+    // dans le journal (sur un tour réussi il porte la réponse de l'assistant).
+    errorMessage: `résultat Claude: ${subtype}`,
+    trace: { niveau: "error", message: "tour Claude terminé en erreur" },
+  };
+}
+
+/**
+ * T-102 — le `subtype` que l'INTERFACE reçoit dans le `done` d'un tour.
+ *
+ * Constat : `error_during_execution` ne dit jamais si le tour s'est cassé ou
+ * s'il a été COUPÉ par `claude.abort` (voir `classerIssueDeTour`). `claude.ts`
+ * renvoyait ce subtype BRUT à l'UI même quand `runState.interruption`
+ * connaissait déjà la réponse : l'interface re-devinait alors depuis le seul
+ * `subtype`, forcément à l'aveugle, et affichait une panne pour un arrêt
+ * demandé. Même convention que le repli sans `result` final
+ * (`cloturerTourSansResultatFinal`) et que l'orchestrateur
+ * (`classifyStepOutcome`) : un abandon connu prime, `subtype` devient
+ * `"aborted"` — un vrai succès ou une vraie panne gardent le leur.
+ *
+ * ⚠ Volontairement borné à `"abandon"`, PAS à `"refus"` : un refus de
+ * permission peut être un choix de l'utilisateur pour UN outil précis, sans
+ * disqualifier tout le reste du diagnostic technique porté par le subtype —
+ * et rien dans le périmètre de T-102 n'a mesuré son affichage. `abandon`, lui,
+ * est sans ambiguïté (l'utilisateur a explicitement coupé le tour).
+ */
+export function subtypePourInterface(subtype: string, interruption: Interruption): string {
+  return interruption === "abandon" ? "aborted" : subtype;
+}
+
+/** Écrit la trace de journal d'une issue, au bon niveau. Les champs sont
+ *  toujours des libellés techniques — jamais un corps de réponse. */
+export function tracerIssue(
+  issue: IssueDeTour,
+  reqId: string,
+  fields: Record<string, unknown>,
+): void {
+  if (!issue.trace) return;
+  const ecrire = issue.trace.niveau === "error" ? journal.error : journal.info;
+  ecrire("claude", issue.trace.message, { reqId, fields });
 }
 
 /**
@@ -140,10 +286,70 @@ export interface EtatFinDeTour {
   pendingResult: ResultatDeTour | null;
   /** Un message `result`, même non final, a-t-il été vu sur ce tour ? */
   sawResult: boolean;
-  /** L'arrêt vient-il de l'utilisateur (claude.abort) ? */
+  /** L'arrêt vient-il de l'utilisateur (claude.abort) ? Distinct de
+      `interruption` : celui-ci commande la FORME de la sortie (un `done` de
+      subtype « aborted » plutôt qu'un `error` à l'interface), celui-là
+      commande la LECTURE qu'en fait la supervision. */
   aborted: boolean;
+  /** T-082 — pourquoi le tour a été coupé, si tant est qu'il l'ait été. */
+  interruption: Interruption;
   /** Le modèle a-t-il produit le moindre contenu avant de se taire ? */
   sawAssistantOutput: boolean;
+}
+
+/**
+ * T-082 — enregistrement du `result` FINAL d'un tour : un événement d'usage,
+ * une trace de journal, et rien d'autre.
+ *
+ * Vit ici, et non dans la boucle de `handleClaudeStart`, pour la raison qui a
+ * sorti tout ce module : c'est de la clôture de tour, elle doit se lire à côté
+ * de son jumeau (le repli sans `result` final) plutôt qu'à six cents lignes de
+ * lui — c'est précisément parce qu'ils étaient séparés que le même défaut de
+ * classement vivait dans les deux.
+ */
+export function enregistrerResultatFinal(p: {
+  id: string;
+  meta: unknown;
+  model: string | null;
+  sessionId: string | null;
+  subtype: string;
+  interruption: Interruption;
+  usage: Usage | null;
+  ventilation: ReadonlyArray<UsageVentilationLine>;
+  contextTokens: number | null;
+  durationMs: number;
+}): void {
+  const issue = classerIssueDeTour(p.subtype, p.interruption);
+  // Un seul événement d'usage par claude.start, sur le result FINAL (usage et
+  // coût cumulés du process ; les résultats intermédiaires n'en émettent pas,
+  // pour ne pas compter double).
+  recordUsageEvent({
+    id: p.id,
+    engine: "claude",
+    method: "claude.start",
+    providerId: null,
+    model: p.model,
+    promptTokens: p.usage?.inputTokens ?? null,
+    completionTokens: p.usage?.outputTokens ?? null,
+    // T-066 — voir claudeVentilation.ts : ce que chaque modèle a vraiment
+    // consommé, plus deux mesures déjà sous la main et jamais écrites
+    // (fenêtre réellement occupée, durée du tour).
+    ventilation: p.ventilation,
+    contextTokens: p.contextTokens,
+    durationMs: p.durationMs,
+    status: issue.status,
+    errorMessage: issue.errorMessage,
+    meta: p.meta,
+  });
+  // T-015 — l'échec était consigné dans le magasin d'usage et NULLE PART
+  // ailleurs : le journal, celui que lit la page Système et qu'on ouvre quand
+  // quelque chose cloche, n'en recevait rien.
+  tracerIssue(issue, p.id, {
+    subtype: p.subtype,
+    sessionId: p.sessionId,
+    model: p.model,
+    ...(issue.status === "aborted" ? { cause: issue.errorMessage } : {}),
+  });
 }
 
 /**
@@ -154,6 +360,9 @@ export function cloturerTourSansResultatFinal(etat: EtatFinDeTour): void {
   const { id, emitter, pendingResult } = etat;
 
   if (pendingResult) {
+    // T-082 — même classement que le `result` final : un tour coupé pendant
+    // l'attente des tâches de fond passe exactement par ici.
+    const issueRepli = classerIssueDeTour(pendingResult.subtype, etat.interruption);
     // Flux terminé sans `result` final (garde-fou du micro-tour vide, arrêt
     // utilisateur pendant l'attente de tâches de fond, process mort) : on
     // livre le dernier résultat connu plutôt qu'un tour fantôme sans fin.
@@ -165,23 +374,17 @@ export function cloturerTourSansResultatFinal(etat: EtatFinDeTour): void {
       model: etat.model,
       promptTokens: pendingResult.usage?.inputTokens ?? null,
       completionTokens: pendingResult.usage?.outputTokens ?? null,
-      status: pendingResult.subtype === "success" ? "done" : "error",
+      status: issueRepli.status,
       // L4 — même règle que le `result` final : seul le subtype est repris.
-      errorMessage:
-        pendingResult.subtype === "success" ? null : `résultat Claude: ${pendingResult.subtype}`,
+      errorMessage: issueRepli.errorMessage,
       meta: etat.meta,
     });
-    if (pendingResult.subtype !== "success") {
-      journal.error("claude", "tour Claude terminé en erreur", {
-        reqId: id,
-        fields: {
-          subtype: pendingResult.subtype,
-          sessionId: pendingResult.sessionId,
-          model: etat.model,
-          repli: true,
-        },
-      });
-    }
+    tracerIssue(issueRepli, id, {
+      subtype: pendingResult.subtype,
+      sessionId: pendingResult.sessionId,
+      model: etat.model,
+      repli: true,
+    });
     emitter.done(id, pendingResult);
     return;
   }
@@ -208,8 +411,11 @@ export function cloturerTourSansResultatFinal(etat: EtatFinDeTour): void {
     model: etat.model,
     promptTokens: null,
     completionTokens: null,
-    status: etat.aborted ? "aborted" : "error",
-    errorMessage: etat.aborted ? null : "tour Claude terminé sans résultat",
+    status: etat.interruption !== null ? "aborted" : "error",
+    errorMessage:
+      etat.interruption !== null
+        ? classerIssueDeTour("", etat.interruption).errorMessage
+        : "tour Claude terminé sans résultat",
     meta: etat.meta,
   });
 

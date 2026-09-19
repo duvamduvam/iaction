@@ -748,16 +748,14 @@ async function main() {
       `usage.credits uo1 données incorrectes: ${JSON.stringify(doneUo1.data)}`,
     );
 
-    // ancien nom, provider sans clé API -> error (l'alias doit tenir)
+    // Ce que ce cas vérifie ici : l'ALIAS tient. Le contenu de la réponse
+    // « clé absente » (done structuré depuis T-057) est couvert par
+    // usageCredits.test.js.
     send({ id: "uo2", method: "usage.openrouter", params: { providerId: "unauthorized" } });
-    const errUo2 = await waitFor(
-      (e) => e.id === "uo2" && e.event === "error",
-      3000,
-      "usage.openrouter uo2 erreur clé absente",
-    );
+    const uo2 = await waitFor((e) => e.id === "uo2", 3000, "usage.openrouter uo2 (alias)");
     assert(
-      typeof errUo2.data.message === "string" && errUo2.data.message.length > 0,
-      "usage.openrouter sans clé API doit renvoyer un message d'erreur lisible",
+      uo2.event === "done" && uo2.data.disponible === false,
+      `alias usage.openrouter sans clé: attendu done structuré, reçu '${uo2.event}' ${JSON.stringify(uo2.data)}`,
     );
 
     // chat.send flux complet : chunks concaténés = texte attendu, done avec finishReason + usage
@@ -1349,7 +1347,7 @@ async function main() {
     assert(
       doneRrMin2.data.tier === "complexe" &&
         doneRrMin2.data.score === 7 &&
-        JSON.stringify(doneRrMin2.data.target) === JSON.stringify({ engine: "claude", model: "claude-fable-5" }) &&
+        JSON.stringify(doneRrMin2.data.target) === JSON.stringify({ engine: "claude", model: "claude-opus-5" }) &&
         !doneRrMin2.data.reasons.some((r) => r.includes("plancher de session")),
       `router.route rr-min2 : tier complexe sans raison plancher attendu, reçu ${JSON.stringify(doneRrMin2.data)}`,
     );
@@ -1404,7 +1402,7 @@ async function main() {
       `router.route rr-llm : tier "complexe"/method "llm" attendus, reçu ${JSON.stringify(doneRrLlm.data)}`,
     );
     assert(
-      JSON.stringify(doneRrLlm.data.target) === JSON.stringify({ engine: "claude", model: "claude-fable-5" }),
+      JSON.stringify(doneRrLlm.data.target) === JSON.stringify({ engine: "claude", model: "claude-opus-5" }),
       `router.route rr-llm : cible du tier complexe attendue, reçu ${JSON.stringify(doneRrLlm.data.target)}`,
     );
     assert(

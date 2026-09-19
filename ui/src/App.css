@@ -25,8 +25,20 @@
    soleil posé dans la dépression — SVG statique généré par
    scripts/gen-horizon-grid.py et servi depuis ui/public/. `position:fixed` +
    `z-index:-1` : le fond se pose sur un pseudo-élément (aucun JSX), reste
-   indépendant du défilement et ne capte jamais le clic. Atténué (`opacity`)
-   + estompé vers le haut (`mask-image`) pour laisser l'en-tête respirer. */
+   indépendant du défilement et ne capte jamais le clic.
+
+   T-083 — RIEN d'autre que l'image ici. L'atténuation et le fondu du haut
+   étaient posés en CSS (`opacity: 0.55` + `mask-image`), et c'est ce qui
+   rendait la frappe poussive : masque et opacité font de ce pseudo-élément
+   une COUCHE À COMPOSER, plein viewport ; sous le renderer logiciel de la
+   session de dev (WEBKIT_DISABLE_DMABUF_RENDERER=1, scripts/dev.sh, posé
+   contre le crash dmabuf NVIDIA), toute invalidation qui la touche la fait
+   re-rasteriser en entier — le rectangle sale d'UN caractère tapé devenait un
+   repeint de tout l'écran, ~8 Mpx au CPU, à chaque touche. Les deux effets
+   sont désormais cuits dans le SVG : la couche est une image, la frappe ne
+   salit plus que sa ligne de texte. Ne pas réintroduire ici de `mask-image`,
+   `opacity`, `filter` ni `backdrop-filter` — le prix ne se voit pas au repos,
+   il se paie à chaque frappe. */
 .app-shell::before {
   content: "";
   position: fixed;
@@ -35,9 +47,6 @@
   background-size: cover;
   background-position: center bottom;
   background-repeat: no-repeat;
-  -webkit-mask-image: linear-gradient(to top, black 60%, transparent 97%);
-  mask-image: linear-gradient(to top, black 60%, transparent 97%);
-  opacity: 0.55;
   pointer-events: none;
   z-index: -1;
 }
@@ -153,12 +162,12 @@
   cursor: default;
 }
 
-/* Encart contexte (voir ContextWidget) et sonde système minimale
+/* Encart contexte (voir ContextWidget) et pastilles de la sonde système
    (CPU/RAM/GPU, poll 5 s — voir SystemStatsWidget) : même pastille ovale que
-   `.usage-widget`, pour que les trois encarts de l'en-tête se lisent comme
-   une même famille. */
+   `.usage-widget`, pour que les encarts de l'en-tête se lisent comme une même
+   famille. */
 .context-widget,
-.system-stats {
+.system-stats__organe {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -171,6 +180,49 @@
   color: var(--text-1);
   white-space: nowrap;
   cursor: default;
+}
+
+/* T-094 — la sonde système n'est plus UNE pastille de six anneaux, mais une
+   rangée de pastilles, une par organe. Le conteneur ne porte donc plus ni
+   cadre ni fond : il ne fait qu'espacer ses membres, un peu plus serré que
+   l'écart entre encarts voisins, pour que les trois se lisent quand même
+   comme un ensemble. */
+.system-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Chaque organe porte SA teinte — cadre, halo et étiquettes — pour qu'on
+   sache d'un coup d'œil de qui parle un chiffre, sans relire l'étiquette.
+
+   ⚠ La teinte dit QUI, jamais COMMENT IL VA : l'anneau, lui, reste coloré par
+   `usageLevel` (ok/warn/error, voir Donut.tsx). Recolorer l'anneau par organe
+   ferait disparaître la seule alerte visuelle du bandeau — un GPU à 95 °C
+   deviendrait aussi vert qu'un GPU au repos. Une couleur, une information. */
+.system-stats__organe--cpu {
+  border-color: var(--border-cyan);
+}
+
+.system-stats__organe--cpu .usage-donut__label {
+  color: var(--neon-cyan);
+}
+
+.system-stats__organe--ram {
+  border-color: var(--border-magenta);
+}
+
+.system-stats__organe--ram .usage-donut__label {
+  color: var(--neon-magenta);
+}
+
+.system-stats__organe--gpu {
+  border-color: var(--border-violet);
+}
+
+.system-stats__organe--gpu .usage-donut__label {
+  color: var(--neon-violet);
 }
 
 /* Bouton « Compacter » de l'encart contexte : n'apparaît que quand la jauge
@@ -673,8 +725,48 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--neon-cyan);
-  box-shadow: 0 0 6px 1px var(--neon-cyan);
+  background: var(--zone-accent, var(--neon-cyan));
+  box-shadow: 0 0 6px 1px var(--zone-accent, var(--neon-cyan));
+}
+
+/* T-082 — sous-titre d'un second bloc DANS un encart (les interruptions sous
+   les pannes) : même famille que le titre, en retrait, pour qu'on lise « une
+   autre liste » et non « un autre encart ». */
+.panel__title--sub {
+  font-size: 0.8rem;
+  color: var(--text-2);
+  margin-top: var(--space-4);
+}
+
+/* ── Supervision — identité de zone (T-071) ──────────────────────────────
+   Trois zones, trois teintes, pour qu'un encart se rattache d'un coup d'œil
+   à la question qu'il sert. Les teintes sortent de la palette DÉJÀ validée de
+   l'app : le trio a été repassé au validateur TOUTES PAIRES contre la surface
+   des panneaux (#150f2b) — bande de clarté, plancher de chroma, séparation
+   daltonisme (pire paire ΔE 12,1 deutan / 9,2 tritan, vision normale 29,0) et
+   contraste ≥ 3:1 : tout passe. Ne pas les retoucher à l'œil.
+
+   L'ambre va à l'historique et non à l'abonnement, délibérément : l'encart
+   d'abonnement est plein de couleurs de STATUT, et une teinte d'identité
+   voisine de l'ambre d'alerte s'y lirait comme un avertissement.
+
+   La couleur ne porte JAMAIS l'information seule — chaque zone garde son
+   intertitre écrit. C'est un repère de lecture, pas un code. */
+.supervision-zone--sobriete {
+  --zone-accent: #1478ff;
+}
+
+.supervision-zone--historique {
+  --zone-accent: #aa6900;
+}
+
+.supervision-zone--abonnement {
+  --zone-accent: #c800b9;
+}
+
+.supervision-zone__titre {
+  border-left: 3px solid var(--zone-accent, var(--neon-cyan));
+  padding-left: var(--space-3);
 }
 
 .field {
@@ -2352,11 +2444,14 @@
   align-items: flex-end;
 }
 
-/* Colonne d'icônes à gauche du textarea (trombone, micro, mode conversation) —
-   identique dans le Chat et dans Projets. Empilées verticalement, elles ne
-   mangent plus qu'une seule largeur de bouton : toute la place gagnée revient à
-   la zone de saisie. `align-self: flex-start` cale le haut de la colonne sur le
-   haut du textarea (la rangée, elle, s'aligne en bas pour le bloc d'envoi), et
+/* Colonne d'icônes à gauche du textarea (trombone, micro, mode conversation).
+   PAGE CHAT UNIQUEMENT depuis le 2026-09-05 : sur la page Projets, ces mêmes
+   icônes ont quitté le composeur pour la section « Outils » du panneau latéral
+   (voir `.sidebar-outils` plus bas) — le Chat, lui, n'a pas d'arborescence donc
+   pas de vide à occuper sous elle. Empilées verticalement, elles ne mangent
+   qu'une seule largeur de bouton : toute la place gagnée revient à la zone de
+   saisie. `align-self: flex-start` cale le haut de la colonne sur le haut du
+   textarea (la rangée, elle, s'aligne en bas pour le bloc d'envoi), et
    `flex: none` l'empêche de s'étirer ou de se déformer quand la saisie grandit.
    `align-items: stretch` donne d'office la même largeur aux trois boutons. */
 .chat-composer__tools {
@@ -2433,6 +2528,257 @@
 
 .composer-queued__cancel:hover {
   color: var(--status-error);
+}
+
+/* ---------- Réveil (ReveilControl.tsx, T-120) ---------- */
+/* À côté de « En file : … », pas dedans (voir l'en-tête du composant) : un
+   simple bouton-bascule qui déplie un petit panneau, même esprit que les
+   sections repliables du panneau latéral. */
+.reveil-control__statut {
+  margin: 0;
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.reveil-control__heures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.reveil-control__heure {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+}
+
+.reveil-control__heure button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.reveil-control__heures input[type="text"] {
+  width: 5.5em;
+  font-family: var(--font-mono);
+}
+
+.reveil-control__reset {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.78rem;
+  color: var(--text-1);
+}
+
+.reveil-control__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.reveil-control__motif {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.75rem;
+}
+
+/* Bandeau d'état — au-dessus du composeur, et SEULEMENT quand un réveil est
+   armé : le bouton permanent mangeait une ligne pour rien (constat 2026-09-05). */
+.reveil-banniere {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px var(--space-2);
+  border-left: 2px solid var(--neon-cyan);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--neon-cyan) 8%, transparent);
+  color: var(--text-1);
+  font-size: 0.76rem;
+}
+
+.reveil-banniere strong {
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+}
+
+/* Le point qui bat : un réveil armé est quelque chose de VIVANT, pas une case cochée. */
+.reveil-control__pastille {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--neon-cyan);
+  animation: reveil-battement 2s ease-in-out infinite;
+}
+
+@keyframes reveil-battement {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Respecte les réglages système : une animation permanente n'est pas
+   négociable pour tout le monde. */
+@media (prefers-reduced-motion: reduce) {
+  .reveil-control__pastille {
+    animation: none;
+  }
+}
+
+/* L'icône vit dans la colonne d'outils du composeur, avec le trombone et le
+   micro. `position: relative` sert d'ancre au panneau flottant ci-dessous. */
+.reveil-control {
+  position: relative;
+  font-size: 0.8rem;
+}
+
+.reveil-control__icone {
+  position: relative;
+  padding: var(--space-2);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+/* Armé : la pastille se pose en pastille de notification sur l'icône. */
+.reveil-control--arme .reveil-control__icone {
+  border-color: var(--border-cyan);
+}
+
+.reveil-control__icone .reveil-control__pastille {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+}
+
+/* Panneau FLOTTANT : il s'ouvre depuis l'icône sans déformer la colonne
+   (large de la seule icône). `position: fixed`, et non `absolute` : depuis que
+   la colonne d'icônes vit dans le panneau latéral, ses ancêtres recoupent
+   (`.agent-sidebar` en `overflow-y:auto`, `.sidebar-section` en
+   `overflow:hidden`) et un panneau de 520 px y était rogné. Le `fixed` échappe
+   à ces découpes — même choix que `.file-tree__context-menu`. `left` / `top`
+   ou `bottom` / `max-height` sont posés en style inline par `ancrerPanneau`
+   (ReveilControl.tsx), qui choisit aussi le côté d'ouverture. */
+.reveil-control__panel {
+  position: fixed;
+  z-index: 150;
+  display: flex;
+  width: 520px;
+  max-width: min(520px, 70vw);
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+
+.reveil-control__barre {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.reveil-control__barre strong {
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+}
+
+.reveil-control__liste {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reveil-control__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+
+/* Celui qu'on est en train de modifier : on doit savoir lequel le formulaire vise. */
+.reveil-control__item--edite {
+  outline: 1px solid var(--border-cyan);
+}
+
+.reveil-control__item-infos {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.reveil-control__item-heures {
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.reveil-control__item-message {
+  overflow: hidden;
+  color: var(--text-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reveil-control__item-echeance {
+  color: var(--text-2);
+  font-size: 0.72rem;
+}
+
+.reveil-control__item-actions {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+}
+
+/* Historique : un réveil ne sert qu'une fois, sa trace reste consultable. */
+.reveil-control__historique {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-1);
+}
+
+.reveil-control__issue {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.reveil-control__issue--declenche {
+  background: color-mix(in srgb, var(--status-ok) 18%, transparent);
+  color: var(--status-ok);
+}
+
+/* Un réveil abandonné se voit AUTANT qu'un réveil parti : c'est l'information
+   qui manque le plus au réveil, pas celle qui a marché. */
+.reveil-control__issue--abandon {
+  background: color-mix(in srgb, var(--status-warn) 18%, transparent);
+  color: var(--status-warn);
 }
 
 /* ---------- Pièces jointes (Attachments.tsx) ---------- */
@@ -2668,6 +3014,122 @@
   box-shadow: var(--glow-magenta);
 }
 
+/* T-077 — état vif de la section LLM : le modèle réellement routé en mode Auto,
+   et les sous-agents du dernier tour. Discret par construction — c'est un
+   constat sous un contrôle, pas un contrôle de plus. */
+
+.llm-vif {
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--neon-cyan);
+  overflow-wrap: anywhere;
+}
+
+/* Rien n'est encore routé : ton neutre, pour ne pas donner à une attente
+   l'apparence d'une mesure. */
+.llm-vif--attente {
+  color: var(--text-2);
+}
+
+.llm-vif__tier {
+  color: var(--text-2);
+}
+
+.llm-vif__agents {
+  margin-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.llm-vif__agents-titre {
+  font-size: 0.68rem;
+  color: var(--text-1);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.llm-vif__agents ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.llm-vif__agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-0);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  /* Texte principal, pas un gris de label : le NOM de l'agent est
+     l'information de la pastille — c'est lui qu'on lit pour savoir qui
+     travaille. Les états gardent la main dessus (les modificateurs
+     ci-dessous écrasent cette couleur), et le modèle déclaré reste cyan :
+     trois niveaux de lecture, un seul coup d'œil. */
+  color: var(--text-0);
+  white-space: nowrap;
+}
+
+/* T-081 — modèle DÉCLARÉ du sous-agent. Cyan : la couleur de l'information
+   de structure dans le reste de l'app, et surtout PAS celle des états
+   (magenta = en cours, rouge = erreur, ambre = interrompu) — un modèle
+   déclaré n'est pas un état. Ni gris ni translucide : la première version
+   repliait sur `--text-2`, le jeton le plus sombre, et le rendait illisible. */
+.llm-vif__agent-modele {
+  color: var(--neon-cyan);
+}
+
+.llm-vif__agent-modele::before {
+  content: "·";
+  margin-right: 4px;
+}
+
+.llm-vif__agent--vif {
+  color: var(--neon-magenta);
+  border-color: var(--border-magenta);
+  box-shadow: var(--glow-magenta);
+}
+
+.llm-vif__agent--erreur {
+  color: var(--status-error);
+  border-color: currentcolor;
+}
+
+/* Interrompu ≠ en erreur : le sous-agent n'a pas échoué, il n'a pas fini. */
+.llm-vif__agent--interrompu {
+  color: var(--status-warn);
+  border-color: currentcolor;
+}
+
+/* Le point pulse pendant le tour — mais uniquement là : hors tour, un
+   sous-agent sans résultat est interrompu, pas vivant. */
+.llm-vif__agent--vif .llm-vif__agent-signe {
+  animation: llm-vif-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes llm-vif-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llm-vif__agent--vif .llm-vif__agent-signe {
+    animation: none;
+  }
+}
+
 /* Blocs d'un tour assistant (texte / raisonnement / outil), dans l'ordre d'arrivée. */
 
 .agent-text-block {
@@ -2817,6 +3279,44 @@
   border-color: var(--border-cyan);
   text-decoration-color: var(--neon-cyan);
   outline: none;
+}
+
+/* Armée au survol (T-104, option) : un remplissage horizontal qu'on VOIT
+   arriver, le temps de fuir la puce avant l'ouverture automatique. La durée
+   suit le délai réglé par l'utilisateur (`--md-survol-delai`, posé en style
+   inline par Markdown.tsx), avec un repli si jamais la variable manquait. */
+.md__file-ref--arme {
+  position: relative;
+  overflow: hidden;
+  border-color: var(--border-cyan);
+}
+
+.md__file-ref--arme::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  background: color-mix(in srgb, var(--neon-cyan) 22%, transparent);
+  animation: md-survol-remplissage var(--md-survol-delai, 700ms) linear forwards;
+  pointer-events: none;
+}
+
+@keyframes md-survol-remplissage {
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .md__file-ref--arme::after {
+    animation: none;
+    width: 100%;
+  }
 }
 
 .md pre {
@@ -2971,6 +3471,19 @@
 
 .tool-activity__result--error {
   color: var(--status-error);
+}
+
+/* T-102 — battement d'un sous-agent en vol : ligne discrète SOUS l'appel
+   `Agent`/`Task`, visible même le bloc replié (elle vit hors du <details>,
+   voir agentTranscript.tsx) — c'est elle qui distingue un travail en cours
+   d'un blocage pendant les dizaines de minutes qu'un sous-agent peut tenir
+   sans revenir. */
+.tool-activity__battement {
+  margin-top: calc(-1 * var(--space-1));
+  padding: 0 var(--space-2) var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-2);
 }
 
 .pretty-json {
@@ -3240,37 +3753,71 @@
   padding-left: 2px;
 }
 
-/* Poignée de repli d'un panneau latéral (SidebarRetractable) : un liseré
-   vertical pleine hauteur, entre le panneau et la zone principale. Assez
-   étroit pour ne rien coûter quand on ne s'en sert pas, assez large pour
-   rester une cible de souris honnête.
+/* ---------- Poignée de repli des panneaux latéraux (panneauxLateraux.tsx)
 
-   Elle reste affichée MÊME panneau replié — c'est le seul chemin de retour.
-   Chaque panneau a la sienne : gauche et droite se replient indépendamment. */
-.sidebar-rail {
+   Une lame verticale de 12 px collée au bord du panneau, TOUJOURS montée : le
+   panneau replié est démonté, elle est alors le seul chemin de retour à la
+   souris. Elle ne se voit qu'au survol / au focus — au repos, seule une fine
+   arête la signale, pour ne pas ajouter deux bordures permanentes à un écran
+   qui en a déjà. ---------- */
+
+.panneau-poignee {
+  position: relative;
   flex: none;
+  width: 12px;
   align-self: stretch;
-  width: 14px;
   padding: 0;
-  border: 1px solid var(--border-0);
-  border-radius: var(--radius-md);
-  background: var(--bg-1);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-2);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Le `gap` de `.agent-layout` (16 px) de chaque côté suffirait à isoler la
+     lame, mais lui laisser toute la gouttière rendrait le clic imprécis quand
+     le panneau est replié : on la resserre contre le contenu. */
+  margin: 0 calc(var(--space-4) * -0.5);
   transition: background 120ms ease, color 120ms ease;
 }
 
-.sidebar-rail:hover {
+.panneau-poignee::before {
+  content: "";
+  width: 1px;
+  height: 100%;
+  background: var(--border-0);
+  position: absolute;
+  opacity: 0.6;
+}
+
+.panneau-poignee__chevron {
+  position: relative;
+  z-index: 1;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: var(--space-2) 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.panneau-poignee:hover,
+.panneau-poignee:focus-visible {
   background: var(--bg-2);
   color: var(--text-0);
 }
 
-.sidebar-rail__chevron {
-  font-size: 14px;
-  line-height: 1;
+.panneau-poignee:hover .panneau-poignee__chevron,
+.panneau-poignee:focus-visible .panneau-poignee__chevron {
+  opacity: 1;
+}
+
+/* Panneau replié : la poignée doit se voir sans survol, sinon rien à l'écran
+   ne dit qu'un panneau existe et attend d'être rouvert. */
+.panneau-poignee--repliee .panneau-poignee__chevron {
+  opacity: 1;
 }
 
 .sidebar-section {
@@ -3423,6 +3970,50 @@
   width: 100%;
   min-height: 160px;
   max-height: 40vh;
+}
+
+/* Section de QUEUE d'une colonne latérale : elle prend tout ce que les
+   sections au-dessus n'ont pas pris, au lieu de laisser un blanc jusqu'au bas
+   de l'écran (demande du 2026-09-05). Elle ne s'étire que DÉPLIÉE — repliée,
+   elle redevient un simple bandeau de titre, et le blanc revient : c'est
+   l'utilisateur qui l'a choisi. */
+.sidebar-section--extensible {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* `1 0 auto` : elle GRANDIT pour manger le vide, mais ne rétrécit jamais sous
+   son contenu — sur un écran court, c'est la colonne qui défile, pas les
+   boutons qui disparaissent. */
+.sidebar-section--extensible.sidebar-section--open {
+  flex: 1 0 auto;
+}
+
+.sidebar-section--extensible .sidebar-section__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Section « Outils » (page Projets) : les icônes d'action du composeur, sous
+   l'arborescence. En RANGÉE qui se replie, et non en colonne comme dans le
+   composeur : la largeur est ici la ressource abondante (300 px), la hauteur
+   celle qu'on ne veut pas gaspiller. `align-content: flex-start` garde les
+   boutons en haut de la surface disponible plutôt que de les étaler dedans. */
+.sidebar-outils {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  align-content: flex-start;
+  gap: var(--space-2);
+}
+
+/* La jauge de niveau micro passe à la ligne et prend toute la largeur — même
+   intention que dans la colonne du composeur : elle ne rogne aucun bouton. */
+.sidebar-outils .mic-level {
+  flex: 1 0 100%;
+  width: auto;
 }
 
 /* Section « Connaissances » : documents épinglés par projet. */
@@ -4123,6 +4714,25 @@
   color: var(--status-error);
 }
 
+/* Item sans cible (« Fermer les onglets à droite » sur le dernier onglet) :
+   grisé plutôt que masqué — la position des items ne doit pas bouger d'un clic
+   droit à l'autre (T-109, menu de la barre d'onglets). */
+.file-tree__context-menu-item:disabled {
+  color: var(--text-2);
+  cursor: default;
+}
+
+.file-tree__context-menu-item:disabled:hover {
+  background: transparent;
+  color: var(--text-2);
+}
+
+.file-tree__context-menu-separator {
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: var(--border-0);
+}
+
 /* ---------- Modale de confirmation de suppression (fichier/dossier) ---------- */
 /* Réutilise `.permission-overlay`/`.permission-modal` (voir plus bas) pour le
    fond et la structure, avec une teinte « danger » (rouge) plutôt que magenta. */
@@ -4193,7 +4803,9 @@
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   cursor: pointer;
   background: transparent;
-  max-width: 200px;
+  /* Recul de l'inactif (T-122, levier B) : la largeur cède la place à
+     l'actif ci-dessous, qui a le droit d'afficher son nom en entier. */
+  max-width: 170px;
 }
 
 .agent-tab:hover {
@@ -4201,17 +4813,35 @@
   background: var(--bg-2);
 }
 
+/* Avance de l'actif (T-122, levier B) : `--bg-1` sur `--bg-0` ne faisait que
+   1,05 : 1 de contraste — quasi invisible. `--bg-2` (déjà la couleur du survol)
+   porte le fond, le gras porte le texte, et la largeur gagnée (300px contre
+   170px) montre le nom en entier là où il comptait le plus. */
 .agent-tab--active {
   color: var(--text-0);
-  background: var(--bg-1);
+  font-weight: 600;
+  background: var(--bg-2);
   border-color: var(--border-cyan);
   box-shadow: 0 -2px 8px -4px var(--neon-cyan-dim);
+  max-width: 300px;
 }
 
 .agent-tab__name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Numéro de POSITION dans la barre (T-122, levier C) : un simple repère
+   spatial pour l'œil et l'ancrage d'Alt+1…Alt+9 (raccourciOnglets.ts), pas
+   une donnée qui mérite d'attirer le regard — d'où une couleur en retrait
+   même quand l'onglet est actif, et une taille qui ne mange pas la place du
+   titre, justement ce que ce ticket corrige. */
+.agent-tab__num {
+  flex: none;
+  font-size: 0.68rem;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .agent-tab__dot {
@@ -4229,7 +4859,7 @@
    le magenta restant celle du « fichier modifié ». */
 .agent-tab--conv.agent-tab--active {
   border-color: var(--border-cyan);
-  box-shadow: inset 0 2px 0 var(--neon-cyan);
+  box-shadow: inset 0 3px 0 var(--neon-cyan);
 }
 
 /* Point d'activité : la conversation de CET onglet a un tour en cours, y
@@ -4315,6 +4945,44 @@
 .debord-notice--blocked {
   color: var(--status-error);
   border-color: var(--status-error);
+}
+
+/* T-101 — heure des lignes discrètes (recherche web, débord, compaction,
+   état vocal) : même style partout, seul le placement change selon la
+   famille (voir docs/maquette-heures-discretes.html). Jamais une bulle de
+   plus — juste un chiffre en retrait, dans le même ton discret. */
+.heure {
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  color: var(--text-2);
+}
+
+.heure--tete {
+  margin-right: 6px;
+}
+
+.heure--queue {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* Lignes « en queue » (compaction, état vocal) : texte à gauche (peut
+   changer vite), heure stable à droite. */
+.ligne-queue {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* Regroupe l'heure et un bouton (fermeture…) dans le même item flex, à
+   droite d'une `.ligne-queue` à trois enfants — sans ça, `space-between`
+   les écarterait au lieu de les garder ensemble. */
+.result-line__meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex: none;
 }
 
 .agent-tabs__body {
@@ -4582,30 +5250,30 @@
   .agent-sidebar--right {
     order: 2;
   }
-  /* Chaque poignée suit SON panneau dans la pile. Sans `order` explicite elles
-     resteraient à 0 comme le panneau gauche, et la poignée de droite viendrait
-     se ranger avant le contenu, loin du panneau qu'elle commande. */
-  .sidebar-rail--left {
-    order: 1;
-  }
-  .sidebar-rail--right {
-    order: 3;
-  }
   .agent-main__content {
-    order: 4;
-  }
-  /* Empilée, la poignée devient horizontale : c'est vers le haut que le
-     panneau se range, plus vers le côté. */
-  .sidebar-rail {
-    align-self: auto;
-    width: 100%;
-    height: 14px;
-  }
-  .sidebar-rail__chevron {
-    transform: rotate(90deg);
+    order: 3;
   }
   .sidebar-filetree .file-tree {
     max-height: 30vh;
+  }
+  /* Pile verticale (`.agent-layout` en colonne) : la lame devient horizontale,
+     et son chevron pointe vers le haut/bas plutôt que vers les côtés. */
+  .panneau-poignee {
+    width: 100%;
+    height: 12px;
+    align-self: auto;
+    margin: calc(var(--space-4) * -0.5) 0;
+  }
+  .panneau-poignee::before {
+    width: 100%;
+    height: 1px;
+  }
+  .panneau-poignee__chevron {
+    transform: rotate(90deg);
+    padding: 0 var(--space-2);
+  }
+  .panneau-poignee--droit {
+    order: 1;
   }
 }
 
@@ -4621,6 +5289,106 @@
   justify-content: center;
   padding: var(--space-5);
   z-index: 100;
+}
+
+/* Variante NON BLOQUANTE — questions de l'agent et permissions d'AgentPage
+   (T-089). Ni voile opaque ni capture des clics : le fil, l'arborescence et
+   les fichiers ouverts restent lisibles ET manipulables pendant que l'agent
+   attend, sinon il faut trancher sans pouvoir aller voir. Les deux autres
+   usages de `.permission-overlay` (suppression de fichier, permission
+   d'orchestration) gardent le voile : eux n'ont rien à consulter derrière.
+   `pointer-events` est rendu aux enfants, le panneau reste cliquable. */
+.permission-overlay--flottant {
+  background: none;
+  pointer-events: none;
+}
+
+.permission-overlay--flottant > * {
+  pointer-events: auto;
+}
+
+/* Sans voile pour l'isoler, le panneau doit tenir seul sur le fond : bordure
+   plus franche et ombre portée plus profonde. */
+.permission-overlay--flottant .permission-modal {
+  box-shadow:
+    0 24px 60px #01030a99,
+    var(--shadow-panel),
+    var(--glow-magenta);
+}
+
+/* Barre de titre saisissable. `touch-action: none` : sans lui, le geste part
+   en défilement tactile et le panneau ne suit pas le doigt. */
+.permission-modal__head--poignee {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.permission-modal__head--poignee:active {
+  cursor: grabbing;
+}
+
+/* « Mettre de côté » : ni répondre ni ignorer. Poussé à gauche pour l'écarter
+   des deux boutons qui, eux, terminent la demande. */
+.permission-modal__aside {
+  margin-right: auto;
+}
+
+/* Panneau replié : la pastille est le seul rappel que l'agent attend. Elle
+   flotte au-dessus de tout et suit l'écran, pas le défilement. */
+.question-pastille {
+  position: fixed;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-1);
+  border: 1px solid var(--border-magenta);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    0 12px 32px #01030a99,
+    var(--glow-magenta);
+  color: var(--text-1);
+  font: inherit;
+  cursor: pointer;
+}
+
+.question-pastille:hover {
+  border-color: var(--neon-magenta);
+}
+
+.question-pastille__icone {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  border: 1px solid var(--border-magenta);
+  color: var(--neon-magenta);
+  font-weight: 700;
+}
+
+/* Faits joints à une question (T-089) : de quoi trancher sans aller voir
+   ailleurs. Préformaté — c'est le plus souvent un listing —, donc défilement
+   horizontal propre plutôt qu'un panneau élargi. */
+.ask-question__context {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-0);
+  border: 1px solid var(--border-1);
+  border-left: 2px solid var(--border-magenta);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre;
 }
 
 /* Colonne flex à hauteur bornée : c'est le CORPS qui défile, pas la modale.
@@ -5715,6 +6483,37 @@
   white-space: nowrap;
 }
 
+/* T-075 — dénominateur accolé au titre d'une liste qui ne décrit qu'une
+   fraction de l'activité. Volontairement en gris de label : il complète le
+   titre, il ne le concurrence pas. */
+.supervision-routage-denominateur {
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+/* T-075 — variation vs période précédente : ni vert ni rouge. Plus de tours
+   n'est pas « bien », moins n'est pas « mal » — c'est une mesure, pas une
+   note. La couleur trancherait une question que la page ne pose pas. */
+.supervision-kpi-sub--variation {
+  color: var(--text-2);
+}
+
+/* T-068 — le pic de quota affiché sous la part hors facturation vire à l'ambre
+   au-delà de 80 % : c'est le moment où « gratuit » cesse de vouloir dire
+   « disponible ». Pas de rouge — la saturation d'un abonnement PAYÉ n'est pas
+   une panne, c'est une limite atteinte. */
+.supervision-kpi-sub--alerte {
+  color: var(--status-warn);
+}
+
+/* T-070 — marqueur « jour 3/7 » d'une période EN COURS. Discret par
+   construction : c'est une NUANCE sur les chiffres affichés, pas un état
+   d'alerte — le rouge dirait « quelque chose ne va pas », alors que tout va
+   bien, il manque seulement des jours qui ne sont pas encore arrivés. */
+.supervision-range-avancement {
+  color: var(--text-2);
+}
+
 .supervision-kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -6475,4 +7274,44 @@ kbd {
   color: var(--danger, #f43f5e);
   font-family: var(--font-mono, monospace);
   font-size: 0.85rem;
+}
+
+/* ═══════════════════ SONDE T-095 — suspects isolables à chaud ═══════════════
+ *
+ * Cinq signalements de « c'est lent quand je tape », deux tickets soldés, et
+ * toujours aucune mesure : chaque enquête a relu cette feuille et raisonné.
+ * Ces trois paliers font l'inverse — ils RETIRENT un suspect à la fois, sans
+ * relancer l'application, pour que la sonde dise si le retrait change quelque
+ * chose. Ils sont pilotés par Ctrl+Alt+N (voir sondeFrappe.ts), s'appliquent
+ * en cumulé (le palier 2 contient le 1, le 3 contient le 2), et ne servent
+ * QU'À MESURER : aucun n'est un état dans lequel l'application doit vivre.
+ *
+ * Lecture du résultat : le palier qui fait chuter la ligne « rendu » nomme le
+ * coupable. Si aucun ne la fait chuter, le coût n'est pas dans le CSS — il est
+ * sous la webview (rendu logiciel sur 3840 × 2109, cf. T-095), et l'enquête
+ * doit sortir de l'interface au lieu de relire ce fichier une cinquième fois.
+ *
+ * L'afficheur de la sonde ([data-sonde-frappe]) est exclu de toutes les
+ * règles : un instrument qu'on éteint en même temps que ce qu'il mesure ne
+ * mesure plus rien. */
+
+html.sonde-nu--1 *:not([data-sonde-frappe]),
+html.sonde-nu--2 *:not([data-sonde-frappe]),
+html.sonde-nu--3 *:not([data-sonde-frappe]) {
+  box-shadow: none !important;
+  text-shadow: none !important;
+  filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html.sonde-nu--2 *:not([data-sonde-frappe]),
+html.sonde-nu--3 *:not([data-sonde-frappe]) {
+  animation: none !important;
+  transition: none !important;
+}
+
+html.sonde-nu--3 *:not([data-sonde-frappe]) {
+  background-image: none !important;
+  border-radius: 0 !important;
 }
