@@ -28,6 +28,7 @@ import type { AgentInfo, AgentScope } from "./orchestrationClient";
 import { isRouteTier, toRouteTarget } from "./protocole";
 import { capSessions, deriveTitleFromText, newSessionMeta } from "./sessionStore";
 import type { DebordNotice } from "./debordNotice";
+import { toReveils, toReveilsHistorique, withReveilsDefault, type Reveil, type ReveilHistorise } from "./reveil";
 import type { RouteTarget, RouteTier } from "./sidecar";
 
 export interface EngineConfig {
@@ -71,6 +72,10 @@ export interface ProjectSession {
   /** R7 — plancher de session du mode Auto (relevé à la hausse uniquement) + dernière cible utilisée (`null` sinon). */
   routedTier: RouteTier | null;
   routedTarget: RouteTarget | null;
+  /** T-120 — réveils armés sur cette conversation (plusieurs possibles, chacun son message). Voir docs/spec-reveil.md §3. */
+  reveils: Reveil[];
+  /** T-120 — réveils déjà passés : un réveil ne sert qu'une fois, sa trace reste ici. */
+  reveilsHistorique: ReveilHistorise[];
 }
 
 /**
@@ -115,6 +120,8 @@ export function freshSession(): ProjectSession {
     selectedAgent: null,
     routedTier: null,
     routedTarget: null,
+    reveils: [],
+    reveilsHistorique: [],
   };
 }
 
@@ -148,6 +155,10 @@ export interface PersistedSession {
   /** R2 — absents (sessions antérieures) = aucune affinité de routage, voir `sessionStateFromPersisted`. */
   routedTier?: RouteTier | null;
   routedTarget?: RouteTarget | null;
+  /** T-120 — absent (sessions antérieures à ce champ) ou corrompu = aucun réveil, voir `withReveilsDefault`. Le singulier `reveil` d'avant la liste est encore relu. */
+  reveils?: Reveil[];
+  /** T-120 — historique des réveils passés (absent sur les sessions antérieures). */
+  reveilsHistorique?: ReveilHistorise[];
 }
 
 /**
@@ -254,7 +265,12 @@ export function hasCommonSessionFields(v: Record<string, unknown>): boolean {
     // d'arriver ici — ces deux lignes ne restent que par défense en
     // profondeur, elles ne doivent JAMAIS invalider une session réelle).
     (v.routedTier === undefined || v.routedTier === null || isRouteTier(v.routedTier)) &&
-    (v.routedTarget === undefined || v.routedTarget === null || toRouteTarget(v.routedTarget) !== null)
+    (v.routedTarget === undefined || v.routedTarget === null || toRouteTarget(v.routedTarget) !== null) &&
+    // T-120 — même défense en profondeur : `withReveilsDefault` a déjà réparé
+    // le champ en amont (toujours un tableau valide à ce stade), cette ligne
+    // ne reste que pour ne jamais invalider une session réelle.
+    (v.reveils === undefined || Array.isArray(v.reveils)) &&
+    (v.reveilsHistorique === undefined || Array.isArray(v.reveilsHistorique))
   );
 }
 
@@ -316,6 +332,49 @@ export function isLegacyPersistedProjectState(value: unknown): value is LegacyPe
 export function deriveSessionTitle(turns: AgentTurn[]): string {
   const firstUser = turns.find((t) => t.role === "user");
   return deriveTitleFromText(firstUser?.displayContent ?? firstUser?.content ?? "");
+}
+
+/**
+ * T-063 — applique les titres IA (`claude.sessionTitles`) aux sessions,
+ * SAUF quand le titre IA ne distingue plus.
+ *
+ * Deux mécaniques produisaient des doublons dans le panneau Sessions : des
+ * sessions successives sur la MÊME tâche reçoivent des titres IA qui
+ * convergent vers la même formule, et une conversation REPRISE (resume)
+ * partage son `sessionId` serveur avec sa devancière — deux entrées
+ * calculent alors le même titre depuis le même id. Dans les deux cas, le
+ * titre IA est pire qu'un repli qu'il remplace : il ne distingue plus rien.
+ *
+ * Règle : un titre IA n'est posé que s'il n'est pas déjà PORTÉ par une autre
+ * session du projet (multi-ensemble des titres courants, mis à jour au fil du
+ * parcours — la première session à revendiquer un titre IA le gagne, les
+ * suivantes gardent leur repli local, distinctif par construction). Les
+ * sessions personnalisées (`titleCustom`) ou sans id serveur ne sont jamais
+ * concernées.
+ */
+export function appliquerTitresIA(
+  sessions: readonly ProjectSession[],
+  titles: ReadonlyMap<string, string>,
+): { sessions: ProjectSession[]; changed: boolean } {
+  const compte = new Map<string, number>();
+  for (const s of sessions) compte.set(s.title, (compte.get(s.title) ?? 0) + 1);
+
+  let changed = false;
+  const next = sessions.map((s) => {
+    if (s.titleCustom || !s.sessionId) return s;
+    const aiTitle = titles.get(s.sessionId);
+    if (!aiTitle || aiTitle === s.title) return s;
+    if ((compte.get(aiTitle) ?? 0) > 0) return s; // déjà porté ailleurs : repli gardé
+
+    const ancien = compte.get(s.title) ?? 1;
+    if (ancien <= 1) compte.delete(s.title);
+    else compte.set(s.title, ancien - 1);
+    compte.set(aiTitle, (compte.get(aiTitle) ?? 0) + 1);
+
+    changed = true;
+    return { ...s, title: aiTitle };
+  });
+  return changed ? { sessions: next, changed } : { sessions: sessions as ProjectSession[], changed };
 }
 
 /** Migre une conversation « ancienne forme » (pré-Lot Sessions) en une session unique, ouverte en onglet — rien n'est perdu. */
@@ -387,6 +446,14 @@ export function withSessionsRoutingRepair(value: unknown): unknown {
   return { ...v, sessions: v.sessions.map(withRoutingRepair) };
 }
 
+/** T-120 — applique `withReveilsDefault` à chaque session d'une entrée projet brute, même principe que `withSessionsRoutingRepair`. */
+export function withSessionsReveilsDefault(value: unknown): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v.sessions)) return value;
+  return { ...v, sessions: v.sessions.map(withReveilsDefault) };
+}
+
 /**
  * Valide défensivement le document lu du disque (peut être `{}`, absent, ou
  * corrompu) et MIGRE au passage toute entrée encore à une forme antérieure
@@ -446,7 +513,7 @@ export function sanitizePersistedConversations(raw: unknown): PersistedConversat
   const seenTurns = new Set<string>();
   const seenBlocks = new Set<string>();
   for (const [id, rawValue] of Object.entries(raw as Record<string, unknown>)) {
-    const value = withSessionsRoutingRepair(rawValue);
+    const value = withSessionsReveilsDefault(withSessionsRoutingRepair(rawValue));
     if (isPersistedProjectEntry(value)) {
       out[id] = withDedupedTurnIds(value, seenTurns, seenBlocks);
     } else if (isOldMultiSessionEntry(value)) {
@@ -484,6 +551,8 @@ export function buildPersistedSession(session: ProjectSession): PersistedSession
     selectedAgent: session.selectedAgent,
     routedTier: session.routedTier,
     routedTarget: session.routedTarget,
+    reveils: session.reveils,
+    reveilsHistorique: session.reveilsHistorique,
   };
 }
 
@@ -523,6 +592,9 @@ export function sessionStateFromPersisted(entry: PersistedSession): ProjectSessi
     // R2 — assainissement défensif (valeurs corrompues → aucune affinité).
     routedTier: isRouteTier(entry.routedTier) ? entry.routedTier : null,
     routedTarget: toRouteTarget(entry.routedTarget),
+    // T-120 — assainissement défensif (voir `withSessionsReveilsDefault`, déjà appliqué en amont).
+    reveils: toReveils(entry),
+    reveilsHistorique: toReveilsHistorique(entry),
   };
 }
 
@@ -535,9 +607,6 @@ export function sessionStateFromPersisted(entry: PersistedSession): ProjectSessi
  */
 
 /* ---------- État VIF d'une conversation ouverte (jamais persisté tel quel) ---------- */
-
-/** Valeur sentinelle du sélecteur de modèle : « Auto (routeur) », voir R2/R7. */
-export const AUTO_MODEL = "__auto__";
 
 /**
  * État VIF d'une conversation ouverte en onglet. Ce qui était mono-valué
@@ -576,6 +645,16 @@ export interface ConvRuntime {
    * contrôle de `handleSend` abandonne alors le tour proprement, sans envoi.
    */
   preSendAbort: boolean;
+  /** T-120 — réveils armés sur cette conversation (miroir vif de `ProjectSession.reveils`). */
+  reveils: Reveil[];
+  /** T-120 — historique des réveils passés (miroir vif de `ProjectSession.reveilsHistorique`). */
+  reveilsHistorique: ReveilHistorise[];
+  /**
+   * T-120 — dernier événement de réveil de CETTE conversation (déclenché ou
+   * abandonné), éphémère, jamais persisté — même registre que `debordNotice` :
+   * une ligne discrète, pas une bulle (docs/spec-reveil.md §6).
+   */
+  reveilNotice: { label: string; at: string } | null;
 }
 
 export function freshRuntime(
@@ -583,6 +662,8 @@ export function freshRuntime(
   sessionId: string | null = null,
   routedTier: RouteTier | null = null,
   routedTarget: RouteTarget | null = null,
+  reveils: Reveil[] = [],
+  reveilsHistorique: ReveilHistorise[] = [],
 ): ConvRuntime {
   return {
     turns,
@@ -598,5 +679,8 @@ export function freshRuntime(
     routedReasons: null,
     debordNotice: null,
     preSendAbort: false,
+    reveils,
+    reveilsHistorique,
+    reveilNotice: null,
   };
 }

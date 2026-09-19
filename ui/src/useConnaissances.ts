@@ -15,14 +15,67 @@ import {
   type KnowledgeDoc,
   type PinnedDoc,
 } from "./connaissances";
+import { logDebug } from "./journal";
 import { subscribeProvidersPushed } from "./providersBus";
 import {
   knowledgeIndex,
   knowledgeStatus,
   type KnowledgeIndexProgress,
   type KnowledgeStatus,
-} from "./sidecar";
+} from "./connaissancesClient";
 import { stateRead, stateWrite } from "./stateClient";
+
+/**
+ * Faut-il déclencher l'auto-réindexation (T-115) pour cet état d'index ?
+ * Fonction pure, testée sans React (voir connaissances.test.ts) : un index
+ * INEXISTANT (`exists: false`) ne déclenche RIEN — la création initiale reste
+ * un choix de l'utilisateur (le bouton « Reconstruire l'index »). Seul un
+ * index qui EXISTE et est `stale` mérite une réparation silencieuse.
+ */
+export function fautAutoIndexer(status: KnowledgeStatus | null): boolean {
+  return status !== null && status.exists && status.stale;
+}
+
+/**
+ * Garde-fou « au plus une tentative par `cwd` et par session UI » : marque et
+ * autorise en un seul geste ATOMIQUE (pas de fenêtre entre « vérifier » et
+ * « marquer » où un second appel s'engagerait aussi) — sans ça,
+ * `refreshKnowledgeStatus` étant rappelé à chaque « providers poussés »,
+ * l'auto-indexation pourrait repartir en boucle si Ollama est arrêté (panne
+ * « fetch failed » connue, voir la mémoire du projet).
+ */
+export function marquerTenteSiNouveau(tried: Set<string>, cwd: string): boolean {
+  if (tried.has(cwd)) return false;
+  tried.add(cwd);
+  return true;
+}
+
+/**
+ * Tente une auto-réindexation en fond (T-115). Contrairement au bouton
+ * (`handleIndexKnowledge`), un échec reste DISCRET — doctrine T-057, une
+ * routine qui échoue en boucle ne doit pas crier : pas de bandeau d'erreur
+ * UI, une simple ligne `debug` si la journalisation existe. Dépendances
+ * injectées pour rester testable sans React ni sidecar réel.
+ */
+export async function autoIndexerConnaissances(
+  cwd: string,
+  pinned: string[],
+  deps: {
+    indexer: (cwd: string, pinned: string[]) => Promise<unknown>;
+    journaliser: (msg: string, fields: Record<string, unknown>) => void;
+  },
+): Promise<boolean> {
+  try {
+    await deps.indexer(cwd, pinned);
+    return true;
+  } catch (err) {
+    deps.journaliser("auto-indexation des connaissances échouée", {
+      cwd,
+      erreur: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
 
 export function useConnaissances(selectedProjectId: string | null, cwd: string) {
   // Connaissances (documents épinglés par projet, panneau latéral) : chargées
@@ -102,9 +155,13 @@ export function useConnaissances(selectedProjectId: string | null, cwd: string) 
   }
 
   // R5 — état de l'index d'embeddings du projet (`knowledge.status`) +
-  // indexation à la demande (`knowledge.index`, bouton « Indexer maintenant »
-  // avec progression). Les chemins épinglés participent à l'index et au
-  // calcul de `stale` — le sidecar collecte lui-même automatiques/détectées.
+  // indexation (`knowledge.index`, avec progression). T-115 : l'indexation
+  // n'est plus SEULEMENT à la demande — un index existant et périmé se
+  // répare seul en fond (voir `fautAutoIndexer` plus bas) ; le bouton
+  // « Reconstruire l'index » reste le seul moyen de CRÉER un index et de le
+  // forcer (`force: true`, ignore la réutilisation par mtime). Les chemins
+  // épinglés participent à l'index et au calcul de `stale` — le sidecar
+  // collecte lui-même automatiques/détectées.
   const [knowledgeIdx, setKnowledgeIdx] = useState<KnowledgeStatus | null>(null);
   const [indexingKnowledge, setIndexingKnowledge] = useState(false);
   const [knowledgeIndexProgress, setKnowledgeIndexProgress] = useState<KnowledgeIndexProgress | null>(null);
@@ -132,6 +189,30 @@ export function useConnaissances(selectedProjectId: string | null, cwd: string) 
     });
   }, [refreshKnowledgeStatus]);
 
+  /**
+   * Auto-réindexation en fond (T-115) : sur un poste où personne ne clique
+   * jamais « Indexer maintenant », 3 index sur 4 dataient d'un mois — le
+   * sidecar calculait déjà `stale`, sans effet. Dès que `knowledge.status`
+   * répond `exists && stale`, on relance la même indexation que le bouton,
+   * sans confirmation ni blocage (voir `fautAutoIndexer`,
+   * `marquerTenteSiNouveau`, `autoIndexerConnaissances`).
+   */
+  const autoIndexTriedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!cwd || indexingKnowledge) return;
+    if (!fautAutoIndexer(knowledgeIdx)) return;
+    if (!marquerTenteSiNouveau(autoIndexTriedRef.current, cwd)) return;
+    setIndexingKnowledge(true);
+    autoIndexerConnaissances(cwd, pinnedPathsKey.split("\n").filter(Boolean), {
+      indexer: (c, p) => knowledgeIndex(c, p),
+      journaliser: (msg, fields) => logDebug("knowledge", msg, { fields }),
+    })
+      .then((ok) => {
+        if (ok) void refreshKnowledgeStatus();
+      })
+      .finally(() => setIndexingKnowledge(false));
+  }, [cwd, indexingKnowledge, knowledgeIdx, pinnedPathsKey, refreshKnowledgeStatus]);
+
   async function handleIndexKnowledge() {
     if (!cwd || indexingKnowledge) return;
     setIndexingKnowledge(true);
@@ -142,6 +223,7 @@ export function useConnaissances(selectedProjectId: string | null, cwd: string) 
         cwd,
         pinnedKnowledge.map((d) => d.path),
         (progress) => setKnowledgeIndexProgress(progress),
+        true, // « Reconstruire l'index » : le bouton est une RÉPARATION, jamais incrémental.
       );
       await refreshKnowledgeStatus();
     } catch (err) {

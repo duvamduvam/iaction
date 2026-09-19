@@ -31,6 +31,10 @@ import {
   readJsonlTail,
   readJsonlTolerant,
 } from "./jsonlStore.js";
+// T-071 — l'agrégat de sobriété vit dans son propre module, même patron que S2.
+import { applySobrieteEvent, finalizeSobriete, newSobrieteAgg, type SobrieteAgg } from "./usageSobriete.js";
+// T-074 — projection minimale pour le signal d'escalade (calcul côté UI, voir usageEscalade.ts).
+import { applyEscaladeEvent, finalizeEscalade, newEscaladeAgg, type EscaladeAgg } from "./usageEscalade.js";
 // S2 — l'attribution d'un tour à son projet vit dans son propre module.
 import {
   applyProjetEvent,
@@ -151,6 +155,39 @@ export interface RecordUsageEventInput {
    * jamais dire pourquoi (voir docs/etude-logs.md § 1.4).
    */
   errorMessage?: string | null;
+  /**
+   * T-066 — ventilation par modèle réellement appelé pendant le tour (voir
+   * claude.ts, `extractModelUsage`). Le type est décrit ICI plutôt qu'importé
+   * de claude.ts : ce module est importé PAR les moteurs, l'importer en retour
+   * fermerait un cycle. TypeScript étant structurel, la compatibilité est
+   * vérifiée sans dépendance.
+   *
+   * L'événement reste à UN par tour : la ventilation est imbriquée, elle ne le
+   * remplace pas. Émettre une ligne par modèle aurait gonflé le compte de
+   * `tours` de tous les agrégats existants — un socle ne casse pas ce qu'il
+   * porte.
+   */
+  ventilation?: ReadonlyArray<UsageVentilationLine> | null;
+  /**
+   * T-066 — occupation RÉELLE de la fenêtre de contexte au dernier appel du
+   * tour (`extractContextTokens`). Elle était calculée puis abandonnée : le
+   * KPI « Contexte moyen » retombait sur `promptTokens`, de médiane 6 tokens.
+   */
+  contextTokens?: number | null;
+  /** T-066 — durée du tour. Jamais mesurée jusqu'ici : aucune métrique de latence n'était possible. */
+  durationMs?: number | null;
+}
+
+/** T-066 — une ligne de ventilation. Voir `RecordUsageEventInput.ventilation`. */
+export interface UsageVentilationLine {
+  model: string;
+  role: "fil" | "delegue" | "inconnu";
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  costUsd: number | null;
+  contextWindow: number | null;
 }
 
 /**
@@ -233,6 +270,14 @@ export function recordUsageEvent(input: RecordUsageEventInput): void {
       // identique à l'octet près.
       ...(input.coutIndisponible === true ? { coutIndisponible: true } : {}),
       ...(typeof input.gratuit === "boolean" ? { gratuit: input.gratuit } : {}),
+      // T-066 — écrits SEULEMENT quand ils existent : un tour d'un moteur qui
+      // ne les fournit pas garde un événement identique à l'octet près (même
+      // discipline R0 que `coutIndisponible` ci-dessus).
+      ...(input.ventilation && input.ventilation.length > 0
+        ? { ventilation: input.ventilation }
+        : {}),
+      ...(typeof input.contextTokens === "number" ? { contextTokens: input.contextTokens } : {}),
+      ...(typeof input.durationMs === "number" ? { durationMs: input.durationMs } : {}),
       status: input.status,
       // L4 — pourquoi le tour a échoué (matière du rapport qualité hebdo).
       errorMessage: normalizeErrorMessage(input.errorMessage),
@@ -254,67 +299,6 @@ export function recordUsageEvent(input: RecordUsageEventInput): void {
   } catch (err) {
     journal.error("usage", "recordUsageEvent a échoué", { fields: { erreur: errMessage(err) } });
   }
-}
-
-/**
- * Append non bloquant d'un instantané d'usage abonnement dans
- * claude-windows.jsonl — appelé (best effort) partout où claude.ts capture
- * un instantané `usage.claude` avec succès.
- */
-export function recordClaudeWindowsSnapshot(windows: Record<string, unknown>): void {
-  try {
-    const line = JSON.stringify({ ts: new Date().toISOString(), windows });
-    enqueueWrite(claudeWindowsPath(), line, (err) =>
-      reportUsageWriteFailure("claude-windows.jsonl", err),
-    );
-  } catch (err) {
-    journal.error("usage", "recordClaudeWindowsSnapshot a échoué", {
-      fields: { erreur: errMessage(err) },
-    });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// R3 — lectures pour la décision de débord (voir router.ts)
-// ---------------------------------------------------------------------------
-
-/** Extrait l'`utilization` numérique d'une fenêtre brute de claude-windows.jsonl. */
-function windowUtilization(value: unknown): number | null {
-  if (!isPlainObject(value)) {
-    return null;
-  }
-  return typeof value.utilization === "number" && Number.isFinite(value.utilization)
-    ? value.utilization
-    : null;
-}
-
-/**
- * R3 — dernier instantané de claude-windows.jsonl (lecture tolérante, PAR LA
- * FIN — voir readJsonlTail : jamais de parse intégral sur le chemin chaud) :
- * pourcentages des fenêtres 5 h et 7 jours de l'abonnement Claude, plus le
- * `ts` de capture (R6-A — le routeur ignore les instantanés trop vieux, voir
- * DEBORD_SNAPSHOT_MAX_AGE_MS dans router.ts). `null` si aucun instantané
- * exploitable (fichier absent/vide) — le routeur ne déborde alors jamais
- * (comportement R1 inchangé).
- */
-export async function readLatestClaudeWindows(): Promise<{
-  ts: string | null;
-  fiveHourPct: number | null;
-  sevenDayPct: number | null;
-} | null> {
-  const rows = await readJsonlTail(claudeWindowsPath());
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const windows = rows[i].windows;
-    if (!isPlainObject(windows)) {
-      continue;
-    }
-    return {
-      ts: isNonEmptyString(rows[i].ts) ? (rows[i].ts as string) : null,
-      fiveHourPct: windowUtilization(windows.five_hour),
-      sevenDayPct: windowUtilization(windows.seven_day),
-    };
-  }
-  return null;
 }
 
 /**
@@ -446,8 +430,15 @@ interface StatsAgg {
   tours: number;
   orchTours: number;
   conversationIds: Set<string>;
-  promptTokensSum: number;
-  promptTokensCount: number;
+  /**
+   * T-067 — occupations RÉELLES de la fenêtre de contexte (`contextTokens`,
+   * enregistré depuis T-066), pas les `promptTokens` du SDK : ces derniers
+   * EXCLUENT le cache, et leur moyenne donnait un « Contexte moyen » de
+   * 6 tokens sur 1 031 tours. Un tableau plutôt qu'une somme parce que la
+   * bonne statistique ici est la MÉDIANE : la moyenne d'une distribution
+   * aussi étalée ne décrit aucun tour réel.
+   */
+  contextes: number[];
   totalTokens: number;
 }
 
@@ -456,8 +447,7 @@ function newAgg(): StatsAgg {
     tours: 0,
     orchTours: 0,
     conversationIds: new Set(),
-    promptTokensSum: 0,
-    promptTokensCount: 0,
+    contextes: [],
     totalTokens: 0,
   };
 }
@@ -472,9 +462,10 @@ function applyEvent(agg: StatsAgg, ev: Record<string, unknown>): void {
   }
   const pt = typeof ev.promptTokens === "number" ? ev.promptTokens : null;
   const ct = typeof ev.completionTokens === "number" ? ev.completionTokens : null;
-  if (pt !== null) {
-    agg.promptTokensSum += pt;
-    agg.promptTokensCount += 1;
+  // Un contexte de 0 n'est pas une mesure : c'est un tour dont le contexte
+  // n'a pas été relevé. Il ne doit pas tirer la médiane vers le bas.
+  if (typeof ev.contextTokens === "number" && ev.contextTokens > 0) {
+    agg.contextes.push(ev.contextTokens);
   }
   agg.totalTokens += (pt ?? 0) + (ct ?? 0);
 }
@@ -483,24 +474,40 @@ function finalizeAgg(agg: StatsAgg): {
   tours: number;
   orchTours: number;
   conversations: number;
-  avgPromptTokens: number | null;
+  contexteMedian: number | null;
   totalTokens: number;
 } {
+  const contextes = [...agg.contextes].sort((a, b) => a - b);
   return {
     tours: agg.tours,
     orchTours: agg.orchTours,
     conversations: agg.conversationIds.size,
-    avgPromptTokens:
-      agg.promptTokensCount > 0 ? Math.round(agg.promptTokensSum / agg.promptTokensCount) : null,
+    // `null` quand aucun tour de la tranche n'a de contexte relevé : une
+    // médiane absente n'est pas une médiane nulle (la courbe s'interrompt).
+    contexteMedian: mediane(contextes),
     totalTokens: agg.totalTokens,
   };
+}
+
+/** Médiane basse d'une liste DÉJÀ triée. `null` si la liste est vide. */
+function mediane(triees: number[]): number | null {
+  if (triees.length === 0) return null;
+  return triees[Math.floor((triees.length - 1) / 2)];
 }
 
 /** R3 — accumulateur de l'agrégat `routage` (encart « Routage » de Supervision). */
 interface RoutageAgg {
   parTier: Record<string, { tours: number }>;
   toursAuto: number;
-  coutNul: number;
+  /**
+   * T-068 — les deux moitiés de l'ancien « coût nul », séparées parce qu'elles
+   * ne coûtent pas la même chose : un tour d'ABONNEMENT est gratuit pour le
+   * portefeuille et consomme le quota (la seule ressource qui sature ici) ;
+   * un tour LOCAL ne consomme ni l'un ni l'autre. Les additionner produisait
+   * « 98 % de gratuité » pendant que la fenêtre 5 h était à 104 %.
+   */
+  coutNulAbo: number;
+  coutNulLocal: number;
   total: number;
   mixAbo: Map<string, number>;
   /** S3 — dépense RÉELLE de la période : somme des `costUsd` remontés. */
@@ -515,7 +522,8 @@ function newRoutageAgg(): RoutageAgg {
   return {
     parTier: {},
     toursAuto: 0,
-    coutNul: 0,
+    coutNulAbo: 0,
+    coutNulLocal: 0,
     total: 0,
     mixAbo: new Map(),
     coutUsd: 0,
@@ -535,12 +543,12 @@ function applyRoutageEvent(agg: RoutageAgg, ev: Record<string, unknown>): void {
   // Coût nul = abonnement Claude OU provider local (ollama/local/lmstudio).
   // T-023 — la facturation déclarée au moment du tour prime sur la devinette ;
   // l'historique déjà écrit n'a que la devinette, et c'est pourquoi elle reste.
-  const coutNul =
-    ev.engine === "claude" ||
-    (typeof ev.gratuit === "boolean" ? ev.gratuit : isLocalProviderId(ev.providerId));
-  if (coutNul) {
-    agg.coutNul += 1;
-  }
+  const abonnement = ev.engine === "claude";
+  const local =
+    !abonnement && (typeof ev.gratuit === "boolean" ? ev.gratuit : isLocalProviderId(ev.providerId));
+  const coutNul = abonnement || local;
+  if (abonnement) agg.coutNulAbo += 1;
+  else if (local) agg.coutNulLocal += 1;
   if (ev.engine === "claude") {
     const model = isNonEmptyString(ev.model) ? ev.model : "(inconnu)";
     agg.mixAbo.set(model, (agg.mixAbo.get(model) ?? 0) + 1);
@@ -565,16 +573,24 @@ function finalizeRoutage(agg: RoutageAgg, debordMoisUsd: number): {
   parTier: Record<string, { tours: number }>;
   toursAuto: number;
   partCoutNulPct: number | null;
+  partAbonnementPct: number | null;
+  partLocalPct: number | null;
   mixAbo: Array<{ model: string; tours: number }>;
   debordMoisUsd: number;
   coutPeriodeUsd: number;
   coutInconnuTours: number;
   coutNonRemonteTours: number;
 } {
+  const pct = (n: number): number | null => (agg.total > 0 ? Math.round((n / agg.total) * 100) : null);
   return {
     parTier: agg.parTier,
     toursAuto: agg.toursAuto,
-    partCoutNulPct: agg.total > 0 ? Math.round((agg.coutNul / agg.total) * 100) : null,
+    // T-068 — le total reste servi (il reste vrai POUR LE PORTEFEUILLE), mais
+    // ses deux moitiés partent avec lui : l'interface ne peut plus présenter
+    // une gratuité globale sans dire quelle part consomme le quota.
+    partCoutNulPct: pct(agg.coutNulAbo + agg.coutNulLocal),
+    partAbonnementPct: pct(agg.coutNulAbo),
+    partLocalPct: pct(agg.coutNulLocal),
     mixAbo: [...agg.mixAbo.entries()]
       .map(([model, tours]) => ({ model, tours }))
       .sort((a, b) => b.tours - a.tours),
@@ -606,6 +622,8 @@ export async function handleUsageStats(
   const bucketAggs = new Map<string, StatsAgg>();
   const modelAggs = new Map<string, { model: string; engine: string; tours: number; totalTokens: number }>();
   const routageAgg = newRoutageAgg();
+  const sobrieteAgg: SobrieteAgg = newSobrieteAgg();
+  const escaladeAgg: EscaladeAgg = newEscaladeAgg();
   const projetAggs = new Map<string, ProjetAgg>();
 
   for (const ev of events) {
@@ -624,6 +642,10 @@ export async function handleUsageStats(
     applyEvent(totalsAgg, ev);
 
     applyRoutageEvent(routageAgg, ev);
+
+    applySobrieteEvent(sobrieteAgg, ev, d);
+
+    applyEscaladeEvent(escaladeAgg, ev);
 
     applyProjetEvent(projetAggs, ev, projectIndex);
 
@@ -667,39 +689,12 @@ export async function handleUsageStats(
     buckets,
     models,
     routage: finalizeRoutage(routageAgg, debordMoisUsd),
+    // T-071 — fiabilité, délégation, cache et distributions (§6 de l'étude).
+    sobriete: finalizeSobriete(sobrieteAgg),
+    // T-074 — projection minimale {conversationId,ts,model,erreur} : le
+    // calcul du signal d'escalade se fait côté UI (escaladeSignal.ts).
+    escaladeTours: finalizeEscalade(escaladeAgg),
     // S2 — parts par projet (Chat compris) sur la même période from/to.
     parProjet: finalizeParProjet(projetAggs, totals.totalTokens),
   });
-}
-
-// ---------------------------------------------------------------------------
-// usage.claude.history
-// ---------------------------------------------------------------------------
-
-export async function handleUsageClaudeHistory(
-  id: string,
-  params: Record<string, unknown>,
-  emitter: EngineEmitter,
-): Promise<void> {
-  const rawDays = params.days;
-  const days = typeof rawDays === "number" && Number.isFinite(rawDays) && rawDays > 0 ? Math.floor(rawDays) : 30;
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-
-  const rows = await readJsonlTolerant(claudeWindowsPath());
-  const snapshots = rows
-    .map((r) => {
-      if (!isNonEmptyString(r.ts)) {
-        return null;
-      }
-      const t = Date.parse(r.ts);
-      if (Number.isNaN(t)) {
-        return null;
-      }
-      return { t, ts: r.ts, windows: isPlainObject(r.windows) ? r.windows : {} };
-    })
-    .filter((r): r is { t: number; ts: string; windows: Record<string, unknown> } => r !== null && r.t >= cutoff)
-    .sort((a, b) => a.t - b.t)
-    .map((r) => ({ ts: r.ts, windows: r.windows }));
-
-  emitter.done(id, { snapshots });
 }

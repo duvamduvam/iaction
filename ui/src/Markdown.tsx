@@ -22,11 +22,40 @@
  * l'ouverture : un bouton ne promet donc plus ce que le clic ne sait pas tenir
  * (T-024). Sans la prop (ex. page Chat), rendu strictement inchangé — le
  * composant `code` n'est même pas surchargé.
+ *
+ * Ouverture au survol (T-104, option désactivée par défaut — voir
+ * survolReference.ts) : quand elle est active, le bouton de référence s'ARME
+ * au survol souris et s'ouvre tout seul au bout du délai réglé. Trois
+ * garde-fous, tous dans `MarkdownInlineCode` : seul un pointeur SOURIS arme
+ * le minuteur (le tactile n'a pas de survol, une pression longue ne doit rien
+ * ouvrir) ; sortir de la puce, cliquer dessus ou démonter le composant
+ * l'annule ; un déclenchement ne se réarme qu'après être ressorti puis
+ * rentré. L'ouverture elle-même reste `fileRef.ouvrir`, inchangée à l'octet
+ * près — seul le déclencheur change.
+ *
+ * Clic droit (T-108) : ouvre le même menu contextuel que l'arbre de fichiers
+ * (voir menuReference.tsx) — le clic gauche garde sa politique par défaut,
+ * le menu propose les autres voies (registre, système, éditeur, copier).
  */
-import { createContext, memo, useContext, useMemo, type ComponentProps, type ReactNode } from "react";
+import {
+  createContext,
+  memo,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type CSSProperties,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { estReferenceCliquable, ouvrirLienExterne } from "./refFichier";
+import { useDossierPersonnel } from "./dossierPersonnel";
+import { ouvrirMenuReference } from "./menuReference";
+import { estReferenceCliquable, ouvrirLienExterne, type ForcageOuverture } from "./refFichier";
+import { doitArmerSurvol, useDelaiSurvol } from "./survolReference";
 
 function MarkdownLink({ href, children }: Readonly<ComponentProps<"a"> & ExtraProps>) {
   if (!href) return <>{children}</>;
@@ -68,7 +97,12 @@ function flattenText(node: ReactNode): string {
  * `react-markdown` doit garder une identité stable ; le handler, lui, varie
  * librement d'un rendu à l'autre côté appelant).
  */
-const FileRefContext = createContext<{ ouvrir: (ref: string) => void; cwd: string | null } | null>(null);
+const FileRefContext = createContext<{
+  ouvrir: (ref: string, forcer?: ForcageOuverture) => void;
+  cwd: string | null;
+  delaiSurvol: number | null;
+  home: string | null;
+} | null>(null);
 
 function MarkdownInlineCode({ node, className, children }: Readonly<ComponentProps<"code"> & ExtraProps>) {
   const fileRef = useContext(FileRefContext);
@@ -80,13 +114,71 @@ function MarkdownInlineCode({ node, className, children }: Readonly<ComponentPro
   const isBlock = node?.position ? node.position.start.line !== node.position.end.line : false;
   const text = flattenText(children);
 
-  if (fileRef && !isBlock && estReferenceCliquable(text, fileRef.cwd)) {
+  // Hooks en tête de composant : le `return` conditionnel du chemin
+  // `<code>` inerte, plus bas, ne doit jamais les priver de s'exécuter.
+  const minuteur = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Un déclenchement ne se réarme qu'après être ressorti PUIS rentré — sans
+  // ça, un `onPointerEnter` qui se redéclenche pendant que le minuteur tourne
+  // (ré-hover d'un même geste) rouvrirait le fichier en boucle.
+  const declenche = useRef(false);
+  // État affiché (remplissage CSS) — distinct du ref ci-dessus : muter un ref
+  // dans un handler ne redéclenche pas de rendu, il faut du state pour que la
+  // classe `--arme` apparaisse à l'écran.
+  const [arme, setArme] = useState(false);
+
+  function annulerMinuteur() {
+    if (minuteur.current !== null) {
+      clearTimeout(minuteur.current);
+      minuteur.current = null;
+    }
+    setArme(false);
+  }
+
+  // Un minuteur qui survit au démontage ouvrirait un fichier après coup —
+  // par exemple si la transcription change de tour pendant que le survol court.
+  useEffect(() => annulerMinuteur, []);
+
+  if (fileRef && !isBlock && estReferenceCliquable(text, fileRef.cwd, fileRef.home)) {
+    const delai = fileRef.delaiSurvol;
+    // Chemin sans survol (option désactivée, page Chat) : mêmes attributs,
+    // même infobulle qu'avant T-104, à l'octet près — pas de handler de
+    // pointeur inutile posé sur le bouton.
+    const handlersSurvol =
+      delai === null
+        ? {}
+        : {
+            onPointerEnter: (e: PointerEvent<HTMLButtonElement>) => {
+              // La décision (et ses trois garde-fous) vit dans survolReference.ts,
+              // seul endroit où elle est testable sans DOM.
+              if (!doitArmerSurvol(delai, e.pointerType, declenche.current)) return;
+              setArme(true);
+              minuteur.current = setTimeout(() => {
+                minuteur.current = null;
+                declenche.current = true;
+                setArme(false);
+                fileRef.ouvrir(text);
+              }, delai);
+            },
+            onPointerLeave: () => {
+              annulerMinuteur();
+              declenche.current = false;
+            },
+            onPointerDown: annulerMinuteur,
+          };
     return (
       <button
         type="button"
-        className="md__file-ref"
-        title={`Ouvrir « ${text} »`}
+        className={arme ? "md__file-ref md__file-ref--arme" : "md__file-ref"}
+        style={arme ? ({ "--md-survol-delai": `${delai}ms` } as CSSProperties) : undefined}
+        title={delai !== null ? `Ouvrir « ${text} » — s'ouvre au survol` : `Ouvrir « ${text} »`}
         onClick={() => fileRef.ouvrir(text)}
+        // Clic droit (T-108) : le même menu que l'arbre de fichiers — voir
+        // menuReference.tsx, monté une seule fois par le composant de liste.
+        onContextMenu={(e) => {
+          e.preventDefault();
+          ouvrirMenuReference(text, e.clientX, e.clientY);
+        }}
+        {...handlersSurvol}
       >
         {children}
       </button>
@@ -133,12 +225,21 @@ export const Markdown = memo(function Markdown({
   content,
   onFileRef,
   cwd = null,
-}: Readonly<{ content: string; onFileRef?: (ref: string) => void; cwd?: string | null }>) {
+}: Readonly<{
+  content: string;
+  onFileRef?: (ref: string, forcer?: ForcageOuverture) => void;
+  cwd?: string | null;
+}>) {
   const components = onFileRef ? componentsWithFileRef : baseComponents;
+  const delaiSurvol = useDelaiSurvol();
+  const home = useDossierPersonnel();
   // Identité stable : un contexte dont la valeur change à chaque rendu re-rend
   // tous ses consommateurs, ce qui annulerait le `memo` ci-dessus — et c'est
   // lui qui rend la frappe au clavier tenable sur une longue transcription.
-  const valeur = useMemo(() => (onFileRef ? { ouvrir: onFileRef, cwd } : null), [onFileRef, cwd]);
+  const valeur = useMemo(
+    () => (onFileRef ? { ouvrir: onFileRef, cwd, delaiSurvol, home } : null),
+    [onFileRef, cwd, delaiSurvol, home],
+  );
   return (
     <FileRefContext.Provider value={valeur}>
       <div className="md">

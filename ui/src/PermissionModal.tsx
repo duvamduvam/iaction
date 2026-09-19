@@ -2,9 +2,22 @@
  * Modale de permissions et de questions d'agent — composants sortis
  * d'AgentPage le 2026-08-08 (étape 8, 2/2). La logique vit dans
  * questionsAgent.ts ; ici, uniquement du rendu.
+ *
+ * NON BLOQUANTE depuis T-089 (2026-08-27). Le fond opaque plein écran
+ * obligeait à trancher sur des objets qu'on ne pouvait plus regarder : le fil,
+ * l'arborescence et les fichiers ouverts étaient sous la modale, et les deux
+ * seules sorties étaient « Répondre » et « Ignorer ». Trois leviers désormais :
+ *   - l'overlay ne capte plus les clics (`--flottant`) : l'app reste utilisable
+ *     pendant que l'agent attend ;
+ *   - le panneau se DÉPLACE par sa barre de titre et se MET DE CÔTÉ en pastille
+ *     (les réponses déjà cochées survivent — le composant reste monté) ;
+ *   - chaque question peut porter un `context` (voir sidecar/src/askUser.ts),
+ *     affiché tel quel : de quoi trancher sans aller voir ailleurs.
+ * Les deux autres usages de `.permission-overlay` (suppression de fichier,
+ * permission d'orchestration) restent bloquants : eux n'ont rien à consulter.
  */
 
-import { useEffect, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import { prettyJson } from "./agentTurns";
 import { asRecord } from "./base";
 import {
@@ -70,6 +83,12 @@ function AskUserQuestionBody({
             {q.multiSelect && <span className="ask-question__multi">plusieurs choix possibles</span>}
           </div>
           <p className="ask-question__text">{q.question}</p>
+          {/* Faits joints par l'agent : ce qui évite d'aller voir ailleurs
+              pour répondre (T-089). Affiché tel quel, en préformaté — c'est
+              souvent un listing. */}
+          {q.context && (
+            <pre className="ask-question__context">{q.context}</pre>
+          )}
           <ul className="ask-question__options">
             {q.options.map((o) => {
               const picked = isPicked(answers[q.question], o.label, q.multiSelect);
@@ -195,6 +214,55 @@ function PermissionBody({
   return <pre className="pretty-json">{prettyJson(item.toolInput)}</pre>;
 }
 
+/** Largeur/hauteur laissées visibles : le panneau ne peut pas être jeté hors de l'écran. */
+const MARGE_VISIBLE = 120;
+
+function borne(valeur: number, min: number, max: number): number {
+  return Math.min(Math.max(valeur, min), max);
+}
+
+/**
+ * Déplacement du panneau par sa barre de titre (T-089). `null` = position par
+ * défaut, c'est-à-dire le centrage flex de l'overlay ; dès le premier glissé
+ * on passe en coordonnées fixes. La position SURVIT au changement de demande :
+ * l'utilisateur a rangé le panneau là exprès, le remettre au centre à chaque
+ * question défait son geste.
+ */
+function useDeplacement() {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const prise = useRef<{ dx: number; dy: number } | null>(null);
+
+  function handlePointerDown(e: ReactPointerEvent<HTMLElement>) {
+    if (e.button !== 0) return;
+    const panneau = e.currentTarget.closest(".permission-modal");
+    if (!(panneau instanceof HTMLElement)) return;
+    const rect = panneau.getBoundingClientRect();
+    prise.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+    // Figer la position courante AVANT de bouger : sans ça, le passage du
+    // centrage flex aux coordonnées fixes ferait sauter le panneau.
+    setPos({ x: rect.left, y: rect.top });
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function handlePointerMove(e: ReactPointerEvent<HTMLElement>) {
+    const p = prise.current;
+    if (!p) return;
+    setPos({
+      x: borne(e.clientX - p.dx, MARGE_VISIBLE - window.innerWidth, window.innerWidth - MARGE_VISIBLE),
+      y: borne(e.clientY - p.dy, 0, window.innerHeight - 48),
+    });
+  }
+
+  function handlePointerUp(e: ReactPointerEvent<HTMLElement>) {
+    if (!prise.current) return;
+    prise.current = null;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  }
+
+  const style = pos ? { position: "fixed" as const, left: pos.x, top: pos.y, margin: 0 } : undefined;
+  return { style, handlePointerDown, handlePointerMove, handlePointerUp };
+}
+
 export function PermissionModal({
   item,
   extraCount,
@@ -209,6 +277,11 @@ export function PermissionModal({
   const [customs, setCustoms] = useState<AskCustomAnswers>({});
   const [note, setNote] = useState("");
   const [rememberTool, setRememberTool] = useState(false);
+  // Mise de côté : le panneau se replie en pastille SANS répondre ni ignorer.
+  // L'agent attend toujours — c'est l'écran qu'on libère, pas le tour qu'on
+  // termine. Le composant reste monté : les choix déjà cochés survivent.
+  const [deCote, setDeCote] = useState(false);
+  const deplacement = useDeplacement();
   const isAskQuestion = isAskQuestionTool(item.toolName);
   const askQuestions = isAskQuestion ? parseAskQuestions(item.toolInput) : [];
 
@@ -219,6 +292,8 @@ export function PermissionModal({
     setCustoms({});
     setNote("");
     setRememberTool(false);
+    // Nouvelle demande : on la montre, même si la précédente était de côté.
+    setDeCote(false);
   }, [item.permissionId]);
 
   /** Ouvre/ferme la réponse libre d'une question. À l'ouverture, en choix
@@ -290,10 +365,37 @@ export function PermissionModal({
   // sans réponse, et le bouton d'envoi reste bloqué.
   const allAnswered = askQuestions.every((q) => Boolean(finalAnswers[q.question]));
 
+  // Replié : plus rien ne couvre l'app, une pastille rappelle que l'agent
+  // attend. Elle reste au-dessus de tout pour ne pas se perdre en naviguant.
+  if (deCote) {
+    return (
+      <button
+        type="button"
+        className="question-pastille"
+        onClick={() => setDeCote(false)}
+        title="Reprendre : l'agent attend toujours votre réponse"
+      >
+        <span className="question-pastille__icone" aria-hidden="true">
+          ?
+        </span>
+        <span>{isAskQuestion ? "Question de l'agent en attente" : permissionTitle(item)}</span>
+        {extraCount > 0 && <span className="permission-modal__badge">+{extraCount}</span>}
+      </button>
+    );
+  }
+
   return (
-    <div className="permission-overlay">
-      <div className="permission-modal">
-        <div className="permission-modal__head">
+    <div className="permission-overlay permission-overlay--flottant">
+      <div className="permission-modal" style={deplacement.style} role="dialog" aria-label={permissionTitle(item)}>
+        {/* Barre de titre = poignée de déplacement (T-089). */}
+        <div
+          className="permission-modal__head permission-modal__head--poignee"
+          onPointerDown={deplacement.handlePointerDown}
+          onPointerMove={deplacement.handlePointerMove}
+          onPointerUp={deplacement.handlePointerUp}
+          onPointerCancel={deplacement.handlePointerUp}
+          title="Glisser pour déplacer le panneau"
+        >
           <h3>{permissionTitle(item)}</h3>
           {extraCount > 0 && <span className="permission-modal__badge">+{extraCount} en attente</span>}
         </div>
@@ -349,6 +451,16 @@ export function PermissionModal({
           </label>
         )}
         <div className="permission-modal__actions">
+          {/* Ni répondre ni ignorer : aller voir d'abord. Placé à gauche,
+              loin des deux boutons qui, eux, terminent la demande. */}
+          <button
+            type="button"
+            className="btn btn--ghost permission-modal__aside"
+            onClick={() => setDeCote(true)}
+            title="Replier en pastille pour consulter le projet — vos choix sont conservés, l'agent attend."
+          >
+            Mettre de côté
+          </button>
           <button type="button" className="btn btn--deny" onClick={() => onDecide("deny", decisionMessage, false)}>
             {isAskQuestion ? "Ignorer la question" : "Refuser"}
           </button>

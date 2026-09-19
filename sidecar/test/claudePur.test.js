@@ -17,6 +17,8 @@ const {
   extractUsage,
   summarizeToolResult,
 } = await import(moduleCompile("claude.js"));
+const { extractModelUsage } = await import(moduleCompile("claudeVentilation.js"));
+const { origineMessage } = await import(moduleCompile("claudeSousAgents.js"));
 // Étape 9 : sessionTitles, commands et usage ont quitté claude.ts.
 const { isFallbackTitle } = await import(moduleCompile("claudeSessionTitles.js"));
 const { executerClaudeUsage } = await import(moduleCompile("claudeUsage.js"));
@@ -77,9 +79,20 @@ async function testDecorateAuthError() {
   assert(decorateAuthError("API rate limit exceeded, check your auth").includes("limite d'abonnement"),
     "rate limit ⇒ abonnement, même si le message parle aussi d'auth");
 
-  const brut = "ECONNREFUSED 127.0.0.1:443";
-  assert(decorateAuthError(brut) === brut, "message hors des deux familles : rendu tel quel");
-  console.log("OK: decorateAuthError — limite ≠ auth, priorité à la limite");
+  // T-118 — ce cas disait autrefois « message hors des deux familles : rendu
+  // tel quel ». C'était EXACTEMENT le défaut du ticket : une erreur réseau
+  // affichée brute, dont l'utilisateur du poste Windows a conclu « l'appli ne
+  // marche pas ». Il y a désormais quatre familles, et celle-ci en est une.
+  const reseau = decorateAuthError("ECONNREFUSED 127.0.0.1:443");
+  assert(reseau.includes("injoignable"), `réseau : cause attendue, reçu « ${reseau} »`);
+  assert(!reseau.includes("claude login"), "réseau : surtout pas de conseil de reconnexion");
+
+  // Le vrai « hors familles » reste rendu tel quel (T-103 : un conseil faux
+  // est pire qu'un conseil absent). Classement détaillé : voir
+  // diagnosticErreurClaude.test.js.
+  const brut = "Something went sideways in the engine";
+  assert(decorateAuthError(brut) === brut, "message non classable : rendu tel quel");
+  console.log("OK: decorateAuthError — limite ≠ auth ≠ réseau, priorité à la limite");
 }
 
 async function testSummarizeToolResult() {
@@ -174,10 +187,80 @@ async function testExecuterClaudeCommands() {
   console.log("OK: executerClaudeCommands — deps injectées, session refermée");
 }
 
+async function testExtractModelUsage() {
+  // T-065 — le SDK expose modelUsage en camelCase, contrairement à `usage`.
+  const brut = {
+    "claude-opus-5": {
+      inputTokens: 10, outputTokens: 20,
+      cacheReadInputTokens: 300, cacheCreationInputTokens: 40,
+      costUSD: 1.5, contextWindow: 200000,
+    },
+    "claude-sonnet-5": { inputTokens: 5, outputTokens: 7, costUSD: 0.01 },
+  };
+  const v = extractModelUsage(brut, "claude-opus-5");
+  assert(v.length === 2, `2 lignes attendues, reçu ${v.length}`);
+
+  // Le fil est celui qui porte le modèle annoncé ; tout autre modèle est délégué.
+  const fil = v.find((l) => l.model === "claude-opus-5");
+  const del = v.find((l) => l.model === "claude-sonnet-5");
+  assert(fil.role === "fil" && del.role === "delegue",
+    `rôles attendus fil/delegue, reçu ${fil.role}/${del.role}`);
+
+  // Traduction camelCase, et cache absent ⇒ 0 (une ligne de ventilation est un
+  // comptage complet, pas un objet à trous : c'est l'agrégat qui somme).
+  assert(fil.cacheReadTokens === 300 && fil.cacheCreationTokens === 40,
+    "cache repris depuis le camelCase du SDK");
+  assert(del.cacheReadTokens === 0 && del.cacheCreationTokens === 0,
+    "cache absent ⇒ 0 sur une ligne de ventilation");
+
+  // Coût et fenêtre sont OPTIONNELS : absents ⇒ null, jamais 0 (un zéro
+  // dollar et un coût non remonté ne se confondent pas — leçon T-035/T-036).
+  assert(del.contextWindow === null, "fenêtre absente ⇒ null, pas 0");
+  assert(fil.costUsd === 1.5 && del.costUsd === 0.01, "coût par modèle repris");
+
+  // Ordre déterministe : le plus gros consommateur d'abord.
+  assert(v[0].model === "claude-opus-5", "tri par tokens décroissants attendu");
+
+  // Sans modèle de fil annoncé, AUCUNE devinette : le rôle reste `inconnu`.
+  const sansFil = extractModelUsage(brut, null);
+  assert(sansFil.every((l) => l.role === "inconnu"),
+    "modèle du fil inconnu ⇒ rôle `inconnu`, jamais deviné");
+
+  // Entrées invalides : tableau vide, jamais une exception (le socle ne doit
+  // JAMAIS faire échouer un tour).
+  assert(extractModelUsage(null, "x").length === 0, "null ⇒ []");
+  assert(extractModelUsage("x", "x").length === 0, "chaîne ⇒ []");
+  assert(extractModelUsage({ "": {}, bon: null }, "x").length === 0,
+    "clés vides et valeurs non-objet écartées");
+  console.log("OK: extractModelUsage — camelCase, rôles sans devinette, tri stable, entrées invalides");
+}
+
+async function testOrigineMessage() {
+  // T-092 — le fil : `parent_tool_use_id` null, ou pas de champ du tout.
+  assert(origineMessage({ type: "assistant", parent_tool_use_id: null }) === "fil",
+    "parent null ⇒ fil");
+  assert(origineMessage({ type: "stream_event" }) === "fil", "champ absent ⇒ fil");
+
+  // Le sous-agent : l'id du `Task` qui l'a lancé. C'est ce marquage-là qui
+  // faisait défaut, et avec lui la transcription mélangeait deux locuteurs.
+  assert(origineMessage({ type: "assistant", parent_tool_use_id: "toolu_01ABC" }) === "sous-agent",
+    "id de Task ⇒ sous-agent");
+
+  // Tolérance dissymétrique ASSUMÉE : le doute profite au fil. Laisser passer
+  // un message non marqué revient au comportement d'avant ; faire disparaître
+  // du contenu du fil serait une perte, et muette.
+  for (const bizarre of [null, undefined, "x", 42, { parent_tool_use_id: "" }, { parent_tool_use_id: "   " }, { parent_tool_use_id: 7 }]) {
+    assert(origineMessage(bizarre) === "fil", `entrée douteuse ⇒ fil (${JSON.stringify(bizarre)})`);
+  }
+  console.log("OK: origineMessage — marque du sous-agent, doute au bénéfice du fil");
+}
+
 await lancer(
   "moteur Claude — fonctions pures",
+  testOrigineMessage,
   testExtractUsage,
   testExtractContextTokens,
+  testExtractModelUsage,
   testDecorateAuthError,
   testSummarizeToolResult,
   testIsFallbackTitle,

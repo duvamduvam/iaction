@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heures discrètes dans le fil — maquette T-101</title>
+<!--
+  Maquette pour T-101 — voir docs/tickets.md.
+  Fichier autonome : aucune ressource externe, aucun script réseau, s'ouvre
+  directement dans un navigateur (file://). Lisible sans JS : le survol (C)
+  fonctionne nativement via l'attribut `title`, et un rendu de démonstration
+  statique est affiché juste en dessous pour ne pas dépendre du survol.
+
+  Les classes CSS des « lignes actuelles » sont recopiées à l'identique
+  depuis ui/src/App.css (agent-tabs__notice, debord-notice, cleared-notice,
+  chat-compaction, result-line, conversation-notice) et les variables de
+  ui/src/theme.css, pour que la maquette ressemble vraiment à l'application.
+  Seul l'ajout de l'heure est une proposition — tout le reste est l'existant.
+-->
+<style>
+  *,*::before,*::after { box-sizing:border-box; }
+
+  /* ───────── Variables recopiées de ui/src/theme.css (thème « outrun ») ───────── */
+  .viz-root {
+    color-scheme: dark;
+    --bg-0:#0d0a1f; --bg-1:#150f2b; --bg-2:#1e163e; --bg-inset:#0b081a;
+    --neon-cyan:#00e5ff; --neon-cyan-dim:#00e5ff66;
+    --neon-magenta:#ff2e97; --neon-magenta-dim:#ff2e9766;
+    --status-ok:#00f5d4; --status-warn:#fbbf24; --status-error:#ff3131;
+    --text-0:#e6ecf5; --text-1:#9a93b8; --text-2:#6c6493;
+    --border-0:#2a2050; --border-1:#3a2d68; --border-cyan:#00e5ff40;
+    --radius-sm:4px; --radius-md:8px; --radius-lg:14px;
+    --font-mono:ui-monospace,"SF Mono","Cascadia Code","Consolas","Roboto Mono",monospace;
+    --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"Helvetica Neue",Arial,sans-serif;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  }
+  body { margin:0; background:#0d0a1f; }
+  .viz-root {
+    background:var(--bg-0); color:var(--text-0); font-family:var(--font-sans);
+    font-size:15px; line-height:1.55; padding:28px 22px 72px; max-width:1180px; margin:0 auto;
+  }
+  h1 { font-size:26px; margin:0 0 4px; letter-spacing:.01em; }
+  h2 { font-size:17px; margin:0 0 4px; color:var(--text-0); }
+  h3 { font-size:11.5px; letter-spacing:.1em; text-transform:uppercase;
+       color:var(--text-1); margin:22px 0 8px; font-weight:600; }
+  p.lead { color:var(--text-1); font-size:13.5px; margin:0 0 4px; }
+  .note { color:var(--text-2); font-size:13px; }
+  .mono { font-family:var(--font-mono); }
+  hr.sep { border:0; border-top:1px solid var(--border-0); margin:38px 0 0; }
+
+  .banner { background:var(--bg-2); border:1px solid var(--border-0);
+            border-radius:10px; padding:13px 16px; font-size:13.5px;
+            color:var(--text-1); margin:18px 0 0; }
+  .banner b { color:var(--text-0); }
+
+  /* Fiche famille */
+  .famille { margin:36px 0 0; --accent:var(--neon-cyan); }
+  .famille > h2 { display:flex; align-items:center; gap:10px; }
+  .famille > h2 .id { font-family:var(--font-mono); font-size:12px; color:var(--bg-0);
+    background:var(--accent); border-radius:5px; padding:2px 8px; flex:none; }
+  .famille__source { font-size:12.5px; color:var(--text-2); margin:0 0 14px; }
+  .famille__source code { font-family:var(--font-mono); color:var(--text-1); }
+
+  .panel { background:var(--bg-1); border:1px solid var(--border-0);
+           border-radius:12px; padding:16px 18px; margin-top:12px; }
+  .panel > .label { font-size:11.5px; letter-spacing:.08em; text-transform:uppercase;
+                     color:var(--text-2); margin:0 0 12px; display:flex; align-items:center;
+                     justify-content:space-between; gap:10px; }
+  .panel > .label .tag { font-size:10.5px; letter-spacing:.04em; text-transform:none;
+                          padding:1px 8px; border-radius:20px; border:1px solid var(--border-0);
+                          color:var(--text-1); }
+  .demo { background:var(--bg-inset); border:1px dashed var(--border-1);
+          border-radius:9px; padding:14px 16px; }
+  .demo + .demo { margin-top:10px; }
+  .demo__caption { font-size:11px; color:var(--text-2); margin:8px 2px 0; }
+
+  /* ── Recopie fidèle des classes réelles de App.css ── */
+  .agent-tabs__notice { font-size:0.78rem; color:var(--status-warn); }
+  .debord-notice { padding:4px 8px; border:1px solid var(--status-warn); border-radius:4px; }
+  .debord-notice--blocked { color:var(--status-error); border-color:var(--status-error); }
+  .cleared-notice { display:flex; align-items:center; gap:var(--space-2); }
+  .cleared-notice__undo { padding:1px 10px; font-size:0.74rem; border:1px solid var(--neon-cyan);
+    color:var(--neon-cyan); background:transparent; border-radius:var(--radius-sm); }
+  .cleared-notice__dismiss { margin-left:auto; appearance:none; border:none; background:transparent;
+    color:var(--text-2); font-size:1rem; line-height:1; padding:0 4px; }
+
+  .chat-compaction { appearance:none; border:1px dashed var(--border-0); border-radius:var(--radius-md);
+    background:transparent; padding:2px var(--space-3); font-family:var(--font-mono);
+    font-size:0.7rem; color:var(--text-1); cursor:pointer; display:inline-block; }
+
+  .result-line { font-family:var(--font-mono); font-size:0.85rem; color:var(--text-0); min-height:1.4em; }
+  .result-line--error { color:var(--status-error); }
+  .result-line__dismiss { margin-left:8px; padding:0 var(--space-2); line-height:1;
+    background:transparent; border:1px solid var(--border-0); color:var(--text-1); border-radius:var(--radius-sm); }
+
+  .conversation-notice { margin-bottom:var(--space-2); padding:var(--space-1) var(--space-2);
+    font-size:0.78rem; font-style:italic; color:var(--text-1); }
+
+  /* ── Habillage des trois variantes ── */
+  .variantes { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:12px; }
+  @media (max-width:920px) { .variantes { grid-template-columns:1fr; } }
+  .variante { background:var(--bg-1); border:1px solid var(--border-0); border-radius:10px;
+              padding:14px 15px; }
+  .variante h4 { margin:0 0 3px; font-size:13px; color:var(--text-0); }
+  .variante .sub { font-size:11.5px; color:var(--text-2); margin:0 0 12px; }
+  .variante.recommande { border-color:var(--neon-cyan); box-shadow:0 0 0 1px var(--border-cyan); }
+  .variante.recommande h4::after { content:"— retenue"; color:var(--neon-cyan); font-weight:400;
+    font-size:11px; margin-left:6px; }
+
+  /* Heure : le même style discret dans les trois variantes, seul le
+     placement change — c'est tout l'objet de la comparaison. */
+  .heure { font-family:var(--font-mono); font-size:0.72em; color:var(--text-2); }
+  .heure--tete { margin-right:6px; }
+  .heure--queue { float:right; margin-left:10px; }
+  .ligne-queue { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+  .ligne-queue > span:first-child { flex:1; min-width:0; }
+
+  .hover-zone { border-bottom:1px dotted var(--text-2); cursor:help; }
+  .tooltip-demo { display:inline-block; margin-top:8px; background:var(--bg-2);
+    border:1px solid var(--border-1); border-radius:6px; padding:3px 8px;
+    font-family:var(--font-mono); font-size:11.5px; color:var(--text-0); }
+  .tooltip-demo::before { content:"▲ "; color:var(--text-2); }
+
+  .verdict { margin-top:12px; padding:11px 13px; border-radius:9px; background:var(--bg-inset);
+             border:1px solid var(--border-0); font-size:13.5px; }
+  .verdict b { color:var(--text-0); }
+
+  table.recap { border-collapse:collapse; width:100%; font-size:13.5px; margin-top:8px; }
+  table.recap th, table.recap td { text-align:left; padding:8px 10px 8px 0;
+    border-bottom:1px solid var(--border-0); vertical-align:top; }
+  table.recap th { color:var(--text-1); font-weight:600; font-size:11.5px;
+    letter-spacing:.05em; text-transform:uppercase; }
+  table.recap tr:last-child td { border-bottom:0; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+
+  <h1>Heures discrètes dans le fil — trois placements comparés</h1>
+  <p class="lead">
+    Maquette du 2 septembre 2026 · ticket <span class="mono">T-101</span>, docs/tickets.md.
+    Fichier autonome, à trancher avant toute implémentation.
+  </p>
+
+  <div class="banner">
+    <b>Le problème :</b> quatre familles de lignes discrètes du fil n'affichent pas l'heure de
+    l'événement qu'elles rapportent — bandeau de recherche web / débord, indicateur de
+    compaction d'historique, lignes d'état vocal, et leur pendant côté page Projets. Sans heure,
+    impossible de recoller une ligne à un moment précis en relisant une conversation plus tard.
+    Chaque famille est montrée avec sa ligne actuelle telle qu'elle existe dans le code, puis
+    trois variantes de placement de l'heure.
+  </div>
+
+  <!-- ═════════════════ FAMILLE A ═════════════════ -->
+  <div class="famille">
+    <h2><span class="id">A</span> Bandeau <span class="mono">agent-tabs__notice</span> — recherche web et débord</h2>
+    <p class="famille__source">
+      <code>ui/src/ChatPage.tsx</code> (et son pendant Projets, famille D) · classes
+      <code>agent-tabs__notice</code>, <code>debord-notice</code> · styles dans
+      <code>ui/src/App.css</code>
+    </p>
+
+    <div class="panel">
+      <div class="label">Ligne actuelle <span class="tag">sans heure</span></div>
+      <div class="demo">
+        <div class="agent-tabs__notice">Recherche web : 3 sources</div>
+      </div>
+      <div class="demo">
+        <div class="agent-tabs__notice debord-notice">⚠ Mode débord : abonnement saturé (fenêtre 5 h à 92 %) — tour envoyé sur claude-haiku</div>
+      </div>
+    </div>
+
+    <div class="variantes">
+      <div class="variante recommande">
+        <h4>A · en tête</h4>
+        <p class="sub">« 14:32 · Recherche web… »</p>
+        <div class="demo">
+          <div class="agent-tabs__notice"><span class="heure heure--tete">14:32</span>· Recherche web : 3 sources</div>
+        </div>
+        <div class="demo">
+          <div class="agent-tabs__notice debord-notice"><span class="heure heure--tete">14:41</span>· ⚠ Mode débord : abonnement saturé (fenêtre 5 h à 92 %) — tour envoyé sur claude-haiku</div>
+        </div>
+      </div>
+
+      <div class="variante">
+        <h4>B · en queue à droite</h4>
+        <p class="sub">Texte à gauche, heure alignée à droite.</p>
+        <div class="demo">
+          <div class="agent-tabs__notice ligne-queue">
+            <span>Recherche web : 3 sources</span><span class="heure heure--queue">14:32</span>
+          </div>
+        </div>
+        <div class="demo">
+          <div class="agent-tabs__notice debord-notice ligne-queue">
+            <span>⚠ Mode débord : abonnement saturé (fenêtre 5 h à 92 %) — tour envoyé sur claude-haiku</span><span class="heure heure--queue">14:41</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="variante">
+        <h4>C · au survol</h4>
+        <p class="sub">Aucun texte visible en plus ; <code class="mono">title</code> natif au survol.</p>
+        <div class="demo">
+          <div class="agent-tabs__notice"><span class="hover-zone" title="14:32">Recherche web : 3 sources</span></div>
+          <div class="tooltip-demo">14:32</div>
+          <p class="demo__caption">Rendu de démonstration du survol — le vrai tooltip natif n'apparaît qu'au passage de la souris.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="verdict">
+      <b>Choix recommandé : A, en tête.</b> Le bandeau de recherche web change d'état en direct
+      pendant le tour (« Recherche web… » puis « 3 sources ») — l'heure en tête ancre tout de
+      suite l'instant sans qu'il faille chercher où elle est postée, et sans toucher au texte du
+      message qui reste, lui, en un seul bloc lisible.
+    </div>
+    <p class="note" style="margin-top:10px">
+      <b>Source de l'horodatage :</b> pour la recherche web, l'état (« recherche » → « ok »/« vide »/« échec »)
+      est émis par le sidecar au fil de l'exécution de l'outil — l'heure doit être prise à la
+      RÉCEPTION de cet événement côté UI, pas au montage de la ligne React. Pour le débord, la
+      décision est prise côté client au moment de router le tour : l'heure est celle de l'envoi
+      du tour, disponible localement sans dépendre du sidecar.
+    </p>
+  </div>
+
+  <hr class="sep">
+
+  <!-- ═════════════════ FAMILLE B ═════════════════ -->
+  <div class="famille">
+    <h2><span class="id">B</span> Indicateur <span class="mono">chat-compaction</span> — historique compacté</h2>
+    <p class="famille__source">
+      <code>ui/src/chatTranscript.tsx</code> · classe <code>chat-compaction</code> · style dans
+      <code>ui/src/App.css</code>
+    </p>
+
+    <div class="panel">
+      <div class="label">Ligne actuelle <span class="tag">sans heure</span></div>
+      <div class="demo">
+        <button type="button" class="chat-compaction" title="Les anciens tours sont envoyés sous forme de résumé — cliquez pour le consulter">historique compacté (24 messages résumés)</button>
+      </div>
+    </div>
+
+    <div class="variantes">
+      <div class="variante">
+        <h4>A · en tête</h4>
+        <p class="sub">« 14:07 · historique compacté… »</p>
+        <div class="demo">
+          <button type="button" class="chat-compaction" title="Les anciens tours sont envoyés sous forme de résumé — cliquez pour le consulter"><span class="heure heure--tete">14:07</span>· historique compacté (24 messages résumés)</button>
+        </div>
+      </div>
+
+      <div class="variante recommande">
+        <h4>B · en queue à droite</h4>
+        <p class="sub">Le bouton s'élargit légèrement, l'heure suit le texte sans le précéder.</p>
+        <div class="demo">
+          <button type="button" class="chat-compaction ligne-queue" title="Les anciens tours sont envoyés sous forme de résumé — cliquez pour le consulter" style="display:flex;width:100%;max-width:340px">
+            <span>historique compacté (24 messages résumés)</span><span class="heure heure--queue">14:07</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="variante">
+        <h4>C · au survol</h4>
+        <p class="sub">Le <code class="mono">title</code> existe déjà et porte une phrase entière — le
+          survol est DÉJÀ pris par l'explication de la compaction.</p>
+        <div class="demo">
+          <button type="button" class="chat-compaction" title="Les anciens tours sont envoyés sous forme de résumé — cliquez pour le consulter">historique compacté (24 messages résumés)</button>
+          <div class="tooltip-demo">Les anciens tours sont envoyés sous forme de résumé…</div>
+          <p class="demo__caption">Le tooltip existant devrait être réécrit pour caser l'heure — perte de la phrase d'explication ou heure noyée dedans.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="verdict">
+      <b>Choix recommandé : B, en queue.</b> Ce bouton porte déjà un compteur entre parenthèses en
+      fin de texte ; l'heure en queue rejoint une lecture « quoi, puis quand » cohérente avec
+      l'existant, et laisse le <code class="mono">title</code> actuel intact pour son rôle
+      d'explication (la variante C l'aurait fait entrer en collision).
+    </div>
+    <p class="note" style="margin-top:10px">
+      <b>Source de l'horodatage :</b> la compaction est un calcul LOCAL fait au moment de
+      construire la requête à envoyer (pas un événement du sidecar) — l'heure à afficher est
+      celle de cette construction, prise au même endroit que <span class="mono">messagesResumes</span>
+      est calculé, jamais recalculée plus tard au rendu.
+    </p>
+  </div>
+
+  <hr class="sep">
+
+  <!-- ═════════════════ FAMILLE C ═════════════════ -->
+  <div class="famille">
+    <h2><span class="id">C</span> Lignes d'état vocal — <span class="mono">VoiceControls.tsx</span></h2>
+    <p class="famille__source">
+      <code>ui/src/VoiceControls.tsx</code>, fonction <code>VoiceStatus</code> · classes
+      <code>result-line</code>, <code>conversation-notice</code>
+    </p>
+
+    <div class="panel">
+      <div class="label">Ligne actuelle <span class="tag">sans heure</span> — erreur micro</div>
+      <div class="demo">
+        <div class="result-line result-line--error">
+          Micro inaccessible — vérifiez les autorisations du navigateur.
+          <button type="button" class="result-line__dismiss" aria-label="Masquer l'erreur">×</button>
+        </div>
+      </div>
+      <div class="label" style="margin-top:14px">Ligne actuelle <span class="tag">sans heure</span> — progression transcription</div>
+      <div class="demo">
+        <div class="result-line">Transcription en cours… 62 %</div>
+      </div>
+      <div class="label" style="margin-top:14px">Ligne actuelle <span class="tag">sans heure</span> — message mode conversation</div>
+      <div class="demo">
+        <div class="conversation-notice">Segment ignoré (trop court) — écoute reprise</div>
+      </div>
+    </div>
+
+    <div class="variantes">
+      <div class="variante">
+        <h4>A · en tête</h4>
+        <p class="sub">« 14:52 · Micro inaccessible… »</p>
+        <div class="demo">
+          <div class="result-line result-line--error"><span class="heure heure--tete">14:52</span>· Micro inaccessible — vérifiez les autorisations du navigateur.
+            <button type="button" class="result-line__dismiss" aria-label="Masquer l'erreur">×</button>
+          </div>
+        </div>
+        <div class="demo">
+          <div class="conversation-notice"><span class="heure heure--tete">14:53</span>· Segment ignoré (trop court) — écoute reprise</div>
+        </div>
+      </div>
+
+      <div class="variante recommande">
+        <h4>B · en queue à droite</h4>
+        <p class="sub">Un chiffre qui change vite (%) reste à gauche, stable ; l'heure, fixe, à droite.</p>
+        <div class="demo">
+          <div class="result-line ligne-queue">
+            <span>Transcription en cours… 62 %</span><span class="heure heure--queue">14:52</span>
+          </div>
+        </div>
+        <div class="demo">
+          <div class="conversation-notice" style="display:flex;justify-content:space-between;gap:10px">
+            <span>Segment ignoré (trop court) — écoute reprise</span><span class="heure heure--queue">14:53</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="variante">
+        <h4>C · au survol</h4>
+        <p class="sub">Rien à l'écran de plus, <code class="mono">title</code> porte l'heure.</p>
+        <div class="demo">
+          <div class="result-line result-line--error"><span class="hover-zone" title="14:52">Micro inaccessible — vérifiez les autorisations du navigateur.</span>
+            <button type="button" class="result-line__dismiss" aria-label="Masquer l'erreur">×</button>
+          </div>
+          <div class="tooltip-demo">14:52</div>
+          <p class="demo__caption">Une erreur qui invite à agir (autorisations, réessayer) mérite d'être vue tout de suite, pas cachée derrière un survol.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="verdict">
+      <b>Choix recommandé : B, en queue.</b> Ces lignes contiennent déjà un contenu qui bouge vite
+      (pourcentage de transcription, message éphémère) : le faire précéder d'une heure en tête
+      déplacerait le texte utile à chaque rafraîchissement. L'erreur micro fait exception — elle
+      est assez rare et importante pour rester lisible sans heure surchargée ; B convient aussi
+      car l'heure ne gêne pas le bouton de fermeture qui est déjà à droite dans le flux.
+    </div>
+    <p class="note" style="margin-top:10px">
+      <b>Source de l'horodatage :</b> hétérogène dans cette famille — l'erreur micro est un
+      événement du navigateur, prise à la source (immédiate, locale) ; la progression de
+      transcription est un flux de valeurs envoyées par le sidecar (Whisper), l'heure doit suivre
+      chaque valeur reçue et non rester figée sur le début de la transcription ; le message de
+      mode conversation est calculé côté client (détection de silence, VAD) — heure prise au
+      moment de la détection, pas à l'affichage différé de la ligne.
+    </p>
+  </div>
+
+  <hr class="sep">
+
+  <!-- ═════════════════ FAMILLE D ═════════════════ -->
+  <div class="famille">
+    <h2><span class="id">D</span> Même famille côté page Projets</h2>
+    <p class="famille__source">
+      <code>ui/src/AgentPage.tsx</code> · mêmes classes qu'en A (<code>agent-tabs__notice</code>,
+      <code>debord-notice</code>, <code>cleared-notice</code>) — pendant exact de la page Chat,
+      avec ses propres messages (fichiers ouverts, onglets)
+    </p>
+
+    <div class="panel">
+      <div class="label">Ligne actuelle <span class="tag">sans heure</span></div>
+      <div class="demo">
+        <div class="agent-tabs__notice">Ce projet est déjà ouvert dans une autre fenêtre, elle vient de passer devant.</div>
+      </div>
+      <div class="demo">
+        <div class="agent-tabs__notice cleared-notice">
+          Conversation vidée.
+          <button type="button" class="cleared-notice__undo">Annuler</button>
+          <button type="button" class="cleared-notice__dismiss" aria-label="Masquer" title="Masquer">×</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="variantes">
+      <div class="variante recommande">
+        <h4>A · en tête</h4>
+        <p class="sub">Cohérent avec la famille A (même classe CSS, même composant d'heure des
+          deux côtés) — et la queue du bandeau « vidée » est déjà occupée par ses boutons.</p>
+        <div class="demo">
+          <div class="agent-tabs__notice"><span class="heure heure--tete">15:02</span>· Ce projet est déjà ouvert dans une autre fenêtre, elle vient de passer devant.</div>
+        </div>
+        <div class="demo">
+          <div class="agent-tabs__notice cleared-notice">
+            <span class="heure heure--tete">15:04</span>· Conversation vidée.
+            <button type="button" class="cleared-notice__undo">Annuler</button>
+            <button type="button" class="cleared-notice__dismiss" aria-label="Masquer" title="Masquer">×</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="variante">
+        <h4>B · en queue à droite</h4>
+        <p class="sub">Le bandeau « Conversation vidée » a déjà un bouton « Annuler » à droite :
+          l'heure prend place juste avant lui, dans le même groupe.</p>
+        <div class="demo">
+          <div class="agent-tabs__notice ligne-queue">
+            <span>Ce projet est déjà ouvert dans une autre fenêtre, elle vient de passer devant.</span><span class="heure heure--queue">15:02</span>
+          </div>
+        </div>
+        <div class="demo">
+          <div class="agent-tabs__notice cleared-notice">
+            Conversation vidée.
+            <span class="heure" style="margin-left:auto">15:04</span>
+            <button type="button" class="cleared-notice__undo">Annuler</button>
+            <button type="button" class="cleared-notice__dismiss" aria-label="Masquer" title="Masquer">×</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="variante">
+        <h4>C · au survol</h4>
+        <p class="sub">Le bandeau « vidée » a déjà DEUX boutons interactifs (Annuler, ×) — un
+          troisième point chaud invisible au survol y serait facile à manquer.</p>
+        <div class="demo">
+          <div class="agent-tabs__notice"><span class="hover-zone" title="15:02">Ce projet est déjà ouvert dans une autre fenêtre, elle vient de passer devant.</span></div>
+          <div class="tooltip-demo">15:02</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="verdict">
+      <b>Choix recommandé : A, en tête — pour cohérence stricte avec la famille A.</b> Ces deux
+      familles partagent la même classe CSS (<code class="mono">agent-tabs__notice</code>) : un
+      même composant d'heure doit s'y brancher de la même façon des deux côtés, faute de quoi Chat
+      et Projets afficheraient l'heure différemment pour le même bandeau. Et le bandeau
+      « Conversation vidée » porte déjà deux boutons à droite : la queue est occupée, la tête est
+      libre.
+    </div>
+    <p class="note" style="margin-top:10px">
+      <b>Source de l'horodatage :</b> identique à la famille A — événement local (ouverture
+      d'onglet, vidage de conversation) pour <code class="mono">openFilesNotice</code> et
+      <code class="mono">cleared-notice</code>, événement sidecar reçu pour un éventuel bandeau de
+      débord côté Projets.
+    </p>
+  </div>
+
+  <hr class="sep">
+
+  <h2 style="margin-top:34px">Récapitulatif</h2>
+  <table class="recap">
+    <thead><tr><th>Famille</th><th>Placement recommandé</th><th>Pourquoi</th></tr></thead>
+    <tbody>
+      <tr><td>A — recherche web / débord</td><td class="mono">A · en tête</td>
+        <td>Texte qui change d'état en direct ; l'heure ancre l'instant sans dépendre d'où le texte s'arrête.</td></tr>
+      <tr><td>B — historique compacté</td><td class="mono">B · en queue</td>
+        <td>Rejoint le compteur déjà en fin de ligne ; le survol est déjà pris par l'explication de la compaction.</td></tr>
+      <tr><td>C — état vocal</td><td class="mono">B · en queue</td>
+        <td>Contenu de gauche qui bouge vite (%, message éphémère) ; l'heure stable reste à droite, hors du flux qui change.</td></tr>
+      <tr><td>D — Projets, même bandeaux</td><td class="mono">A · en tête</td>
+        <td>Même classe CSS que A des deux côtés — cohérence imposée ; et un bandeau porte déjà deux boutons à droite (queue occupée, C exclu).</td></tr>
+    </tbody>
+  </table>
+  <p class="note" style="margin-top:14px">
+    Sur les quatre familles, la variante <b>C (survol)</b> n'est retenue nulle part : une heure
+    qui n'apparaît qu'au survol est invisible sur mobile/tactile et invisible à la relecture d'une
+    conversation faite défiler sans interaction — exactement le cas d'usage qui motive ce
+    ticket. Les familles B, C et D convergent sur <b>B — en queue à droite</b> ; la famille A
+    diverge volontairement parce que son texte change de contenu pendant que la ligne existe.
+  </p>
+
+  <hr class="sep">
+  <p class="note" style="margin-top:26px">
+    <b style="color:var(--text-1)">Portée du ticket :</b> cette maquette ne tranche que le
+    FORMAT et le PLACEMENT de l'heure. L'implémentation devra en particulier vérifier, famille par
+    famille, que l'heure est capturée à la source de l'événement (émission sidecar ou action
+    locale) et non recalculée au moment du rendu React — un rendu différé de quelques dizaines de
+    millisecondes fausserait la minute affichée pour rien.
+  </p>
+</div>
+</body>
+</html>

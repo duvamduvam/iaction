@@ -34,6 +34,7 @@ import {
 import {
   AttachmentPickerButton,
   AttachmentTray,
+  collerImageDuPressePapierNatif,
   filesFromClipboard,
   filesFromDrop,
   toAttachmentRefs,
@@ -43,17 +44,18 @@ import {
   type SentAttachment,
 } from "./Attachments";
 import { MODELES_ABONNEMENT_CLAUDE } from "./modelesAbonnementClaude";
-import { readClipboardImage } from "./clipboardClient";
 import { TranscriptionChat } from "./chatTranscript";
 import { Modal } from "./Modal";
 import { useFavorisModeles } from "./useFavorisModeles";
 import { ModelPicker, type OptionEpinglee } from "./ModelPicker";
 import { OllamaPanel } from "./OllamaPanel";
 import { capSessions, deriveTitleFromText, formatRelativeDate, newSessionMeta, sortByRecent } from "./sessionStore";
-import { SidebarRetractable, SidebarSection } from "./SidebarSection";
+import { PanneauLateral, SidebarSection } from "./SidebarSection";
 import { useComposerLiveDraft } from "./useComposerLiveDraft";
 import { useComposerUndo } from "./useComposerUndo";
 import { useRovingFocus } from "./useRovingFocus";
+import { BarreOnglets } from "./BarreOnglets";
+import { ongletApresFermeture } from "./fermetureOnglets";
 import { useStickToBottom } from "./useStickToBottom";
 import {
   DEFAULT_CLASSIFIER,
@@ -89,7 +91,7 @@ import {
 } from "./sidecar";
 import { libelleAvancementWeb } from "./rechercheWeb";
 import type { ProviderConfig } from "./providerAdmin";
-import { stateRead, stateWrite } from "./stateClient";
+import { chargerChat, IO_ETAT, retirerConversationChat, sauverChat } from "./etatEclate";
 import { VoiceButtons, VoiceStatus } from "./VoiceControls";
 import {
   DEFAULT_CONVERSATION_SETTINGS,
@@ -102,6 +104,11 @@ import { publishContext, registerCompactHandler } from "./contextBus";
 import { notifyUsageChanged } from "./usageBus";
 import { useConversationRuntime } from "./useConversationRuntime";
 import { appliquerDebordNotice, libelleDebordNotice, type DebordNotice } from "./debordNotice";
+import { NoticeEnTete } from "./heureDiscrete";
+import { useBattementReveil } from "./useReveil";
+import { gererReveils } from "./reveilRuntime";
+import { withReveilsDefault, type Reveil, type ReveilHistorise } from "./reveil";
+import { ReveilBanniere, ReveilControl } from "./ReveilControl";
 import { prochainOnglet } from "./onglets";
 import { resoudreFournisseur } from "./choixFournisseur";
 import { estCibleUtilisable, resoudreRouteMontante } from "./routageAuto";
@@ -299,18 +306,17 @@ function withEntryError(entries: ChatEntry[], id: string, errorMessage: string):
 
 /* ---------- Historique de sessions (Lot Sessions) ---------- */
 /*
- * Persistance de la page Chat : clé dédiée `chat-conversations`, nouvelle
- * (la page ne persistait rien avant ce lot — pas de migration nécessaire,
- * contrairement à `project-conversations` côté AgentPage.tsx). Schéma :
- * `{ sessions: ChatSession[], activeId, openConversationIds }`, un seul
- * document (le Chat n'est pas scopé par projet). `openConversationIds`
+ * Persistance de la page Chat — T-061 : un fichier PAR conversation + un index
+ * d'affichage, via etatEclate.ts ; le monolithe est migré puis mis de côté au
+ * premier chargement. Schéma mémoire inchangé : `{ sessions, activeId, openConversationIds }`. `openConversationIds`
  * (Lot Onglets multiples) : les conversations ouvertes en onglet, dans
  * l'ordre de la barre — les documents antérieurs à ce champ retombent sur
  * `[activeId]` (voir `sanitizeChatState`). `titleCustom` : `true` dès que
  * l'utilisateur a renommé la session — le titre auto (premier message
  * utilisateur) n'est alors plus jamais recalculé.
  */
-const CHAT_STATE_KEY = "chat-conversations";
+// T-061 — empreinte de la dernière écriture par conversation (sauverChat n'écrit que ce qui a changé).
+const chatDejaEcrit = new Map<string, string>();
 const MAX_PERSISTED_CHAT_ENTRIES = 200;
 const MAX_CHAT_SESSIONS = 30;
 const CHAT_SAVE_DEBOUNCE_MS = 1500;
@@ -334,6 +340,10 @@ interface ChatSession {
   routedTarget: RouteTarget | null;
   /** R4 — résumé de compaction du moteur neutre (`null` = envoi intégral). */
   compaction: ChatCompaction | null;
+  /** T-120 — réveils armés sur cette conversation (plusieurs possibles, chacun son message). Voir docs/spec-reveil.md §3. */
+  reveils: Reveil[];
+  /** T-120 — réveils déjà passés : un réveil ne sert qu'une fois, sa trace reste ici. */
+  reveilsHistorique: ReveilHistorise[];
 }
 
 interface PersistedChatState {
@@ -382,6 +392,8 @@ interface ConvRuntime {
    * par le plafond (`blocked: true`), effacé dès qu'un tour part normalement.
    */
   debordNotice: DebordNotice | null;
+  /** T-101 — instant (epoch ms) de la décision de routage qui a posé/effacé `debordNotice`. */
+  debordNoticeAt: number | null;
   /**
    * « Arrêter » cliqué pendant la phase de PRÉ-ENVOI (routage Auto,
    * compaction — avant tout chat.send/claude.start) : le point de contrôle
@@ -394,6 +406,18 @@ interface ConvRuntime {
    * réponse, elles : voir `ChatEntry.sourcesWeb`.
    */
   avancementWeb: AvancementWeb | null;
+  /** T-101 — instant (epoch ms) de RÉCEPTION du dernier `avancementWeb` (le sidecar n'horodate pas ce chunk). */
+  avancementWebAt: number | null;
+  /** T-120 — réveils armés sur cette conversation (miroir vif de `ChatSession.reveils`). */
+  reveils: Reveil[];
+  /** T-120 — historique des réveils passés (miroir vif de `ChatSession.reveilsHistorique`). */
+  reveilsHistorique: ReveilHistorise[];
+  /**
+   * T-120 — dernier événement de réveil de CETTE conversation (déclenché ou
+   * abandonné), éphémère, jamais persisté — même registre que `debordNotice` :
+   * une ligne discrète, pas une bulle (docs/spec-reveil.md §6).
+   */
+  reveilNotice: { label: string; at: string } | null;
 }
 
 /** R3 — contenu du bandeau de débord (voir docs/spec-r3-debord.md §3). */
@@ -404,6 +428,8 @@ function freshRuntime(
   routedTier: RouteTier | null = null,
   routedTarget: RouteTarget | null = null,
   compaction: ChatCompaction | null = null,
+  reveils: Reveil[] = [],
+  reveilsHistorique: ReveilHistorise[] = [],
 ): ConvRuntime {
   return {
     entries,
@@ -418,8 +444,13 @@ function freshRuntime(
     routedReasons: null,
     compaction,
     debordNotice: null,
+    debordNoticeAt: null,
     preSendAbort: false,
     avancementWeb: null,
+    avancementWebAt: null,
+    reveils,
+    reveilsHistorique,
+    reveilNotice: null,
   };
 }
 
@@ -445,6 +476,8 @@ function freshChatSession(providerId: string): ChatSession {
     routedTier: null,
     routedTarget: null,
     compaction: null,
+    reveils: [],
+    reveilsHistorique: [],
   };
 }
 
@@ -485,7 +518,10 @@ function isChatSession(value: unknown): value is ChatSession {
     typeof v.webSearch === "boolean" &&
     (v.routedTier === null || isRouteTier(v.routedTier)) &&
     (v.routedTarget === null || toRouteTarget(v.routedTarget) !== null) &&
-    (v.compaction === null || toChatCompaction(v.compaction) !== null)
+    (v.compaction === null || toChatCompaction(v.compaction) !== null) &&
+    // T-120 — même principe que `compaction` juste au-dessus (`withReveilsDefault` déjà passé).
+    (v.reveils === undefined || Array.isArray(v.reveils)) &&
+    (v.reveilsHistorique === undefined || Array.isArray(v.reveilsHistorique))
   );
 }
 
@@ -560,7 +596,8 @@ function sanitizeChatState(raw: unknown): PersistedChatState | null {
   const normalizedSessions = v.sessions
     .map(withWebSearchDefault)
     .map(withRoutingDefaults)
-    .map(withCompactionDefault);
+    .map(withCompactionDefault)
+    .map(withReveilsDefault);
   if (!normalizedSessions.every(isChatSession) || typeof v.activeId !== "string") {
     return null;
   }
@@ -793,7 +830,7 @@ export const ChatPage = forwardRef<
   function ensureRuntime(
     session: Pick<
       ChatSession,
-      "id" | "entries" | "claudeSessionId" | "routedTier" | "routedTarget" | "compaction"
+      "id" | "entries" | "claudeSessionId" | "routedTier" | "routedTarget" | "compaction" | "reveils" | "reveilsHistorique"
     >,
   ) {
     runtimes.amorcer(session.id, () =>
@@ -803,6 +840,8 @@ export const ChatPage = forwardRef<
         session.routedTier,
         session.routedTarget,
         session.compaction,
+        session.reveils,
+        session.reveilsHistorique,
       ),
     );
   }
@@ -832,10 +871,28 @@ export const ChatPage = forwardRef<
   const queuedPrompts = activeRuntime.queuedPrompts;
   // R3 — bandeau de débord de la conversation ACTIVE (voir DebordNotice).
   const debordNotice = activeRuntime.debordNotice;
+  const debordNoticeAt = activeRuntime.debordNoticeAt;
   /** R9 — avancement de la recherche web du tour en cours (éphémère). */
   const avancementWeb = activeRuntime.avancementWeb;
+  const avancementWebAt = activeRuntime.avancementWebAt;
   // R4 — compaction de la conversation ACTIVE (indicateur + modale du résumé).
   const activeCompaction = activeRuntime.compaction;
+  // T-120 — réveil de la conversation ACTIVE : armé/désarmé depuis ici, et sa
+  // dernière trace (§6) — voir ReveilControl.tsx.
+  const activeReveils = activeRuntime.reveils;
+  const reveilNotice = activeRuntime.reveilNotice;
+  // T-120 — enregistrement/suppression d'un réveil, avec ÉCRITURE SUR LE
+  // DISQUE immédiate : un réveil qui ne survit pas à un rechargement n'est
+  // pas une promesse (voir gererReveils, reveilRuntime.ts).
+  const { enregistrer: enregistrerReveil, supprimer: supprimerReveil } = gererReveils(
+    runtimes,
+    activeSessionId || null,
+    () => {
+      const liveSessions = buildLiveSessions();
+      setSessions(liveSessions);
+      persistChatState(liveSessions, activeSessionIdRef.current);
+    },
+  );
 
   /** Brouillon : toujours celui de la conversation ACTIVE — seule celle-ci a un composeur affiché. */
   function setDraft(value: string) {
@@ -962,6 +1019,9 @@ export const ChatPage = forwardRef<
         routedTarget: runtime.routedTarget,
         // R4 — la compaction vit aussi dans le runtime : recopiée pareil.
         compaction: runtime.compaction,
+        // T-120 — le réveil vit aussi dans le runtime (armé/désarmé/consommé au battement) : recopié pareil.
+        reveils: runtime.reveils,
+        reveilsHistorique: runtime.reveilsHistorique,
         ...(s.id === activeId ? { providerId, model, systemPrompt, webSearch } : {}),
         updatedAt: new Date().toISOString(),
       };
@@ -969,17 +1029,11 @@ export const ChatPage = forwardRef<
     });
   }
 
-  /** Écrit le document complet persisté (best effort, no-op tant que non hydraté). */
+  /** Écrit l'état persisté — T-061 : seules les conversations qui ont changé partent sur disque. */
   function persistChatState(liveSessions: ChatSession[], activeId: string) {
     if (!chatHydratedRef.current) return;
-    void stateWrite(
-      CHAT_STATE_KEY,
-      buildPersistedChatState({
-        sessions: liveSessions,
-        activeId,
-        openConversationIds: openConversationIdsRef.current,
-      }),
-    ).catch(() => {
+    const doc = buildPersistedChatState({ sessions: liveSessions, activeId, openConversationIds: openConversationIdsRef.current });
+    void sauverChat(IO_ETAT, doc.sessions, { activeId: doc.activeId, openConversationIds: doc.openConversationIds }, chatDejaEcrit).catch(() => {
       // best effort : une écriture ratée ne bloque pas l'UI, la prochaine sauvegarde retentera.
     });
   }
@@ -1001,9 +1055,13 @@ export const ChatPage = forwardRef<
       // R1 — nouvelle conversation = « Auto (routeur) » par défaut.
       setModel(AUTO_MODEL);
     };
-    stateRead<unknown>(CHAT_STATE_KEY)
-      .then((raw) => {
-        const restored = sanitizeChatState(raw);
+    chargerChat(IO_ETAT)
+      .then(({ sessions: brutes, index }) => {
+        const restored = sanitizeChatState({
+          sessions: brutes,
+          activeId: index.activeId ?? "",
+          openConversationIds: index.openConversationIds,
+        });
         if (restored) {
           const activeSession = restored.sessions.find((s) => s.id === restored.activeId) ?? restored.sessions[0];
           for (const s of restored.sessions) {
@@ -1235,12 +1293,17 @@ export const ChatPage = forwardRef<
     model: string,
     unconfigured = false,
   ): Promise<void> {
+    // T-101 — capté ICI, avant la lecture (asynchrone) du plafond : c'est
+    // l'instant de la DÉCISION de routage, pas celui, plus tardif, où le
+    // bandeau finit par s'afficher.
+    const debordNoticeAt = Date.now();
     await appliquerDebordNotice<ConvRuntime>((majeur) => runtimes.ecrire(convId, majeur), {
       debord,
       model,
       unconfigured,
       lirePlafond: () => readRoutingDebord().then((d) => d?.plafondUsdMois ?? null),
     });
+    runtimes.ecrire(convId, (r) => ({ ...r, debordNoticeAt: r.debordNotice ? debordNoticeAt : null }));
   }
 
   /* ---------- R4 — économie de contexte du moteur neutre ---------- */
@@ -1532,7 +1595,7 @@ export const ChatPage = forwardRef<
       } else {
         // R3 — tour à modèle choisi MANUELLEMENT : jamais bloqué ni
         // bandeau-isé — un éventuel bandeau de débord précédent s'efface.
-        updateRuntime(convId, (r) => (r.debordNotice ? { ...r, debordNotice: null } : r));
+        updateRuntime(convId, (r) => (r.debordNotice ? { ...r, debordNotice: null, debordNoticeAt: null } : r));
       }
 
       // R4 — moteur NEUTRE uniquement : compaction éventuelle de l'historique
@@ -1575,7 +1638,9 @@ export const ChatPage = forwardRef<
               web: {
                 actif: webSearch,
                 onWeb: (avancement) => {
-                  updateRuntime(convId, (r) => ({ ...r, avancementWeb: avancement }));
+                  // T-101 — instant de RÉCEPTION du chunk (le sidecar n'horodate
+                  // pas cet événement) : capté ICI, pas au rendu de la ligne.
+                  updateRuntime(convId, (r) => ({ ...r, avancementWeb: avancement, avancementWebAt: Date.now() }));
                   // Les sources s'attachent à la RÉPONSE (et sont persistées
                   // avec elle), comme le badge de routage R1 — l'avancement,
                   // lui, est éphémère.
@@ -1614,7 +1679,13 @@ export const ChatPage = forwardRef<
       // à l'envoi) — pas question de les rejoindre à la main pour réessayer.
       restoreAttachments(sentDrafts);
     } finally {
-      updateRuntime(convId, (r) => ({ ...r, streaming: false, activeRequestId: null, avancementWeb: null }));
+      updateRuntime(convId, (r) => ({
+        ...r,
+        streaming: false,
+        activeRequestId: null,
+        avancementWeb: null,
+        avancementWebAt: null,
+      }));
       // Fin de tour : la conso (Claude et/ou OpenRouter) a pu changer.
       notifyUsageChanged();
       // Fin de tour : sauvegarde immédiate (pas d'attente du debounce). Les
@@ -1648,6 +1719,14 @@ export const ChatPage = forwardRef<
     // de runtime et au changement d'onglet.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streaming, runtimeTick, activeSessionId]);
+
+  // T-120 — battement du réveil (§5). La bascule est ce qui fait PARTIR le
+  // tour : le drainage ci-dessus ne draine que la conversation active (voir
+  // useReveil.ts). `activeSessionIdRef` et pas `activeSessionId` : la
+  // minuterie est montée une fois, la valeur de rendu y serait figée.
+  useBattementReveil(runtimes, (convId) => {
+    if (activeSessionIdRef.current !== convId) selectChatSession(convId);
+  });
 
   /* ---------- Voix du composeur (voir useVoiceComposer.ts) ---------- */
 
@@ -1923,22 +2002,45 @@ export const ChatPage = forwardRef<
       return;
     }
     setTabsNotice(null);
+    closeConversationTabs([id]);
+  }
+
+  /**
+   * Ferme PLUSIEURS onglets d'un coup — les lots du menu contextuel (« fermer
+   * les autres », « à droite », « toutes ») ; la fermeture unitaire ci-dessus
+   * n'en est qu'un cas à un élément, pour qu'il n'existe jamais deux façons de
+   * fermer un onglet. Jumelle de celle d'AgentPage.tsx.
+   *
+   * Pas de boucle sur la version unitaire : chaque passage lit
+   * `openConversationIds`/`activeSessionId` dans l'état React, qui ne bouge
+   * pas avant le rendu suivant — le deuxième onglet du lot rouvrirait le
+   * premier. Tout se décide donc ici, en une passe, sur l'état courant.
+   *
+   * Le bandeau n'est PAS touché : `BarreOnglets` vient d'y écrire ce que le
+   * lot a conservé (tour en cours), et l'effacer ferait de ces survivants un
+   * échec muet.
+   */
+  function closeConversationTabs(ids: readonly string[]) {
+    // Garde de dernier recours : un tour peut avoir démarré entre l'ouverture
+    // du menu et le clic.
+    const partants = ids.filter((id) => runtimes.consulter(id)?.streaming !== true);
+    if (partants.length === 0) return;
     const liveSessions = buildLiveSessions();
     setSessions(liveSessions);
-    runtimes.oublier(id);
-    const nextOpen = openConversationIds.filter((c) => c !== id);
+    for (const id of partants) runtimes.oublier(id);
+    const nextOpen = openConversationIds.filter((c) => !partants.includes(c));
     setOpenConversationIds(nextOpen);
 
-    // Conversation qui devient active : inchangée si on ferme un AUTRE onglet,
-    // sinon l'onglet voisin (le précédent, à défaut le premier restant).
+    // Conversation qui devient active : inchangée si le lot l'épargne, sinon
+    // le plus proche voisin de GAUCHE encore ouvert (voir ongletApresFermeture
+    // — il faut sauter ceux que le même lot emporte).
     let nextActiveId = activeSessionId;
-    if (activeSessionId === id) {
+    if (partants.includes(activeSessionId)) {
       // Bascule de conversation active : le bandeau « Conversation vidée /
       // Annuler » parlait de celle qu'on quitte (voir selectChatSession).
       setClearedNotice(false);
-      const idx = openConversationIds.indexOf(id);
-      const neighbour = nextOpen[Math.max(0, idx - 1)];
-      const target = neighbour ? liveSessions.find((s) => s.id === neighbour) : undefined;
+      const voisin = ongletApresFermeture(openConversationIds, activeSessionId, partants);
+      const target = voisin ? liveSessions.find((s) => s.id === voisin) : undefined;
       if (target) {
         ensureRuntime(target);
         nextActiveId = target.id;
@@ -1950,12 +2052,12 @@ export const ChatPage = forwardRef<
       } else {
         // Dernier onglet de conversation fermé : on en rouvre aussitôt un
         // vierge plutôt que de laisser l'écran vide — même effet visible que
-        // Ctrl+K, mais non destructif (la conversation fermée reste dans le
-        // panneau « Historique »). Sans cela l'utilisateur se retrouvait sans
-        // conversation ET sans moyen d'en rouvrir une.
+        // Ctrl+K, mais non destructif (les conversations fermées restent dans
+        // le panneau « Historique »). Sans cela l'utilisateur se retrouvait
+        // sans conversation ET sans moyen d'en rouvrir une.
         const fresh = freshChatSession(providerId);
-        // Purge des sessions vides au passage (celle qu'on vient de fermer si
-        // elle n'avait aucun message), comme le fait `handleNewConversation`.
+        // Purge des sessions vides au passage (celles qu'on vient de fermer si
+        // elles n'avaient aucun message), comme le fait `handleNewConversation`.
         const kept = liveSessions.filter(
           (s) => s.entries.length > 0 || s.titleCustom || runtimes.consulter(s.id)?.streaming === true,
         );
@@ -2030,6 +2132,7 @@ export const ChatPage = forwardRef<
     // Refus si CETTE conversation a un tour en cours (les autres peuvent
     // continuer de streamer sans que ça pose problème).
     if (runtimes.consulter(id)?.streaming) return;
+    void retirerConversationChat(IO_ETAT, id, chatDejaEcrit); // T-061 : mis de côté, pas détruit
     const liveSessions = buildLiveSessions();
     const remaining = liveSessions.filter((s) => s.id !== id);
     const finalSessions = remaining.length > 0 ? remaining : [freshChatSession(providerId)];
@@ -2100,7 +2203,6 @@ export const ChatPage = forwardRef<
 
   // Roving tabindex (WAI-ARIA APG) : onglets de conversation (←/→) et liste
   // de sessions (↑/↓) — un seul élément tabbable par collection.
-  const tabsRoving = useRovingFocus<HTMLDivElement>({ selector: '[role="tab"]', orientation: "horizontal" });
   const sessionsRoving = useRovingFocus<HTMLUListElement>({ selector: ".session-item__title" });
   const sortedSessions = sortByRecent(sessions);
   const tabbableSessionId = sortedSessions.some((s) => s.id === activeSessionId)
@@ -2133,7 +2235,7 @@ export const ChatPage = forwardRef<
   return (
     <div className="page chat-page agent-page">
       <div className="agent-layout">
-        <SidebarRetractable id="chat-gauche" cote="left" libelle="de gauche">
+        <PanneauLateral cote="gauche">
           <SidebarSection id="chat-llm" title="LLM" defaultOpen={!isCompactViewport}>
             {/* Champs de config verrouillés pendant le streaming de la
                 conversation ACTIVE seulement : changer de fournisseur/modèle
@@ -2341,78 +2443,28 @@ export const ChatPage = forwardRef<
               </ul>
             )}
           </SidebarSection>
-        </SidebarRetractable>
+        </PanneauLateral>
 
         <div className="agent-main__content">
-          {/* Barre d'onglets de conversations — mêmes classes que la page
-              Projets (App.css). Le point « ● » signale un tour en cours dans
-              un onglet (y compris d'arrière-plan) ; « × » est désactivé tant
-              que SA conversation streame (fermer l'onglet perdrait le tour de
-              vue) ; « + » ouvre une nouvelle conversation. */}
-          <div
-            className="agent-tabs"
-            role="tablist"
-            ref={tabsRoving.containerRef}
-            onKeyDown={tabsRoving.onKeyDown}
-            onFocus={tabsRoving.onFocus}
-          >
-            {openConversationIds.map((convId) => {
+          {/* Barre d'onglets de conversations — le composant est partagé avec la
+              page Projets (BarreOnglets.tsx), qui rend aussi les onglets de
+              fichiers ; cette page n'en ouvre pas, d'où l'absence de
+              `fichiers`. Le point « ● » signale un tour en cours, le clic
+              droit ouvre la fermeture en lot, et fermer pour de bon reste ici
+              (état de session, persistance). */}
+          <BarreOnglets
+            conversations={openConversationIds.flatMap((convId) => {
               const conv = sessions.find((s) => s.id === convId);
-              if (!conv) return null;
-              const isActive = convId === activeSessionId;
-              const convStreaming = runtimes.consulter(convId)?.streaming === true;
-              return (
-                <div
-                  key={convId}
-                  className={`agent-tab agent-tab--conv${isActive ? " agent-tab--active" : ""}`}
-                  role="tab"
-                  aria-selected={isActive}
-                  tabIndex={isActive ? 0 : -1}
-                  title={conv.title}
-                  onClick={() => selectChatSession(convId)}
-                  onKeyDown={(e) => {
-                    // `target === currentTarget` : ne pas intercepter Entrée sur
-                    // le bouton « × » interne (fermeture native du bouton).
-                    if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-                      e.preventDefault();
-                      selectChatSession(convId);
-                    }
-                  }}
-                >
-                  <span className="agent-tab__name">{conv.title}</span>
-                  {convStreaming && (
-                    <span
-                      className="agent-tab__dot agent-tab__dot--streaming"
-                      aria-label="Tour en cours"
-                      title="Tour en cours"
-                    />
-                  )}
-                  <button
-                    type="button"
-                    className="agent-tab__close"
-                    aria-label={`Fermer l'onglet ${conv.title}`}
-                    title={convStreaming ? "Impossible de fermer : tour en cours" : "Fermer l'onglet"}
-                    disabled={convStreaming}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeConversationTab(convId);
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              );
+              if (!conv) return [];
+              return [{ id: convId, titre: conv.title, streaming: runtimes.consulter(convId)?.streaming === true }];
             })}
-            <button
-              type="button"
-              className="agent-tab agent-tab--new"
-              onClick={() => handleNewConversation()}
-              aria-label="Nouvelle conversation"
-              title="Nouvelle conversation (Ctrl+N)"
-            >
-              +
-            </button>
-          </div>
+            conversationActive={activeSessionId}
+            onActiverConversation={selectChatSession}
+            onNouvelleConversation={() => handleNewConversation()}
+            onFermerConversation={closeConversationTab}
+            onFermerLotConversations={closeConversationTabs}
+            onAvis={setTabsNotice}
+          />
 
           {tabsNotice && <div className="agent-tabs__notice">{tabsNotice}</div>}
           {clearedNotice && (
@@ -2436,15 +2488,18 @@ export const ChatPage = forwardRef<
               routage redevient normal (voir applyDebordNotice). */}
           {debordNotice && (
             <div className={`agent-tabs__notice debord-notice${debordNotice.blocked ? " debord-notice--blocked" : ""}`}>
-              {libelleDebordNotice(debordNotice)}
+              <NoticeEnTete instant={debordNoticeAt}>{libelleDebordNotice(debordNotice)}</NoticeEnTete>
             </div>
           )}
           {/* R9 — discret et non bloquant : le tour a lieu dans TOUS les cas,
               y compris quand le moteur est injoignable. Un échec de recherche
               n'est pas une erreur de tour, c'est une information. */}
           {avancementWeb && (
-            <div className="agent-tabs__notice">{libelleAvancementWeb(avancementWeb)}</div>
+            <div className="agent-tabs__notice">
+              <NoticeEnTete instant={avancementWebAt}>{libelleAvancementWeb(avancementWeb)}</NoticeEnTete>
+            </div>
           )}
+          {reveilNotice && <div className="agent-tabs__notice">{reveilNotice.label}</div>}
           <div className="chat-log" ref={scrollRef} {...scrollProps}>
             {/* Fil mémoïsé (chatTranscript.tsx) : un rendu de la page qui ne
                 touche pas la transcription — le rattrapage du composeur, quatre
@@ -2452,6 +2507,7 @@ export const ChatPage = forwardRef<
             <TranscriptionChat
               entries={entries}
               messagesResumes={activeCompaction ? activeCompaction.upToIndex : null}
+              compactionAt={activeCompaction ? activeCompaction.at : null}
               onOuvrirResume={ouvrirResumeCompaction}
             />
           </div>
@@ -2493,6 +2549,8 @@ export const ChatPage = forwardRef<
                 </button>
               </div>
             ))}
+            {/* T-120 — l'état armé seulement : rien quand rien n'est armé. */}
+            <ReveilBanniere reveils={activeReveils} />
             <AttachmentTray items={attachments} onRemove={removeAttachment} />
             {attachmentsError && (
               <div className="result-line result-line--error">
@@ -2516,6 +2574,15 @@ export const ChatPage = forwardRef<
               <div className="chat-composer__tools">
                 <AttachmentPickerButton onFiles={(files) => addFiles(files)} disabled={streaming} />
                 <VoiceButtons voice={voice} />
+                {/* T-120 — action secondaire, donc dans la colonne d'icônes et
+                    pas sur une ligne à elle (constat du 2026-09-05). */}
+                <ReveilControl
+                  reveils={activeReveils}
+                  historique={activeRuntime.reveilsHistorique}
+                  brouillon={draft}
+                  onEnregistrer={enregistrerReveil}
+                  onSupprimer={supprimerReveil}
+                />
               </div>
               {/* Semi-non-contrôlé (defaultValue + ref) : la frappe n'impose
                   plus un re-rendu de page par caractère — voir
@@ -2537,13 +2604,10 @@ export const ChatPage = forwardRef<
                   // Repli natif : sous WebKitGTK (Tauri Linux), une capture
                   // d'écran n'apparaît PAS dans `clipboardData`. On ne tente le
                   // repli que sans texte (sinon collage de texte normal), avec
-                  // une vignette « en chargement » affichée tout de suite.
+                  // une vignette « en chargement » affichée tout de suite
+                  // (mécanisme + mesure T-048 : voir Attachments.tsx).
                   if (e.clipboardData.getData("text/plain")) return;
-                  const placeholderId = beginImage("capture-collée.png");
-                  if (!placeholderId) return;
-                  void readClipboardImage()
-                    .then((bytes) => resolveImage(placeholderId, bytes))
-                    .catch(() => resolveImage(placeholderId, null));
+                  collerImageDuPressePapierNatif(beginImage, resolveImage);
                 }}
                 placeholder={
                   streaming

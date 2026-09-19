@@ -16,7 +16,6 @@ import type { RouteDebord, RouteTarget, RoutingTable } from "./sidecar";
 import {
   estCibleUtilisable,
   libelleDebord,
-  resoudreRouteDescendante,
   resoudreRouteMontante,
   type DepsRoutageAuto,
   type RequeteRoutage,
@@ -78,83 +77,6 @@ describe("libelleDebord", () => {
     expect(libelleDebord({ active: true, blocked: false, fiveHourPct: null, sevenDayPct: null })).toBe(
       "débord : abonnement saturé",
     );
-  });
-});
-
-describe("resoudreRouteDescendante — premier tour (sans affinité)", () => {
-  it("part au SOMMET : tier « complexe » IMPOSÉ, jamais de classification", async () => {
-    const { d, requetes } = deps();
-    const route = await resoudreRouteDescendante(null, "petit prompt anodin", "/proj", d);
-    expect(requetes).toEqual([{ text: "petit prompt anodin", tier: "complexe", cwd: "/proj" }]);
-    expect(route.target).toEqual(abonnement);
-    expect(route.pendingAffinity).toBe(true);
-  });
-
-  it("cwd vide : pas de clé cwd envoyée (pas de surcharge projet)", async () => {
-    const { d, requetes } = deps();
-    await resoudreRouteDescendante(null, "x", "", d);
-    expect(requetes[0]).not.toHaveProperty("cwd");
-  });
-
-  it("la raison protocolaire « tier imposé » est remplacée par la stratégie", async () => {
-    const { d } = deps({ reasons: ["tier imposé par l'appelant", "autre raison"] });
-    const route = await resoudreRouteDescendante(null, "x", "", d);
-    expect(route.reasons[0]).toContain("stratégie descendante");
-    expect(route.reasons).toContain("autre raison");
-    expect(route.reasons).not.toContain("tier imposé par l'appelant");
-  });
-
-  it("un premier tour DÉBORDÉ ne pose pas d'affinité", async () => {
-    const { d } = deps({ target: payant, debord: debordActif });
-    const route = await resoudreRouteDescendante(null, "x", "", d);
-    expect(route.pendingAffinity).toBe(false);
-    expect(route.target).toEqual(payant);
-  });
-
-  it("gardes R3 : cible non déclarée → repli en REMONTANT la table", async () => {
-    const { d } = deps({ tier: "complexe", target: { engine: "neutral", providerId: "fantome", model: "m" } });
-    // Rien au-dessus de complexe : la cible d'origine est gardée (l'erreur
-    // moteur habituelle s'affichera) — surtout pas de descente silencieuse.
-    const route = await resoudreRouteDescendante(null, "x", "", d);
-    expect(route.target.providerId).toBe("fantome");
-  });
-});
-
-describe("resoudreRouteDescendante — affinité de session", () => {
-  const affinite = { tier: "complexe" as const, target: abonnement, reasons: ["mémorisée"] };
-
-  it("cible abonnement : le débord est re-vérifié à CHAQUE tour, tier imposé", async () => {
-    const { d, requetes } = deps({ target: payant, debord: debordActif });
-    const route = await resoudreRouteDescendante(affinite, "suite", "/proj", d);
-    expect(requetes).toEqual([{ text: "suite", tier: "complexe", cwd: "/proj" }]);
-    expect(route.target).toEqual(payant);
-    expect(route.reasons).toEqual(["mémorisée", libelleDebord(debordActif)]);
-    expect(route.pendingAffinity).toBe(false); // déjà posée, et tour débordé
-  });
-
-  it("cible de débord NON déclarée : le tour reste sur l'abonnement, bandeau dédié", async () => {
-    const { d } = deps({ target: { engine: "neutral", providerId: "fantome", model: "m" }, debord: debordActif });
-    const route = await resoudreRouteDescendante(affinite, "x", "", d);
-    expect(route.target).toEqual(abonnement);
-    expect(route.debord).toBeNull();
-    expect(route.debordUnconfigured).toBe(true);
-  });
-
-  it("routeur injoignable : l'affinité vaut telle quelle, jamais d'erreur", async () => {
-    const { d } = deps(new Error("sidecar down"));
-    const route = await resoudreRouteDescendante(affinite, "x", "", d);
-    expect(route.tier).toBe("complexe");
-    expect(route.target).toEqual(abonnement);
-    expect(route.reasons).toEqual(["mémorisée"]);
-  });
-
-  it("cible NEUTRE mémorisée : aucun appel routeur (pas de débord à vérifier)", async () => {
-    const { d, requetes } = deps();
-    const route = await resoudreRouteDescendante({ tier: "simple", target: local }, "x", "", d);
-    expect(requetes).toEqual([]);
-    expect(route.target).toEqual(local);
-    // Session d'avant R6 sans raisons mémorisées : libellé de repli.
-    expect(route.reasons[0]).toContain("affinité de session");
   });
 });
 

@@ -47,6 +47,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { startRecording, stopRecording } from "./audioCapture";
 import { startPlaybackQueue, stopPlayback } from "./audioPlayback";
+import { journalDecisionMotCleConversation, journalDecisionMotCleDictee, journalIssueEnvoiVoix, journalPanneDemarrageConversation, journalPanneDictee, journalPanneEnvoiVoix, journalPanneMicroDictee, journalSegmentTranscritDictee } from "./journalVoix";
 import { DEFAULT_SEND_KEYWORD, matchSendKeyword } from "./sendKeyword";
 import {
   formatSpeechProgress,
@@ -461,6 +462,15 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
   const conversationLastSpeechRef = useRef(0);
   const micStateRef = useRef<MicState>("idle");
   micStateRef.current = micState;
+  /**
+   * T-125 — longueur cumulée du brouillon ALIMENTÉ PAR LA VOIX en mode
+   * conversation/mot-clé, depuis le dernier envoi. Approximatif à dessein :
+   * `appendToDraft`/`takeDraft` appartiennent à la page (Chat/Projets), le
+   * hook n'a aucun moyen de relire le composeur — il ne compte que ce qu'IL Y
+   * A LUI-MÊME versé. Suffisant pour le diagnostic visé (T-123 : un brouillon
+   * qui grossit segment après segment sans jamais partir).
+   */
+  const draftLenRef = useRef(0);
 
   // Accès « toujours frais » aux options : le mode conversation réutilise
   // l'envoi du composeur de la page, il ne duplique aucune logique d'envoi.
@@ -503,6 +513,9 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
       setConversationState("idle");
       setConversationLevel(0);
       setConversationThreshold(0);
+      // Compteur T-125 remis à zéro : une session arrêtée ne doit pas fausser
+      // la longueur de brouillon rapportée à la prochaine session.
+      draftLenRef.current = 0;
       stopPlayback();
       releaseConversationActivity();
       try {
@@ -622,8 +635,9 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
 
       try {
         await optionsRef.current.send(text);
-      } catch {
+      } catch (err) {
         // La page inscrit déjà l'erreur dans le message concerné.
+        journalPanneEnvoiVoix(text.length, err instanceof Error ? err.message : String(err));
       } finally {
         if (sampler !== null) window.clearInterval(sampler);
       }
@@ -637,10 +651,12 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
         // par `takeDraft`, le perdre serait un échec muet — et surtout on
         // relâche l'écoute.
         optionsRef.current.appendToDraft(text);
+        journalIssueEnvoiVoix("refuse", text.length);
         showConversationNotice(optionsRef.current.notSentNotice);
         abandon();
         return;
       }
+      journalIssueEnvoiVoix("parti", text.length);
       const reply = optionsRef.current.lastReplyText();
       if (!conversationOnRef.current || !autoPlay) {
         // Mode arrêté entre-temps ou lecture désactivée : rien à lire, et
@@ -713,17 +729,22 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
             // démarrage) : un changement de mode en cours de session est pris
             // en compte immédiatement.
             if (optionsRef.current.conversation.sendMode === "keyword") {
-              const { body, send } = matchSendKeyword(trimmed, optionsRef.current.conversation.sendKeyword);
+              const { body, send, reason } = matchSendKeyword(trimmed, optionsRef.current.conversation.sendKeyword);
+              journalDecisionMotCleConversation(send, reason, trimmed.length, draftLenRef.current);
               if (!send) {
                 // Le segment rejoint le brouillon, l'écoute continue telle
                 // quelle — on ne touche pas à l'activité externe.
                 optionsRef.current.appendToDraft(body);
+                draftLenRef.current += body.length;
                 return;
               }
               // Mot-clé : tout le brouillon accumulé part (dicté ET tapé),
               // suivi de l'éventuel reste du segment.
               const full = [optionsRef.current.takeDraft().trim(), body].join(" ").trim();
+              draftLenRef.current = 0;
               if (!full) {
+                // Brouillon accumulé ET reste du segment tous deux vides — rien à transmettre.
+                journalIssueEnvoiVoix("vide");
                 showConversationNotice("Rien à envoyer : le brouillon est vide.");
                 return;
               }
@@ -743,6 +764,7 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
         },
       );
     } catch (err) {
+      journalPanneDemarrageConversation(err instanceof Error ? err.message : String(err));
       setMicError(err instanceof Error ? err.message : String(err));
       stopConversationMode();
     }
@@ -810,6 +832,7 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
         await startRecording({ deviceId: optionsRef.current.micDeviceId, onLevel: setMicLevel });
         setMicState("recording");
       } catch (err) {
+        journalPanneMicroDictee(err instanceof Error ? err.message : String(err));
         setMicError(err instanceof Error ? err.message : String(err));
       }
       return;
@@ -822,40 +845,48 @@ export function useVoiceComposer(options: UseVoiceComposerOptions): VoiceCompose
     try {
       const audioBase64 = await stopRecording();
       const text = (await speechTranscribe(audioBase64, (p) => setMicProgress(formatSpeechProgress(p)))).trim();
+      journalSegmentTranscritDictee(text, text.length, text ? "transmis" : "vide");
       if (text) {
         // Mot-clé « envoie » en fin de dictée (voir sendKeyword.ts) : toujours
         // actif au micro, réglage ou pas. Déclenché, il envoie brouillon + texte
         // dicté SANS attendre le tour — le bouton micro revient au repos tout de
         // suite, l'envoi vit sa vie comme un clic sur Envoyer.
-        const { body, send } = matchSendKeyword(text, optionsRef.current.conversation.sendKeyword);
+        const { body, send, reason } = matchSendKeyword(text, optionsRef.current.conversation.sendKeyword);
         if (send) {
-          const full = [optionsRef.current.takeDraft().trim(), body].join(" ").trim();
+          const previousDraft = optionsRef.current.takeDraft().trim();
+          const full = [previousDraft, body].join(" ").trim();
+          // Longueur du brouillon REPRIS juste avant : seul moment où ce hook la connaît (`takeDraft` le vide).
+          journalDecisionMotCleDictee(true, reason, text.length, previousDraft.length);
           if (full) {
             // Si rien ne part (fournisseur ou projet manquant), le texte est
             // REPOSÉ dans le brouillon : une dictée ne doit jamais se perdre.
             const countBefore = optionsRef.current.turnCount();
             void optionsRef.current
               .send(full)
-              .catch(() => {
-                // La page inscrit déjà l'erreur dans le message concerné.
+              .catch((err) => {
+                journalPanneEnvoiVoix(full.length, err instanceof Error ? err.message : String(err));
               })
               .then(async () => {
                 await conversationSleep(CONVERSATION_COMMIT_DELAY_MS);
                 if (optionsRef.current.turnCount() === countBefore) {
                   optionsRef.current.appendToDraft(full);
                   setMicError(optionsRef.current.notSentNotice);
-                }
+                  journalIssueEnvoiVoix("refuse", full.length);
+                } else journalIssueEnvoiVoix("parti", full.length);
               });
           } else {
+            journalIssueEnvoiVoix("vide");
             setMicError("Rien à envoyer : dites votre message avant le mot-clé.");
           }
         } else {
+          journalDecisionMotCleDictee(false, reason, text.length);
           optionsRef.current.appendToDraft(text);
         }
       } else {
         setMicError("Aucun texte reconnu — réessayez en parlant plus près du micro.");
       }
     } catch (err) {
+      journalPanneDictee(err instanceof Error ? err.message : String(err));
       setMicError(err instanceof Error ? err.message : String(err));
     } finally {
       setMicState("idle");

@@ -19,11 +19,37 @@ if [ -n "${XDG_CONFIG_DIRS_VSCODE_SNAP_ORIG:-}" ]; then
 fi
 case "${XDG_DATA_HOME:-}" in */snap/*) unset XDG_DATA_HOME ;; esac
 
-# Fenêtre BLANCHE au lancement (constaté le 2026-07-31) : le WebKitWebProcess
-# crashe sans trace journal — problème connu webkit2gtk + rendu GPU dmabuf
-# (pilotes NVIDIA). Le repli logiciel du renderer suffit et n'affecte que la
-# webview de CETTE app.
-export WEBKIT_DISABLE_DMABUF_RENDERER=1
+# ── Rendu GPU par défaut depuis le 2026-08-30 (T-095) ─────────────────────
+#
+# Histoire de cette ligne, parce qu'elle a coûté cinq signalements.
+#
+# Le 2026-07-31, une fenêtre BLANCHE au lancement (WebKitWebProcess qui crashe
+# sans trace — bug connu webkit2gtk + dmabuf, pilotes NVIDIA) a fait poser un
+# repli : tout rastériser au processeur. Le repli marchait, il est resté.
+#
+# Il se payait à CHAQUE CARACTÈRE TAPÉ. Sur le 4K de ce poste — 5120 × 2786,
+# soit 14,3 Mpixels — un repeint plein cadre au processeur coûte ~300 ms.
+# Quatre enquêtes (T-031, T-083, et deux relances) ont cherché la cause dans
+# l'application, et retiré du vrai coût, sans jamais atteindre ce plancher.
+# webkit2gtk est passé en 2.52.3 le 2026-08-06, APRÈS le crash qui avait motivé
+# le repli, et personne n'a retenté : le repli a survécu 24 jours à sa raison
+# d'être.
+#
+# Mesuré le 2026-08-30, même fenêtre, même phrase, sonde de frappe
+# (ui/src/sondeFrappe.ts), latence médiane touche → image :
+#
+#     rendu logiciel     2 784 ms   (six relevés entre 2 717 et 2 993)
+#     rendu GPU             64 ms   (n=182)
+#
+# 43 fois. Le défaut change donc de camp : le GPU est le défaut, et le repli
+# logiciel reste accessible pour le jour où un pilote régresse.
+#
+#     IACTION_CPU=1 ./scripts/dev.sh    # repli logiciel, si fenêtre blanche
+#
+if [ "${IACTION_CPU:-0}" = "1" ]; then
+  echo "==> Repli LOGICIEL demandé (IACTION_CPU=1) : la frappe sera lente sur grand écran (T-095)." >&2
+  export WEBKIT_DISABLE_DMABUF_RENDERER=1
+fi
 
 cd "$(dirname "$0")/.."
 
@@ -41,6 +67,22 @@ cd "$(dirname "$0")/.."
 # l'utilisateur diagnostiquer une coquille vide.
 if (exec 3<>/dev/tcp/127.0.0.1/1420) 2>/dev/null; then
   exec 3<&- 3>&-
+  # Lancé par l'icône du bureau, stderr part dans un fichier que personne ne
+  # lit : le refus était un échec muet DE FAIT (T-060). Une notification rend
+  # le garde-fou visible là où on clique ; le détail reste sur stderr.
+  if command -v notify-send >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    notify-send "IAction" "Une session de développement tourne déjà — bascule sur la fenêtre ouverte." || true
+  fi
+  # T-095 — un lancement demandé et refusé se lit comme un lancement FAIT :
+  # constaté le 2026-08-28, où le rendu GPU a été « essayé » sans que la fenêtre
+  # change, puis conclu sans effet — deux fois. Un refus doit donc nommer ce qui
+  # n'a PAS eu lieu, et pas seulement ce qu'il faut faire.
+  if [ "${IACTION_CPU:-0}" = "1" ]; then
+    echo "==> Le changement de rendu N'A PAS EU LIEU : la fenêtre ouverte garde le sien (voir ci-dessous)." >&2
+    if command -v notify-send >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+      notify-send "IAction" "Changement de rendu non effectué : une session tourne déjà, il faut l'arrêter d'abord." || true
+    fi
+  fi
   cat >&2 <<'FIN'
 ==> Une session de développement écoute déjà sur le port 1420.
 
@@ -48,10 +90,17 @@ if (exec 3<>/dev/tcp/127.0.0.1/1420) 2>/dev/null; then
     indisponible : stdin absent ») : Vite ne peut pas reprendre le port, et
     `tauri dev` avorte après avoir lancé la fenêtre.
 
-    Bascule sur la fenêtre déjà ouverte, ou arrête la session en cours :
-
-        pkill -f 'tauri dev' && pkill -f 'target/debug/iaction'
+    Bascule sur la fenêtre déjà ouverte, ou arrête la session en cours — les
+    TROIS processus. Vite compris : il ne descend PAS avec `tauri dev`, et il
+    garde le port à lui seul (T-103, constaté le 2026-08-28 — les deux pkill
+    d'avant laissaient donc le refus se répéter à l'identique).
 FIN
+  # Motif calculé plutôt que recopié : le heredoc ci-dessus n'interpole rien
+  # (et ne doit pas : il contient des accents graves), et un chemin en dur
+  # tuerait le Vite d'un autre dépôt.
+  echo >&2
+  echo "        pkill -f 'tauri dev'; pkill -f 'target/debug/iaction'; pkill -f '$PWD/node_modules/.bin/vite'" >&2
+  echo >&2
   exit 1
 fi
 
@@ -95,5 +144,22 @@ else
   npm run build:dev -w sidecar
 fi
 export IACTION_SIDECAR="$PWD/sidecar/dist-dev/index.js"
+
+# ── La ressource que seul l'empaquetage produit (T-127) ────────────────────
+# `tauri.conf.json` déclare `../build/sidecar-bundle/` en ressource Tauri, et
+# `tauri dev` compile aussi le binaire Rust : son build script vérifie que la
+# ressource existe, MÊME si rien en développement ne lit son contenu (le
+# sidecar vient de `IACTION_SIDECAR`, juste au-dessus). Ce dossier est dans
+# `.gitignore` et seul `scripts/preparer-bundle.sh` (empaquetage, 139 Mo, 40 s)
+# le construit pour de vrai : au premier `target/` reconstruit — nettoyage,
+# clone neuf —, la compilation échoue avec « resource path ... doesn't exist »
+# et l'application devient inconstructible en développement, sans qu'aucun
+# code n'ait bougé.
+#
+# On se contente donc de garantir l'EXISTENCE, pas le contenu : un dossier
+# vide avec un témoin explicatif suffit à cargo. `assurer-bundle-dev.mjs` ne
+# touche à rien si un vrai bundle est déjà là (`npm run preparer-bundle` déjà
+# passé) — voir sa documentation.
+node scripts/assurer-bundle-dev.mjs
 
 exec npm run dev "$@"

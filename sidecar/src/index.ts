@@ -25,9 +25,9 @@ import {
   handleOllamaPs,
   handleOllamaUnload,
   handleProvidersSet,
-  handleUsageCredits,
   type EngineEmitter,
 } from "./engine.js";
+import { handleUsageCredits } from "./creditsFournisseur.js";
 import {
   handleClaudeAbort,
   handleClaudeCommands,
@@ -53,7 +53,8 @@ import { handleMcpSecretDelete, handleMcpSecretSet, handleMcpSecretsList } from 
 import { handleProjectEnsureDoc } from "./projectDoc.js";
 import { handleNeutralAbort, handleNeutralPermission, handleNeutralStart } from "./neutralAgent.js";
 import { handleRouterRoute, handleRouterSet } from "./router.js";
-import { handleUsageClaudeHistory, handleUsageStats } from "./usageStats.js";
+import { handleUsageStats } from "./usageStats.js";
+import { handleUsageClaudeHistory } from "./fenetresAbonnement.js";
 import {
   handleAgentsDelete,
   handleAgentsList,

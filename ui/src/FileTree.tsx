@@ -10,6 +10,8 @@
  * « Ouvrir dans l'éditeur » (identique au clic gauche) et, si `onPinKnowledge`
  * est fourni, « Épingler comme connaissance » (panneau « Connaissances », voir
  * AgentPage.tsx — fichiers seulement, jamais proposé sur un répertoire).
+ * Clic droit sur un DOSSIER (T-119) : « Ouvrir le dossier » — même ouvreur
+ * système, qui pour un répertoire est le gestionnaire de fichiers.
  * Clic droit sur un FICHIER OU un DOSSIER : « Renommer » / « Supprimer »
  * (Lot Historique/Édition — voir fsRename/fsDelete dans fsClient.ts) :
  *  - Renommer : édition inline dans la ligne de l'arbre (le nom devient un
@@ -675,6 +677,19 @@ export function FileTree({
           role="menu"
           tabIndex={-1}
         >
+          {contextMenu.isDir && (
+            <button
+              type="button"
+              className="file-tree__context-menu-item"
+              role="menuitem"
+              // Même voie que pour un fichier : l'ouvreur du système, qui pour
+              // un répertoire est le gestionnaire de fichiers. Le registre
+              // d'applications ne s'applique pas (il est indexé par extension).
+              onClick={() => handleOpenExternal(contextMenu.path, null)}
+            >
+              Ouvrir le dossier
+            </button>
+          )}
           {!contextMenu.isDir && matchingApp && (
             <button
               type="button"

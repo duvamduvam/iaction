@@ -47,11 +47,12 @@ const SERIES: Serie[] = [
   { key: "tours", label: "Tours", color: "#ff0069", valeur: (b) => b.tours, format: String },
   {
     key: "contexte",
-    label: "Contexte moyen",
+    label: "Contexte médian",
     color: "#aa6900",
-    // `null` quand aucun token n'a été compté : une MOYENNE absente n'est pas
-    // une moyenne nulle — la courbe s'interrompt au lieu de plonger à zéro.
-    valeur: (b) => b.avgPromptTokens,
+    // `null` quand aucun contexte n'a été relevé sur la tranche : une médiane
+    // absente n'est pas une médiane nulle — la courbe s'interrompt au lieu de
+    // plonger à zéro (T-067).
+    valeur: (b) => b.contexteMedian,
     format: (v) => formatTokens(Math.round(v)),
   },
   {

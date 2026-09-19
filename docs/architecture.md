@@ -361,7 +361,109 @@ Deux règles de fonctionnement :
 
 ---
 
-## 9. Fragilités connues
+## 9. Lancer l'application, et ce que le lanceur protège
+
+**Le lanceur de développement est aussi le lanceur quotidien** : l'icône du
+bureau appelle `scripts/dev.sh`. L'application utilisée tous les jours est donc
+un build de DÉVELOPPEMENT — Rust non optimisé, React en mode dev, Vite en
+surveillance. C'est ce qui rend le rechargement à chaud possible pendant une
+séance de travail ; c'est aussi une piste à ne jamais oublier quand une lenteur
+apparaît ailleurs qu'aux endroits déjà mesurés.
+
+```bash
+scripts/dev.sh                 # lancement normal (chemin absolu accepté : le script se replace)
+IACTION_CPU=1 scripts/dev.sh   # repli en rendu logiciel, si la fenêtre reste blanche
+```
+
+Le script fait six choses. Aucune n'est décorative : chacune a été posée après
+une panne, et les retirer les fait revenir.
+
+| # | Ce qu'il fait | La panne qui l'a fait écrire |
+|---|---|---|
+| 1 | Retire les variables injectées par le Snap de VSCode (`LD_LIBRARY_PATH`, `GTK_PATH`…) | Sans ça, le binaire Tauri meurt au démarrage : « symbol lookup error … GLIBC_PRIVATE » |
+| 2 | Choisit le mode de rendu de la webview | T-095 — voir ci-dessous |
+| 3 | **Refuse de démarrer** si une session écoute déjà sur le port 1420 | T-028 — sinon la fenêtre s'ouvre, `tauri dev` avorte, et il reste une fenêtre ORPHELINE qui n'en a pas l'air |
+| 4 | Désigne `docs/tickets.md` comme carnet de tickets | En développement on veut le backlog versionné, pas celui du dossier de configuration |
+| 5 | **Compile le sidecar** dans `dist-dev/`, et seulement si nécessaire | T-020 — voir ci-dessous |
+| 6 | Passe la main à `tauri dev` | — |
+
+### Le rendu : GPU par défaut depuis le 2026-08-30 (T-095)
+
+Le 2026-07-31, une fenêtre blanche au lancement (bug webkit2gtk + dmabuf, pilotes
+NVIDIA) a fait poser un repli : tout rastériser au processeur. Le repli
+marchait, il est resté — et **il se payait à chaque caractère tapé**. Sur un 4K,
+un repeint plein cadre au processeur coûte ~300 ms. Quatre enquêtes ont cherché
+la cause dans l'application sans jamais atteindre ce plancher, et le repli a
+survécu 24 jours à la mise à jour qui l'avait rendu inutile.
+
+| Mode | Latence médiane touche → image |
+|---|---:|
+| Rendu logiciel | 2 784 ms |
+| **Rendu GPU** | **64 ms** |
+
+Le défaut a donc changé de camp. `IACTION_CPU=1` rebascule sur le rendu
+logiciel le jour où un pilote régresse.
+
+### Les trois sorties du sidecar, et pourquoi elles sont trois
+
+`tauri dev` ne construit QUE l'interface. Sans l'étape 5, l'application
+tournerait sur un sidecar arrivé par les ressources Tauri — le 2026-08-10, elle
+a tourné trois jours sur du code compilé avant les correctifs, qui n'avaient
+donc jamais été exécutés.
+
+| Dossier | Qui l'écrit | Qui l'exécute |
+|---|---|---|
+| `dist/` | `scripts/preparer-bundle.sh` | l'application empaquetée |
+| `dist-verif/` | `npm run sidecar:test` | les tests de protocole |
+| `dist-dev/` | `scripts/dev.sh` | **la session lancée** |
+
+**Aucune commande courante n'écrit sous les pieds d'une autre.** Réécrire le
+dossier qu'une application est en train d'exécuter tue son sidecar — constaté
+quatre fois les 7 et 8 août avant cette séparation.
+
+### La vérification ne tourne pas pendant une session (T-111)
+
+`npm run verif` commence par sonder le port 1420 et **refuse** si une session
+est ouverte : le 2026-08-30, l'application a disparu pendant une vérification,
+sans qu'on puisse établir laquelle des deux avait tort. Le refus arrive en tête
+de chaîne, avant les trois minutes de tests.
+
+```bash
+IACTION_VERIF_FORCE=1 npm run verif   # passe outre, en le disant
+```
+
+Supprimer la concurrence plutôt que l'annoncer aurait demandé un répertoire de
+compilation séparé : `src-tauri/target` pèse 27 Go, le remède coûtait plus que
+le mal.
+
+### Une session ne peut plus disparaître sans trace (T-112)
+
+Chaque session pose un témoin (`logs/session-<pid>.json`) à l'ouverture et le
+retire à la fermeture propre. Un témoin qui survit est la preuve d'un arrêt
+brutal, et il est trouvé au démarrage SUIVANT : on ne peut pas journaliser sa
+propre mort subite, on peut constater sa propre résurrection. Trois lignes
+possibles dans `coquille.jsonl` : `session ouverte`, `session fermée`,
+`session précédente arrêtée sans trace`.
+
+### Mesurer la frappe plutôt que la ressentir
+
+Cinq signalements de « c'est lent quand je tape » ont été traités sans jamais
+mesurer — d'où quatre corrections sur la mauvaise cause. L'instrument existe
+maintenant, éteint par défaut : **Ctrl+Maj+M** l'allume, et son afficheur porte
+trois boutons (palier, bilan, fermer) parce que trois raccourcis clavier
+successifs ont été avalés par le bureau sans que rien ne le signale.
+
+Il sépare les deux moitiés du trajet, qui n'accusent pas le même coupable :
+**attente** (touche → JavaScript : le fil principal est occupé, donc
+l'application) et **rendu** (JavaScript → image peinte : la mise en page et la
+rastérisation, donc le CSS ou le moteur). Le mode « nu » retire les décorations
+par paliers, à chaud, pour trancher entre les deux sans recompiler. Le bilan
+part au journal : une mesure qui ne laisse pas de trace est une mesure à
+refaire.
+
+---
+
+## 10. Fragilités connues
 
 Listées ici parce qu'un schéma qui ne montre que ce qui va bien ne sert à rien.
 
@@ -376,7 +478,7 @@ Listées ici parce qu'un schéma qui ne montre que ce qui va bien ne sert à rie
 
 ---
 
-## 10. Pour retrouver son chemin
+## 11. Pour retrouver son chemin
 
 | Question | Fichier |
 |---|---|
@@ -384,5 +486,6 @@ Listées ici parce qu'un schéma qui ne montre que ce qui va bien ne sert à rie
 | Pourquoi cette structure, et où elle va | [`etude-structure.md`](etude-structure.md) |
 | Comment tester, et qui teste quoi | [`plan-de-test.md`](plan-de-test.md) |
 | Comment sont fabriqués les installeurs | [`empaquetage.md`](empaquetage.md) |
+| Comment l'application est lancée, et ce que ça protège | §9 ci-dessus, et [`dev.sh`](../scripts/dev.sh) |
 | Où sont les chemins de fichiers | `sidecar/src/appPaths.ts` |
 | Où est le routage des méthodes | `sidecar/src/index.ts` |

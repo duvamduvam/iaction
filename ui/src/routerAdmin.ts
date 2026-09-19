@@ -47,7 +47,9 @@ export const DEFAULT_ROUTING_TABLE: RoutingTable = {
   trivial: { engine: "claude", model: "claude-haiku-4-5" },
   simple: { engine: "claude", model: "claude-sonnet-5" },
   moyen: { engine: "claude", model: "claude-opus-5" },
-  complexe: { engine: "claude", model: "claude-fable-5" },
+  // T-078 — voir le commentaire du sidecar : le sommet est opus-5, fable se
+  // choisit à la main. Ce miroir DOIT rester identique au sidecar.
+  complexe: { engine: "claude", model: "claude-opus-5" },
 };
 
 /** R2 — SUGGESTION de préremplissage du classificateur (défaut effectif : désactivé,

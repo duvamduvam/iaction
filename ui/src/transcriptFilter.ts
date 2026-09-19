@@ -49,6 +49,16 @@ export const HALLUCINATION_PATTERNS: string[] = [
   // Résidus d'un seul mot, très fréquents sur du silence pur
   "you",
   "bye",
+  // Politesses et hésitations produites sur du blanc — relevées le 2026-09-06
+  // en mode conversation, où elles polluaient le brouillon à chaque respiration
+  // (« … Mmm. Merci. Merci. »). Perdre un « merci » réellement prononcé est
+  // sans conséquence : il ne portait aucune consigne.
+  "Merci",
+  "Merci beaucoup",
+  "Mmm",
+  "Hmm",
+  "Hum",
+  "Euh",
 ];
 
 /**

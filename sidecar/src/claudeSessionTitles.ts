@@ -10,6 +10,27 @@
 
 import { isNonEmptyString } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
+import * as journal from "./journal.js";
+
+/**
+ * Borne d'attente de `listSessions` (T-137).
+ *
+ * Le contrat de ce module est « jamais bloquant » — il n'était honoré que pour
+ * les EXCEPTIONS : `await sdk.listSessions(...)` n'avait aucune borne, donc une
+ * lenteur (et non une panne) laissait la requête sans réponse pour toujours.
+ * Constaté sur les runners Windows, où le premier import dynamique du SDK et le
+ * balayage du dossier de sessions dépassent 5 s : la construction NSIS de la
+ * 0.6.0 y est tombée. Côté application, l'effet aurait été un enrichissement
+ * cosmétique du panneau Sessions resté en suspens, invisible parce que
+ * facultatif — un échec muet de plus.
+ *
+ * Relu à CHAQUE appel (même convention que le seuil de journal) : c'est ce qui
+ * rend la borne testable sans rendre le module configurable pour de vrai.
+ */
+function delaiListSessionsMs(): number {
+  const brut = Number(process.env.IACTION_SESSION_TITLES_TIMEOUT_MS);
+  return Number.isFinite(brut) && brut > 0 ? brut : 8000;
+}
 
 // ---------------------------------------------------------------------------
 // claude.sessionTitles — titres courts déjà calculés par le CLI Claude
@@ -64,7 +85,28 @@ export async function handleClaudeSessionTitles(
     const sdk = (await import("@anthropic-ai/claude-agent-sdk")) as {
       listSessions: (options?: { dir?: string }) => Promise<SdkSessionInfoLike[]>;
     };
-    const sessions = await sdk.listSessions({ dir: cwd });
+    // La borne rend le contrat vrai pour la LENTEUR comme pour la panne. Le
+    // repli est le même dans les deux cas (`titles: []`), mais il se DIT :
+    // sans cette ligne, on ne saurait pas distinguer « aucun titre » de
+    // « le SDK n'a jamais répondu ».
+    const delai = delaiListSessionsMs();
+    let expire: NodeJS.Timeout | undefined;
+    const sessions = await Promise.race([
+      sdk.listSessions({ dir: cwd }),
+      new Promise<SdkSessionInfoLike[] | null>((resolve) => {
+        expire = setTimeout(() => resolve(null), delai);
+        // Ne pas retenir le processus pour un enrichissement cosmétique.
+        expire.unref?.();
+      }),
+    ]);
+    clearTimeout(expire);
+    if (sessions === null) {
+      journal.warn("claude", "listSessions n'a pas répondu dans le délai, titres abandonnés", {
+        fields: { cwd, delaiMs: delai },
+      });
+      emitter.done(id, { titles: [] });
+      return;
+    }
     const titles: Array<{ sessionId: string; title: string }> = [];
     for (const session of sessions) {
       if (wantedIds && !wantedIds.has(session.sessionId)) continue;

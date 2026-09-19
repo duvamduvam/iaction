@@ -9,6 +9,15 @@
  * `componentStack` qui désigne le composant fautif, puis un repli sobre est
  * affiché à la place de l'écran blanc.
  *
+ * T-116 — EXCEPTION au `fatal` systématique : sous Vite en développement
+ * (`import.meta.env.DEV`), un graphe HMR périmé après une édition démonte
+ * l'arbre avec un message d'une famille reconnaissable (`estArtefactHmr`,
+ * module à part car FONCTION PURE) — la version empaquetée ne peut pas
+ * produire ces messages. Dans ce cas précis, le niveau descend en `warn` et
+ * l'entrée porte `artefactHmr: true` pour rester filtrable, mais la ligne
+ * n'est jamais tue et garde sa pile. Un crash de rendu qui n'est pas de cette
+ * famille, ou qui survient hors développement, reste `fatal`.
+ *
  * Un ErrorBoundary NE PEUT être qu'un composant de classe : React n'expose pas
  * d'équivalent en hooks (toujours vrai en React 19). Il est monté dans
  * `main.tsx`, AUTOUR de `<App />`, donc au-dessus de tout ce que l'application
@@ -16,7 +25,8 @@
  * `result-line--error`, `empty-hint`, `btn`) : aucune règle CSS ajoutée.
  */
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { logUi } from "./journal";
+import { estArtefactHmr } from "./artefactHmr";
+import { logUi, type LogLevel } from "./journal";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -48,9 +58,16 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
     const stack = componentStack
       ? `${pile}\n--- componentStack ---${componentStack}`
       : pile || null;
-    // `fatal` : l'arbre React est démonté, l'application n'est plus utilisable
-    // tant qu'elle n'a pas été rechargée.
-    logUi("fatal", "ui", `rendu React interrompu : ${message}`, { stack });
+    // `fatal` par défaut : l'arbre React est démonté, l'application n'est
+    // plus utilisable tant qu'elle n'a pas été rechargée. EXCEPTION T-116:
+    // sous Vite en développement, un message de la famille HMR descend en
+    // `warn` et porte `artefactHmr: true` — voir l'en-tête du fichier.
+    const artefactHmr = import.meta.env.DEV && estArtefactHmr(message);
+    const niveau: LogLevel = artefactHmr ? "warn" : "fatal";
+    logUi(niveau, "ui", `rendu React interrompu : ${message}`, {
+      stack,
+      ...(artefactHmr ? { fields: { artefactHmr: true } } : {}),
+    });
   }
 
   private recharger = (): void => {

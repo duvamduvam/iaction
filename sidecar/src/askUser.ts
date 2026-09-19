@@ -16,6 +16,12 @@
  * réutilise volontairement ce canal : la modale à choix cliquables de
  * `AgentPage` le rend déjà (voir docs/protocol.md, § Questions interactives).
  *
+ * `context` (T-089, 2026-08-27) : les questions portaient sur des objets que
+ * l'utilisateur n'avait pas sous les yeux — et la modale, bloquante, l'empêchait
+ * justement d'aller les regarder. Le champ oblige l'agent à joindre ce qu'il a
+ * déjà mesuré. La modale est devenue non bloquante en même temps (voir
+ * ui/src/PermissionModal.tsx) : les deux moitiés du même constat.
+ *
  * Jamais exposé en mode chat pur ni aux tours headless (orchestration,
  * planificateur) : sans humain devant l'écran, la question ne serait jamais
  * répondue et le tour resterait bloqué jusqu'au garde-fou. C'est le paramètre
@@ -46,6 +52,11 @@ const TOOL_DESCRIPTION = [
   "1 à 4 questions par appel, 2 à 4 options par question ; l'utilisateur peut",
   "toujours ajouter une réponse libre.",
   "N'appelle pas cet outil pour ce que tu peux vérifier toi-même dans le projet.",
+  "RÈGLE : si la question porte sur quelque chose que l'utilisateur n'a pas sous",
+  "les yeux (un dossier, un fichier, un écart entre deux versions, un chiffre),",
+  "renseigne `context` avec les faits que TU as déjà vérifiés — listing, tailles,",
+  "dates, extrait. Sans ça il doit trancher sur ce qu'il n'a pas vu.",
+  "`context` porte ce que tu as mesuré, jamais tes suppositions.",
 ].join(" ");
 
 /**
@@ -75,6 +86,15 @@ export async function buildAskUserMcpServer(ask: AskUserBridge): Promise<unknown
                 .boolean()
                 .optional()
                 .describe("true si plusieurs options peuvent être retenues ensemble (défaut false)"),
+              context: z
+                .string()
+                .optional()
+                .describe(
+                  "Faits VÉRIFIÉS qui permettent de trancher sans aller voir ailleurs : listing " +
+                    "de fichiers avec tailles et dates, extrait, chiffres relevés. Affiché tel quel " +
+                    "au-dessus des choix, en préformaté (les sauts de ligne sont conservés). " +
+                    "Obligatoire dès que la question porte sur ce que l'utilisateur n'a pas sous les yeux.",
+                ),
               options: z
                 .array(
                   z.object({

@@ -121,95 +121,12 @@ export async function resoudreRouteMontante(
   return { ...garde, pendingAffinity: !garde.debord };
 }
 
-/**
- * R2/R7 §C — stratégie DESCENDANTE de la page Projets : PAS de classification
- * du prompt. Sans affinité (premier tour d'une session Auto), le tour part au
- * SOMMET de la table — tier `complexe` IMPOSÉ à `router.route` (mécanique
- * R3), avec le `cwd` du projet pour que la surcharge `.iaction/routage.yaml`
- * s'applique. Avec affinité, la session RESTE au sommet, AUCUNE descente
- * automatique (descendre = choix manuel du sélecteur) — le plancher montant
- * du Chat (§B) ne s'applique pas ici. Pour une cible abonnement, l'état de
- * débord est re-vérifié à CHAQUE tour via `router.route` à tier IMPOSÉ
- * (aucune re-classification) ; un tour débordé/bloqué ne fixe JAMAIS
- * l'affinité. Cible de débord non déclarée : le tour reste sur l'abonnement,
- * bandeau dédié (`debordUnconfigured`).
+/*
+ * T-080 — la stratégie DESCENDANTE a été supprimée avec le mode Auto des
+ * Projets : elle imposait le tier `complexe` sans lire le prompt et gelait la
+ * cible pour la session, donc elle n'arbitrait rien (T-079). Les Projets
+ * partent désormais sur un modèle fixe réglé dans Configuration.
+ *
+ * Ce module garde la stratégie MONTANTE, qui elle classe réellement le prompt
+ * et sert au Chat — ainsi que les gardes et le libellé de débord, partagés.
  */
-export async function resoudreRouteDescendante(
-  affinite: AffiniteSession | null,
-  texte: string,
-  /** Racine du projet — `""` = pas de surcharge `.iaction/routage.yaml`. */
-  cwd: string,
-  deps: DepsRoutageAuto,
-): Promise<RouteResolue> {
-  if (affinite) {
-    const affinityReasons = affinite.reasons ?? ["affinité de session (cible mémorisée au premier envoi)"];
-    // R3 — cible abonnement : re-vérification du débord à CHAQUE tour, tier
-    // IMPOSÉ (aucune re-classification).
-    if (affinite.target.engine === "claude") {
-      try {
-        const check = await deps.router({ text: texte, tier: affinite.tier, ...(cwd ? { cwd } : {}) });
-        if (check.debord) {
-          // Cible de débord jamais validée jusqu'ici : si son fournisseur
-          // n'est PAS déclaré, on n'envoie pas vers un provider inconnu —
-          // le tour reste sur la cible abonnement d'origine, sans débord.
-          if (check.debord.active && !deps.estUtilisable(check.target)) {
-            return {
-              tier: affinite.tier,
-              target: affinite.target,
-              reasons: [...affinityReasons, "cible de débord non configurée : envoi sur l'abonnement"],
-              debord: null,
-              pendingAffinity: false,
-              debordUnconfigured: true,
-            };
-          }
-          return {
-            tier: affinite.tier,
-            target: check.target,
-            reasons: [...affinityReasons, libelleDebord(check.debord)],
-            debord: check.debord,
-            pendingAffinity: false,
-            debordUnconfigured: false,
-          };
-        }
-      } catch {
-        // Sidecar antérieur à R3 ou injoignable : affinité telle quelle.
-      }
-    }
-    return {
-      tier: affinite.tier,
-      target: affinite.target,
-      reasons: affinityReasons,
-      debord: null,
-      pendingAffinity: false,
-      debordUnconfigured: false,
-    };
-  }
-
-  // R7 §C — premier tour d'une session Auto : tier `complexe` IMPOSÉ
-  // (aucune classification du prompt), le sommet de la table.
-  const routed = await deps.router({ text: texte, tier: "complexe", ...(cwd ? { cwd } : {}) });
-
-  // Gardes R3 communes aux deux stratégies (jamais vers un fournisseur non
-  // déclaré ; repli en remontant la table) : voir gardesRoutage.ts.
-  const garde = await appliquerGardesRoutage(
-    {
-      tier: routed.tier,
-      target: routed.target,
-      debord: routed.debord,
-      // Raison lisible du badge : la mention protocolaire du tier imposé est
-      // remplacée par l'explication de la stratégie.
-      reasons: [
-        "stratégie descendante : premier tour au sommet de la table (complexe)",
-        ...routed.reasons.filter((r) => r !== "tier imposé par l'appelant"),
-      ],
-    },
-    { estUtilisable: deps.estUtilisable, lireTable: deps.lireTable },
-  );
-
-  // R3 — un tour débordé/bloqué ne mémorise PAS d'affinité : la conversation
-  // re-route normalement dès que la fenêtre d'abonnement se rouvre. Un tour
-  // normal, lui, ne la mémorise pas ICI mais au premier signe de succès
-  // (`pendingAffinity`) — un tour routé qui échoue (cible éteinte…) ne doit
-  // jamais verrouiller la conversation dessus.
-  return { ...garde, pendingAffinity: !garde.debord };
-}

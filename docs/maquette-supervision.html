@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supervision IAction — maquette</title>
+<!--
+  Maquette de la refonte de la page Supervision — voir docs/etude-supervision.md §8.
+  Fichier autonome : aucune ressource externe, s'ouvre directement dans un navigateur.
+  Tous les chiffres affichés sont RÉELS : events.jsonl (1083 tours) et
+  claude-windows.jsonl (17 917 instantanés), 19 juillet → 17 août 2026.
+  Les tuiles en pointillé attendent le socle T-066.
+-->
+<style>
+  *,*::before,*::after { box-sizing:border-box; }
+  .viz-root {
+    color-scheme: dark;
+    --bg-0:#0d0a1f; --surface-1:#150f2b; --surface-2:#221946; --inset:#0a0718;
+    --text-primary:#e6ecf5; --text-secondary:#9a93b8; --text-muted:#6c6493;
+    --hairline:#2a2150;
+    --ok:#00f5d4; --warn:#fbbf24; --err:#ff3131;
+    /* rampe ORDINALE des étages — une teinte, monotone (validée) */
+    --et-1:#0d4fb0; --et-2:#1478ff; --et-3:#5ba0ff; --et-4:#8fc0ff;
+    /* catégorielles de l'app, inchangées (validées contre #150f2b) */
+    --s1:#1478ff; --s2:#ff0069; --s3:#aa6900; --s4:#c800b9;
+  }
+  body { margin:0; background:#0d0a1f; }
+  .viz-root {
+    background:var(--bg-0); color:var(--text-primary);
+    font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:15px; line-height:1.55; padding:28px 22px 72px; max-width:1180px; margin:0 auto;
+  }
+  h1 { font-size:26px; margin:0 0 4px; letter-spacing:.01em; }
+  h2 { font-size:13px; letter-spacing:.13em; text-transform:uppercase;
+       color:var(--text-secondary); margin:0 0 3px; font-weight:600; }
+  /* Identité de zone — trio validé toutes paires contre la surface des
+     panneaux (#150f2b) : pire paire ΔE 12,1 deutan / 9,2 tritan, vision
+     normale 29,0, contraste ≥ 3:1. La couleur ne porte jamais l'information
+     seule : chaque zone garde son intertitre écrit. */
+  .zone { margin:40px 0 0; --zone-accent:var(--s1); }
+  .zone--sobriete   { --zone-accent:#1478ff; }
+  .zone--historique { --zone-accent:#aa6900; }
+  .zone--abonnement { --zone-accent:#c800b9; }
+  .zone > h2 { color:var(--zone-accent); }
+  .zone__q { border-left:3px solid var(--zone-accent); padding-left:12px; }
+  .zone .panel { border-left:2px solid var(--zone-accent); }
+  .zone__q { font-size:20px; margin:0 0 2px; font-weight:600; }
+  .zone__when { color:var(--text-muted); font-size:13px; margin:0 0 16px; padding-left:15px; }
+  .panel { background:var(--surface-1); border:1px solid var(--hairline);
+           border-radius:12px; padding:18px 20px; }
+  .grid { display:grid; gap:14px; }
+  .g3 { grid-template-columns:repeat(auto-fit,minmax(228px,1fr)); }
+  .g2 { grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); }
+  .mono { font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+  .hero { font-size:52px; line-height:1.05; font-weight:600; letter-spacing:-.02em; }
+  .hero small { font-size:21px; color:var(--text-secondary); font-weight:400; }
+  .kpi { font-size:32px; font-weight:600; letter-spacing:-.01em; }
+  .label { font-size:12px; letter-spacing:.1em; text-transform:uppercase;
+           color:var(--text-secondary); display:flex; align-items:center; gap:7px; }
+  .dot { width:9px; height:9px; border-radius:50%; flex:none; display:inline-block; }
+  .sub { color:var(--text-secondary); font-size:13px; margin-top:6px; }
+  .note { color:var(--text-muted); font-size:13px; }
+  .meter { height:9px; border-radius:5px; background:var(--inset); overflow:hidden;
+           margin-top:10px; }
+  .meter > i { display:block; height:100%; border-radius:5px; }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
+  th,td { text-align:left; padding:7px 10px 7px 0; border-bottom:1px solid var(--hairline); }
+  th { color:var(--text-secondary); font-weight:600; font-size:12px;
+       letter-spacing:.06em; text-transform:uppercase; }
+  td.num,th.num { text-align:right; padding-right:0; }
+  tr:last-child td { border-bottom:0; }
+  .flag { display:flex; gap:11px; align-items:flex-start; padding:11px 13px;
+          border-radius:9px; background:var(--inset); border:1px solid var(--hairline);
+          margin-bottom:9px; }
+  .flag:last-child { margin-bottom:0; }
+  .flag .ic { font-size:15px; line-height:1.4; flex:none; }
+  .pend { border-style:dashed; }
+  .pend .label,.pend .kpi,.pend .hero { color:var(--text-muted); }
+  .tag { display:inline-block; font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+         padding:2px 8px; border-radius:20px; border:1px solid var(--hairline);
+         color:var(--text-secondary); margin-right:5px; }
+  details { margin-top:12px; }
+  summary { cursor:pointer; color:var(--text-secondary); font-size:13.5px; }
+  .scroll { overflow-x:auto; }
+  .stack { display:flex; width:100%; height:34px; border-radius:6px; overflow:hidden;
+           background:var(--inset); gap:2px; }
+  .stack > i { display:block; height:100%; }
+  .legend { display:flex; flex-wrap:wrap; gap:6px 20px; margin-top:11px; font-size:13px;
+            color:var(--text-secondary); }
+  .legend span { display:flex; align-items:center; gap:7px; }
+  .bars { display:flex; align-items:flex-end; gap:5px; height:96px; margin-top:10px; }
+  .bars > div { flex:1; display:flex; flex-direction:column; justify-content:flex-end;
+                height:100%; min-width:0; }
+  .bars i { display:block; background:var(--s1); border-radius:3px 3px 0 0; min-height:2px; }
+  .bars em { font-style:normal; font-size:10px; color:var(--text-muted);
+             text-align:center; margin-top:5px; display:block;
+             overflow:hidden; text-overflow:ellipsis; }
+  .hbar { display:flex; align-items:center; gap:11px; margin-bottom:9px; font-size:13.5px; }
+  .hbar > span:first-child { width:118px; flex:none; }
+  .hbar > .track { flex:1; height:11px; background:var(--inset); border-radius:6px; }
+  .hbar > .track > i { display:block; height:100%; background:var(--s1); border-radius:6px; }
+  .hbar > .val { width:96px; flex:none; text-align:right; }
+  hr { border:0; border-top:1px solid var(--hairline); margin:36px 0 0; }
+  .banner { background:var(--surface-2); border:1px solid var(--hairline);
+            border-radius:10px; padding:13px 16px; font-size:13.5px;
+            color:var(--text-secondary); margin:18px 0 0; }
+  .banner b { color:var(--text-primary); }
+</style>
+</head>
+<body>
+<div class="viz-root">
+
+  <h1>Supervision — refonte proposée</h1>
+  <p class="note" style="margin:0">
+    Maquette du 17 août 2026 · <span class="mono">docs/etude-supervision.md</span> §8.
+    <b style="color:var(--text-secondary)">Tous les chiffres affichés sont réels</b>, calculés sur
+    <span class="mono">events.jsonl</span> (1083 tours, 19 juillet → 17 août) et
+    <span class="mono">claude-windows.jsonl</span> (17 917 instantanés).
+    Les tuiles en pointillé attendent le socle T-066.
+  </p>
+
+  <div class="banner">
+    <b>Le principe :</b> organiser par <b>question</b>, pas par source de données.
+    Trois zones, trois moments, trois budgets d'attention. La page actuelle aligne six blocs
+    de poids égal qu'il faut déjà savoir lire.
+  </div>
+
+  <!-- ═════════════════ ZONE 1 ═════════════════ -->
+  <div class="zone zone--sobriete">
+    <h2>Zone 1</h2>
+    <p class="zone__q">Sobriété</p>
+    <p class="zone__when">Une fois par semaine · 30 secondes · zone entièrement neuve</p>
+
+    <!-- pyramide -->
+    <div class="panel">
+      <div class="label">Pyramide de délégation — pourquoi elle doit être pondérée par le coût</div>
+
+      <p class="sub" style="margin:15px 0 5px">Comptée en <b>tokens</b>, comme prévu initialement</p>
+      <div class="stack" role="img"
+           aria-label="En tokens : gros 60,9 %, petit payant 1,3 %, mécanique 1,6 %, local et gratuit 36,2 %">
+        <i style="width:60.9%;background:var(--et-1)"></i>
+        <i style="width:1.3%;background:var(--et-2)"></i>
+        <i style="width:1.6%;background:var(--et-3)"></i>
+        <i style="width:36.2%;background:var(--et-4)"></i>
+      </div>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--et-1)"></i>Gros <b class="mono">60,9 %</b></span>
+        <span><i class="dot" style="background:var(--et-2)"></i>Petit payant <b class="mono">1,3 %</b></span>
+        <span><i class="dot" style="background:var(--et-3)"></i>Mécanique <b class="mono">1,6 %</b></span>
+        <span><i class="dot" style="background:var(--et-4)"></i>Local et gratuit <b class="mono">36,2 %</b></span>
+      </div>
+
+      <p class="sub" style="margin:24px 0 5px">Comptée en <b>coût équivalent API</b> — les mêmes tours</p>
+      <div class="stack" role="img" aria-label="En coût : gros 99,4 %, tout le reste 0,6 %">
+        <i style="width:99.4%;background:var(--et-1)"></i>
+        <i style="width:0.4%;background:var(--et-2)"></i>
+        <i style="width:0.2%;background:var(--et-3)"></i>
+      </div>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--et-1)"></i>Gros <b class="mono">99,4 % · 404,36 $</b></span>
+        <span><i class="dot" style="background:var(--et-2)"></i>Petit payant <b class="mono">0,4 % · 1,68 $</b></span>
+        <span><i class="dot" style="background:var(--et-3)"></i>Mécanique <b class="mono">0,2 % · 0,63 $</b></span>
+        <span><i class="dot" style="background:var(--et-4)"></i>Local et gratuit <b class="mono">0 $</b></span>
+      </div>
+
+      <p class="note" style="margin:16px 0 0">
+        Un token de haiku et un token d'opus diffèrent d'un facteur 15 à 75. La version en
+        tokens annonce « 61 / 39 » ; la version en coût annonce « 99,4 / 0,6 ». Le tiers de
+        volume gratuit pèse exactement zéro dans la facture.
+        <b style="color:var(--text-secondary)">C'est la seconde barre qui doit être affichée.</b>
+      </p>
+    </div>
+
+    <!-- fiabilité (B) + drapeaux -->
+    <div class="grid g2" style="margin-top:14px">
+      <div class="panel">
+        <div class="label">Fiabilité — le contrepoids du coût</div>
+        <table style="margin-top:12px">
+          <thead><tr><th>Étage</th><th class="num">Part du coût</th><th class="num">Taux d'erreur</th></tr></thead>
+          <tbody>
+            <tr><td><i class="dot" style="background:var(--et-1);margin-right:8px"></i>Gros</td>
+                <td class="num mono">99,4 %</td><td class="num mono" style="color:var(--warn)">3,6 %</td></tr>
+            <tr><td><i class="dot" style="background:var(--et-2);margin-right:8px"></i>Petit payant</td>
+                <td class="num mono">0,4 %</td><td class="num mono" style="color:var(--ok)">0,0 %</td></tr>
+            <tr><td><i class="dot" style="background:var(--et-3);margin-right:8px"></i>Mécanique</td>
+                <td class="num mono">0,2 %</td><td class="num mono">2,8 %</td></tr>
+          </tbody>
+        </table>
+        <div class="grid g3" style="margin-top:15px">
+          <div><div class="kpi mono">3,5 %</div><p class="sub">Tours en erreur — 38</p></div>
+          <div><div class="kpi mono">0,5 %</div><p class="sub">Abandons — 5</p></div>
+          <div><div class="kpi mono">0</div><p class="sub">Plafond de tours atteint</p></div>
+        </div>
+        <p class="note" style="margin:13px 0 0">
+          Jamais un coût sans qualité en regard. Ici elle tranche : descendre d'étage
+          n'a rien coûté en fiabilité — c'est l'inverse.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="label">Causes d'erreur</div>
+        <div style="margin-top:14px">
+          <div class="hbar"><span>error_during_<wbr>execution</span>
+            <span class="track"><i style="width:100%"></i></span><span class="val mono">18</span></div>
+          <div class="hbar"><span style="color:var(--err)">(aucun message)</span>
+            <span class="track"><i style="width:94%;background:var(--err)"></i></span><span class="val mono">17</span></div>
+          <div class="hbar"><span>HTTP 400</span>
+            <span class="track"><i style="width:11%"></i></span><span class="val mono">2</span></div>
+          <div class="hbar"><span>HTTP 401</span>
+            <span class="track"><i style="width:6%"></i></span><span class="val mono">1</span></div>
+        </div>
+        <div class="flag" style="border-color:var(--err);margin-top:14px">
+          <span class="ic">🚨</span>
+          <span><b>17 erreurs sur 38 n'ont aucune cause enregistrée</b><br>
+          <span class="note">Un échec consigné sans sa raison reste un échec muet — ticket T-076.</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- concentration (C) -->
+    <div class="grid g2" style="margin-top:14px">
+      <div class="panel">
+        <div class="label">Concentration du coût — où agir</div>
+        <div class="hero mono" style="margin-top:10px">41,4 <small>%</small></div>
+        <p class="sub">du coût tient dans les <b>10 % de tours les plus chers</b>
+          — soit une centaine de tours. Le 1 % le plus cher en porte 11,0 %.</p>
+        <table style="margin-top:14px">
+          <tbody>
+            <tr><td>Coût médian par tour</td><td class="num mono">0,237 $</td></tr>
+            <tr><td>Moyenne</td><td class="num mono">0,394 $</td></tr>
+            <tr><td>P90</td><td class="num mono">0,886 $</td></tr>
+            <tr><td>Maximum</td><td class="num mono" style="color:var(--s2)">7,94 $</td></tr>
+          </tbody>
+        </table>
+        <p class="note" style="margin:13px 0 0">
+          Optimiser « en moyenne » ne touche que la moitié la moins chère du problème.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="label">Coût moyen <b>par tour</b>, par projet</div>
+        <div style="margin-top:14px">
+          <div class="hbar"><span>Didier</span><span class="track"><i style="width:100%"></i></span>
+            <span class="val mono">1,198 $</span></div>
+          <div class="hbar"><span>IA News</span><span class="track"><i style="width:64%"></i></span>
+            <span class="val mono">0,762 $</span></div>
+          <div class="hbar"><span>Krishnamurti</span><span class="track"><i style="width:47%"></i></span>
+            <span class="val mono">0,558 $</span></div>
+          <div class="hbar"><span>OrgaIA</span><span class="track"><i style="width:38%"></i></span>
+            <span class="val mono">0,454 $</span></div>
+          <div class="hbar"><span>Projet le + actif</span><span class="track"><i style="width:34%"></i></span>
+            <span class="val mono">0,410 $</span></div>
+          <div class="hbar"><span>Dadou zic</span><span class="track"><i style="width:33%"></i></span>
+            <span class="val mono">0,394 $</span></div>
+        </div>
+        <p class="note" style="margin:13px 0 0">
+          La carte actuelle classe en <b>total</b> et met le projet le plus actif en tête (147,15 $) — mais celui-ci
+          est cher parce qu'il est très travaillé. <b style="color:var(--text-secondary)">Didier
+          coûte 3× plus par tour.</b> Pour décider où déléguer, le classement actuel désigne
+          le mauvais projet.
+        </p>
+      </div>
+    </div>
+
+    <!-- tour le plus cher -->
+    <div class="panel" style="margin-top:14px">
+      <div class="label">Le tour le plus cher de la période</div>
+      <p style="margin:12px 0 0">
+        <span class="mono" style="font-size:24px;font-weight:600">7,94 $</span>
+        <span style="margin-left:12px"></span>
+        <span class="tag">claude-fable-5</span><span class="tag">projet Didier</span><span class="tag">17 août, 00 h 14</span>
+      </p>
+      <p class="sub">88 tokens en entrée, <b>105 783 en sortie</b> — un seul tour,
+        1,2 % du coût du mois, 33× le tour médian.</p>
+      <p class="note" style="margin:11px 0 0">
+        Pour un utilisateur seul, un forage bat six agrégats : on le regarde et on sait.
+      </p>
+    </div>
+
+    <!-- en attente -->
+    <div class="grid g3" style="margin-top:14px">
+      <div class="panel pend">
+        <div class="label">Taux de cache</div>
+        <div class="kpi mono" style="margin-top:8px">—</div>
+        <p class="sub">Jamais enregistré. Attend T-066.</p>
+        <p class="note">À afficher en drapeau à seuil, pas en jauge : le cache est géré
+          par le SDK, on ne l'actionne pas.</p>
+      </div>
+      <div class="panel pend">
+        <div class="label">Orchestrateur / délégués</div>
+        <div class="kpi mono" style="margin-top:8px">—</div>
+        <p class="sub">Aucune notion de sous-agent aujourd'hui.</p>
+        <p class="note">Relégué au tableau de détail tant qu'aucune bande cible n'existe.</p>
+      </div>
+      <div class="panel pend">
+        <div class="label">Coût par tâche réussie</div>
+        <div class="kpi mono" style="margin-top:8px">—</div>
+        <p class="sub">Retenue volontairement.</p>
+        <p class="note">Il n'existe ni « tâche » ni « réussie ». L'app serait juge et partie.</p>
+      </div>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ═════════════════ ZONE 2 ═════════════════ -->
+  <div class="zone zone--historique">
+    <h2>Zone 2</h2>
+    <p class="zone__q">Historique et répartitions</p>
+    <p class="zone__when">À la demande · exploratoire · l'existant réordonné, replié par défaut</p>
+
+    <!-- routage (F) -->
+    <div class="panel">
+      <div class="label">Routage — indispensable, et avec un dénominateur honnête</div>
+      <div class="grid g3" style="margin-top:14px">
+        <div>
+          <div class="kpi mono" style="color:var(--err)">4,3 %</div>
+          <p class="sub">des tours ont été <b>routés</b> — 47 sur 1083.
+            Les 1036 autres : modèle choisi à la main.</p>
+        </div>
+        <div>
+          <div class="kpi mono" style="color:var(--err)">3 / 897</div>
+          <p class="sub">tours routés côté <b>Projets</b>, là où se fait le travail.</p>
+        </div>
+        <div>
+          <div class="kpi mono" style="color:var(--ok)">74 %</div>
+          <p class="sub">des tours routés partent en <b>sonnet</b> — le routeur fait son
+            travail quand on le laisse parler.</p>
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <div class="hbar"><span>simple → sonnet</span><span class="track"><i style="width:100%"></i></span>
+          <span class="val mono">35</span></div>
+        <div class="hbar"><span>trivial → haiku</span><span class="track"><i style="width:23%"></i></span>
+          <span class="val mono">8</span></div>
+        <div class="hbar"><span>moyen → opus</span><span class="track"><i style="width:11%"></i></span>
+          <span class="val mono">4</span></div>
+      </div>
+      <div class="flag" style="margin-top:15px">
+        <span class="ic">📐</span>
+        <span><b>L'encart doit dire qu'il décrit 4,3 % des tours</b><br>
+        <span class="note">Aujourd'hui il laisse croire qu'il décrit le tout.</span></span>
+      </div>
+      <div class="panel pend" style="margin-top:12px;background:var(--inset)">
+        <div class="label">Signal d'escalade — petit essayé, puis refait en gros</div>
+        <div class="kpi mono" style="margin-top:6px">—</div>
+        <p class="note">La seule chose qui prouve qu'un routage est <b>bon</b> et pas
+          seulement <b>bon marché</b>. Non instrumenté.</p>
+      </div>
+    </div>
+
+    <!-- temps (E) -->
+    <div class="panel" style="margin-top:14px">
+      <div class="label">Heures d'activité — heure locale</div>
+      <div class="bars" role="img"
+           aria-label="Tours par heure locale : pic à minuit avec 140 tours, creux entre 3 h et 8 h">
+        <div><i style="height:100%;background:var(--s2)"></i><em>0</em></div>
+        <div><i style="height:59%"></i><em>1</em></div>
+        <div><i style="height:6%"></i><em>2</em></div>
+        <div><i style="height:2%"></i><em>3</em></div>
+        <div><i style="height:1%"></i><em>4</em></div>
+        <div><i style="height:1%"></i><em>5</em></div>
+        <div><i style="height:4%"></i><em>6</em></div>
+        <div><i style="height:2%"></i><em>7</em></div>
+        <div><i style="height:16%"></i><em>8</em></div>
+        <div><i style="height:57%"></i><em>9</em></div>
+        <div><i style="height:51%"></i><em>10</em></div>
+        <div><i style="height:56%"></i><em>11</em></div>
+        <div><i style="height:39%"></i><em>12</em></div>
+        <div><i style="height:21%"></i><em>13</em></div>
+        <div><i style="height:25%"></i><em>14</em></div>
+        <div><i style="height:42%"></i><em>15</em></div>
+        <div><i style="height:43%"></i><em>16</em></div>
+        <div><i style="height:39%"></i><em>17</em></div>
+        <div><i style="height:26%"></i><em>18</em></div>
+        <div><i style="height:29%"></i><em>19</em></div>
+        <div><i style="height:31%"></i><em>20</em></div>
+        <div><i style="height:19%"></i><em>21</em></div>
+        <div><i style="height:42%"></i><em>22</em></div>
+        <div><i style="height:64%"></i><em>23</em></div>
+      </div>
+      <p class="sub">Pic à <b>minuit — 140 tours</b>, puis 90 à 23 h et 83 à 1 h.
+        Le tour le plus cher du mois est parti à 00 h 14.</p>
+      <div class="grid g3" style="margin-top:15px">
+        <div class="panel pend" style="background:var(--inset)">
+          <div class="label">Durée de tour médiane / P90</div>
+          <div class="kpi mono" style="margin-top:6px">—</div>
+          <p class="note">Aucun champ de durée n'existe.</p>
+        </div>
+        <div class="panel pend" style="background:var(--inset)">
+          <div class="label">Attente cumulée par jour</div>
+          <div class="kpi mono" style="margin-top:6px">—</div>
+          <p class="note">Le vrai coût, celui qui se paie en temps.</p>
+        </div>
+        <div class="panel" style="background:var(--inset)">
+          <div class="label">Tours par conversation</div>
+          <div class="kpi mono" style="margin-top:6px">6,6</div>
+          <p class="note">1083 tours, 164 conversations.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- contexte (D) -->
+    <div class="panel pend" style="margin-top:14px">
+      <div class="label">Contexte — remplace le KPI « Contexte moyen », invalidé</div>
+      <div class="grid g3" style="margin-top:14px">
+        <div><div class="kpi mono">—</div><p class="sub">Contexte réel médian et P90</p></div>
+        <div><div class="kpi mono">—</div><p class="sub">Part des tours au-delà de 50 % de la fenêtre</p></div>
+        <div><div class="kpi mono">—</div><p class="sub">Ratio sortie / entrée, et part du coût en sortie</p></div>
+      </div>
+      <p class="note" style="margin:14px 0 0">
+        Le KPI actuel mesure <span class="mono">input_tokens</span> hors cache : sa
+        <b>médiane est de 6 tokens</b>. Il ne mesure rien. Le contexte réel est déjà calculé
+        par <span class="mono">extractContextTokens</span> puis abandonné.
+      </p>
+    </div>
+
+    <!-- historique -->
+    <div class="panel" style="margin-top:14px">
+      <div class="label">Coût équivalent par jour — 7 derniers jours</div>
+      <div class="bars" role="img"
+           aria-label="Coût équivalent du 11 au 17 août : 13,77 · 10,19 · 17,06 · 33,94 · 23,88 · 31,91 · 1,99 dollars">
+        <div><i style="height:41%"></i><em>11</em></div>
+        <div><i style="height:30%"></i><em>12</em></div>
+        <div><i style="height:50%"></i><em>13</em></div>
+        <div><i style="height:100%;background:var(--s2)"></i><em>14</em></div>
+        <div><i style="height:70%"></i><em>15</em></div>
+        <div><i style="height:94%"></i><em>16</em></div>
+        <div><i style="height:6%"></i><em>17</em></div>
+      </div>
+      <p class="sub">Pic le 14 août à <span class="mono">33,94 $</span>. Aujourd'hui n'est
+        pas comparable : <b>jour 1 sur 7</b> de la semaine S34.</p>
+      <details>
+        <summary>Voir les valeurs</summary>
+        <div class="scroll">
+          <table style="margin-top:11px">
+            <thead><tr><th>Jour</th><th class="num">Coût équivalent</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">11 août</td><td class="num mono">13,77 $</td></tr>
+              <tr><td class="mono">12 août</td><td class="num mono">10,19 $</td></tr>
+              <tr><td class="mono">13 août</td><td class="num mono">17,06 $</td></tr>
+              <tr><td class="mono">14 août</td><td class="num mono">33,94 $</td></tr>
+              <tr><td class="mono">15 août</td><td class="num mono">23,88 $</td></tr>
+              <tr><td class="mono">16 août</td><td class="num mono">31,91 $</td></tr>
+              <tr><td class="mono">17 août</td><td class="num mono">1,99 $</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+      <div class="flag" style="margin-top:14px">
+        <span class="ic">📅</span>
+        <span><b>« Jour 1 sur 7 » sur toute période en cours</b><br>
+        <span class="note">Sans quoi Semaine et Jour affichent les mêmes chiffres sans
+        explication — le constat du 17 août.</span></span>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <div class="label">Ce qui reste tel quel</div>
+      <p class="sub" style="margin-top:12px">
+        Usage par projet · Modèles les plus utilisés · courbes indexées · arithmétique de période.
+      </p>
+      <p class="note" style="margin:11px 0 0">
+        Le graphe de courbes garde son parti pris — un seul axe, chaque série indexée sur son
+        propre pic — qui est le bon pour quatre grandeurs hétérogènes. Une seule correction :
+        les étiquettes de bout de courbe se superposent quand les séries convergent vers le bas.
+      </p>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ═════════════════ ZONE 3 ═════════════════ -->
+  <div class="zone zone--abonnement">
+    <h2>Zone 3</h2>
+    <p class="zone__q">Utilisation abonnement</p>
+    <p class="zone__when">Pour vérifier · un état, pas une analyse</p>
+
+    <div class="grid g3">
+      <div class="panel">
+        <div class="label"><i class="dot" style="background:var(--ok)"></i>Fenêtre 7 jours</div>
+        <div class="hero mono" style="margin-top:8px">33 <small>%</small></div>
+        <div class="meter"><i style="width:33%;background:var(--ok)"></i></div>
+        <p class="sub">✓ Confortable — réinitialisation samedi 22 août, 20 h</p>
+      </div>
+      <div class="panel">
+        <div class="label"><i class="dot" style="background:var(--ok)"></i>Fenêtre 5 heures</div>
+        <div class="hero mono" style="margin-top:8px">23 <small>%</small></div>
+        <div class="meter"><i style="width:23%;background:var(--ok)"></i></div>
+        <p class="sub">✓ Confortable — réinitialisation à 14 h 20</p>
+      </div>
+      <div class="panel">
+        <div class="label">Rythme et projection</div>
+        <div class="hero mono" style="margin-top:8px">1,99 <small>$ éq.</small></div>
+        <p class="sub">Aujourd'hui · 5 tours. Au rythme des 7 derniers jours
+          (<span class="mono">18,96 $/j</span>), la fenêtre 7 jours tient jusqu'à
+          sa réinitialisation.</p>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <div class="label">Saturation sur 30 jours — ce que la page actuelle ne montre pas</div>
+      <div class="grid g3" style="margin-top:14px">
+        <div>
+          <div class="kpi mono" style="color:var(--err)">104 %</div>
+          <p class="sub">Pic de la fenêtre 5 h. Elle a bien été dépassée.</p>
+        </div>
+        <div>
+          <div class="kpi mono" style="color:var(--warn)">13 / 30</div>
+          <p class="sub">Jours où la fenêtre 5 h a dépassé 80 %.</p>
+        </div>
+        <div>
+          <div class="kpi mono" style="color:var(--warn)">100 %</div>
+          <p class="sub">Pic de la fenêtre 7 jours, atteint le 15 août.</p>
+        </div>
+      </div>
+      <p class="note" style="margin:14px 0 0">
+        La monnaie d'un abonnement n'est pas le dollar, c'est le quota — et il sature
+        régulièrement. La page actuelle le résume par un chiffre instantané, et affiche
+        par ailleurs « part à coût nul : 98 % ».
+      </p>
+    </div>
+  </div>
+
+  <hr>
+  <p class="note" style="margin-top:26px">
+    <b style="color:var(--text-secondary)">Palette :</b> celle de l'application, inchangée.
+    Les quatre teintes de courbe (<span class="mono">#1478ff #ff0069 #aa6900 #c800b9</span>) et
+    la rampe ordinale des étages (<span class="mono">#8fc0ff → #0d4fb0</span>) ont été repassées
+    au validateur contre la surface des panneaux <span class="mono">#150f2b</span> — bande de
+    clarté, plancher de chroma, séparation daltonisme, contraste, monotonie : tout passe. Les
+    couleurs de statut sont réservées au statut et toujours doublées d'une icône et d'un mot.
+  </p>
+</div>
+</body>
+</html>

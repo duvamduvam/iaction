@@ -6,7 +6,17 @@
  * sans dériver, et la tendance s'achève sur la période affichée.
  */
 import { describe, expect, it } from "vitest";
-import { libelleDepense, periodRange, shiftAnchor, superRange, trendRange } from "./supervisionPeriode";
+import {
+  avancementPeriode,
+  formatVariation,
+  periodePrecedenteComparable,
+  variationPct,
+  libelleDepense,
+  periodRange,
+  shiftAnchor,
+  superRange,
+  trendRange,
+} from "./supervisionPeriode";
 
 const TODAY = "2026-08-13"; // jeudi, semaine ISO 33
 
@@ -138,5 +148,102 @@ describe("sous-titre de la dépense de la période", () => {
     expect(t).toContain("2 tours sans coût remonté");
     expect(t).toContain("7 tours chez un fournisseur qui n'en remonte jamais");
     expect(t.startsWith("au moins —")).toBe(true);
+  });
+});
+
+/*
+ * T-070 — le constat d'origine : le lundi, Semaine affiche les chiffres de
+ * Jour. Le calcul est juste, le silence ne l'est pas.
+ */
+describe("avancementPeriode", () => {
+  const LUNDI = "2026-08-10";
+
+  it("le lundi, la semaine en est à son premier jour sur sept", () => {
+    expect(avancementPeriode(periodRange("week", LUNDI), LUNDI)).toEqual({ ecoules: 1, total: 7 });
+  });
+
+  it("le jeudi, quatre jours sur sept", () => {
+    expect(avancementPeriode(periodRange("week", TODAY), TODAY)).toEqual({ ecoules: 4, total: 7 });
+  });
+
+  it("le mois en cours compte ses jours réels, pas 30", () => {
+    // Août : 31 jours. Février 2026 : 28.
+    expect(avancementPeriode(periodRange("month", TODAY), TODAY)).toEqual({ ecoules: 13, total: 31 });
+    expect(avancementPeriode(periodRange("month", "2026-02-05"), "2026-02-05")).toEqual({ ecoules: 5, total: 28 });
+  });
+
+  it("une période RÉVOLUE ne montre aucun avancement", () => {
+    expect(avancementPeriode(periodRange("week", "2026-07-06"), TODAY)).toBeNull();
+    expect(avancementPeriode(periodRange("month", "2026-06-15"), TODAY)).toBeNull();
+  });
+
+  it("le dernier jour d'une période la laisse EN COURS : elle n'est pas finie", () => {
+    // Dimanche 16 août : la semaine est encore en cours, 7/7. La déclarer
+    // révolue avant sa fin ferait disparaître l'avertissement le jour où il
+    // reste le plus à venir.
+    expect(avancementPeriode(periodRange("week", TODAY), "2026-08-16")).toEqual({ ecoules: 7, total: 7 });
+  });
+
+  it("un jour seul n'a pas d'avancement à montrer", () => {
+    expect(avancementPeriode(periodRange("day", TODAY), TODAY)).toBeNull();
+  });
+});
+
+/*
+ * T-075 — une comparaison fausse est pire que pas de comparaison : comparer
+ * une semaine entamée depuis trois jours à une semaine complète produit un
+ * « −57 % » qui ne dit que « il reste quatre jours ».
+ */
+describe("periodePrecedenteComparable", () => {
+  it("tronque la période précédente à l'avancement de la courante", () => {
+    // Jeudi 13 août : la semaine en cours en est à 4 jours sur 7. La semaine
+    // précédente (lundi 3 → dimanche 9) est donc coupée au jeudi 6.
+    const r = periodePrecedenteComparable("week", TODAY, TODAY);
+    expect(r.periode).toEqual({ from: "2026-08-03", to: "2026-08-06" });
+    expect(r.tronquee).toBe(true);
+  });
+
+  it("rend la période précédente ENTIÈRE quand la courante est révolue", () => {
+    const r = periodePrecedenteComparable("week", "2026-07-13", TODAY);
+    expect(r.periode).toEqual({ from: "2026-07-06", to: "2026-07-12" });
+    expect(r.tronquee).toBe(false);
+  });
+
+  it("mois : compare au même nombre de jours du mois précédent", () => {
+    const r = periodePrecedenteComparable("month", TODAY, TODAY);
+    expect(r.periode).toEqual({ from: "2026-07-01", to: "2026-07-13" });
+    expect(r.tronquee).toBe(true);
+  });
+
+  it("jour : la veille, entière — un jour n'a pas d'avancement", () => {
+    const r = periodePrecedenteComparable("day", TODAY, TODAY);
+    expect(r.periode).toEqual({ from: "2026-08-12", to: "2026-08-12" });
+    expect(r.tronquee).toBe(false);
+  });
+
+  it("ne déborde jamais de la période précédente, même mois plus court", () => {
+    // 31 mars : mars a 31 jours, février 28. La troncature ne doit pas
+    // fabriquer un 31 février.
+    const r = periodePrecedenteComparable("month", "2026-03-31", "2026-03-31");
+    expect(r.periode.to <= "2026-02-28").toBe(true);
+  });
+});
+
+describe("variationPct / formatVariation", () => {
+  it("calcule une variation relative", () => {
+    expect(variationPct(120, 100)).toBeCloseTo(20);
+    expect(variationPct(80, 100)).toBeCloseTo(-20);
+  });
+
+  it("refuse d'inventer une variation depuis zéro", () => {
+    expect(variationPct(50, 0)).toBeNull();
+    expect(variationPct(0, 0)).toBeNull();
+  });
+
+  it("met en forme sans couleur ni flèche : le signe suffit", () => {
+    expect(formatVariation(12.4)).toBe("+12 %");
+    expect(formatVariation(-6.7)).toBe("−7 %");
+    expect(formatVariation(0.2)).toBe("=");
+    expect(formatVariation(null)).toBeNull();
   });
 });

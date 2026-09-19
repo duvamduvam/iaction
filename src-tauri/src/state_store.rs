@@ -116,11 +116,64 @@ fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|err| format!("impossible de déterminer le répertoire de données : {err}"))
 }
 
+/// Noms d'état existants commençant par `prefix`, triés, sans l'extension (T-061).
+///
+/// C'est la primitive qui permet l'état ÉCLATÉ (un fichier par projet, par
+/// conversation) : sans elle, l'interface devrait tenir un index — c'est-à-dire
+/// recréer un fichier partagé, exactement ce que l'éclatement supprime.
+fn list_state_from(app_data_dir: &Path, prefix: &str) -> Result<Vec<String>, String> {
+    validate_state_name(prefix)?;
+    let dir = state_dir(app_data_dir);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        // Répertoire absent : aucun état n'a jamais été écrit — liste vide.
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(format!("échec de la lecture de {} : {err}", dir.display())),
+    };
+    let mut noms: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter_map(|f| f.strip_suffix(".json").map(str::to_string))
+        // Un fichier au nom invalide (déposé à la main, temporaire) n'est pas
+        // un état : on l'ignore au lieu de le laisser casser un appelant.
+        .filter(|n| n.starts_with(prefix) && validate_state_name(n).is_ok())
+        .collect();
+    noms.sort();
+    Ok(noms)
+}
+
+/// Renomme un état (T-061 : mise de côté du monolithe migré, retrait non
+/// destructif d'un projet). REFUSE d'écraser une cible existante : renommer
+/// n'est jamais un moyen détourné de détruire un historique.
+fn rename_state_in(app_data_dir: &Path, name: &str, new_name: &str) -> Result<(), String> {
+    validate_state_name(name)?;
+    validate_state_name(new_name)?;
+    let from = state_file_path(app_data_dir, name);
+    let to = state_file_path(app_data_dir, new_name);
+    if to.exists() {
+        return Err(format!("cible déjà existante : {}", to.display()));
+    }
+    fs::rename(&from, &to)
+        .map_err(|err| format!("échec du renommage de {} : {err}", from.display()))
+}
+
 /// Commande Tauri : lit `{app_data_dir}/state/{name}.json` (`{}` si absent). `name` doit
 /// respecter `[a-z0-9-]{1,64}`.
 #[tauri::command]
 pub fn state_read(app: AppHandle, name: String) -> Result<Value, String> {
     read_state_from(&app_data_dir(&app)?, &name)
+}
+
+/// Commande Tauri : noms d'état commençant par `prefix`, triés (T-061).
+#[tauri::command]
+pub fn state_list(app: AppHandle, prefix: String) -> Result<Vec<String>, String> {
+    list_state_from(&app_data_dir(&app)?, &prefix)
+}
+
+/// Commande Tauri : renomme un état, sans jamais écraser la cible (T-061).
+#[tauri::command]
+pub fn state_rename(app: AppHandle, name: String, new_name: String) -> Result<(), String> {
+    rename_state_in(&app_data_dir(&app)?, &name, &new_name)
 }
 
 /// Commande Tauri : écrit `value` dans `{app_data_dir}/state/{name}.json` (atomique,
@@ -251,5 +304,56 @@ mod tests {
         let dir = TempDir::new("invalid-write");
         let err = write_state_to(dir.path(), "Invalide!", &json!({})).unwrap_err();
         assert!(err.contains("nom d'état invalide"), "message inattendu : {err}");
+    }
+
+    // ── T-061 : listage et renommage, les primitives de l'état éclaté ──────
+
+    #[test]
+    fn lister_un_repertoire_absent_rend_une_liste_vide() {
+        let tmp = TempDir::new("list-absent");
+        assert_eq!(list_state_from(tmp.path(), "projet-").expect("liste"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn lister_filtre_par_prefixe_trie_et_ignore_les_intrus() {
+        let tmp = TempDir::new("list");
+        write_state_to(tmp.path(), "projet-beta", &json!({"b": 1})).expect("écriture");
+        write_state_to(tmp.path(), "projet-alpha", &json!({"a": 1})).expect("écriture");
+        write_state_to(tmp.path(), "chat-index", &json!({})).expect("écriture");
+        // Un fichier au nom hors charte (déposé à la main) ne doit pas apparaître.
+        fs::write(tmp.path().join("state").join("Projet-MAJ.json"), b"{}").expect("intrus");
+        // Un fichier non-JSON non plus.
+        fs::write(tmp.path().join("state").join("projet-note.txt"), b"x").expect("intrus");
+
+        let noms = list_state_from(tmp.path(), "projet-").expect("liste");
+        assert_eq!(noms, vec!["projet-alpha".to_string(), "projet-beta".to_string()]);
+    }
+
+    #[test]
+    fn renommer_deplace_sans_jamais_ecraser() {
+        let tmp = TempDir::new("rename");
+        write_state_to(tmp.path(), "project-conversations", &json!({"p": 1})).expect("écriture");
+
+        rename_state_in(tmp.path(), "project-conversations", "project-conversations-avant-eclatement")
+            .expect("renommage");
+        assert_eq!(
+            read_state_from(tmp.path(), "project-conversations-avant-eclatement").expect("lecture")["p"],
+            json!(1)
+        );
+        // L'original n'existe plus : une relecture rend le défaut `{}`.
+        assert_eq!(read_state_from(tmp.path(), "project-conversations").expect("lecture"), json!({}));
+
+        // Refus d'écraser : renommer n'est pas un moyen détourné de détruire.
+        write_state_to(tmp.path(), "project-conversations", &json!({"neuf": true})).expect("écriture");
+        let err = rename_state_in(tmp.path(), "project-conversations", "project-conversations-avant-eclatement")
+            .expect_err("doit refuser");
+        assert!(err.contains("existante"), "message inattendu : {err}");
+    }
+
+    #[test]
+    fn renommer_une_source_absente_echoue_lisiblement() {
+        let tmp = TempDir::new("rename-absent");
+        let err = rename_state_in(tmp.path(), "absent", "ailleurs").expect_err("doit échouer");
+        assert!(err.contains("renommage"), "message inattendu : {err}");
     }
 }

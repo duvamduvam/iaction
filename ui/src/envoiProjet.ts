@@ -25,31 +25,32 @@
  * debordNotice.ts.
  */
 
-import { toContractAttachments, toSentAttachments, type DraftAttachment } from "./Attachments";
+import { toContractAttachments, toSentAttachments, type DraftAttachment, type SentAttachment } from "./Attachments";
 import {
   addToolBlock,
   appendToLastBlock,
   buildNeutralMessages,
   mcpServerFromToolName,
   nextId,
+  retirerPushCorrespondant,
   setToolResult,
   withAgentSystemPrompt,
   withBlocks,
+  withPushPerdu,
+  withSousAgentBattement,
   withTurnDone,
   withTurnError,
   type AgentTurn,
+  type PushEnCoursDeTour,
 } from "./agentTurns";
 import { buildKnowledgeBlock, RAG_SYSTEM_LINE, type PinnedDoc } from "./connaissances";
-import { appliquerDebordNotice } from "./debordNotice";
 import { recordModelUsage } from "./fableUsage";
 import { fsReadFile } from "./fsClient";
-import { AUTO_MODEL, type ConvRuntime, type ProjectSession } from "./modeleProjet";
+import type { ConvRuntime, ProjectSession } from "./modeleProjet";
 import type { AgentInfo } from "./orchestrationClient";
 import type { KnowledgeMode } from "./projectAdmin";
 import { cleAutoAllow, normaliserModePourMoteur } from "./permissions";
 import type { PermissionRequestItem } from "./questionsAgent";
-import { estCibleUtilisable, resoudreRouteDescendante } from "./routageAuto";
-import { mergeRoutingTable, readRoutingDebord, readRoutingTable } from "./routerAdmin";
 import {
   claudePermission,
   claudePush,
@@ -58,12 +59,10 @@ import {
   neutralStart,
   parseClaudeDone,
   parseNeutralDone,
-  routerRoute,
   type ChatAttachment,
   type ChatMessage,
   type PermissionMode,
   type RequestMeta,
-  type RouteDebord,
 } from "./sidecar";
 import { notifyUsageChanged } from "./usageBus";
 
@@ -99,7 +98,14 @@ export interface DepsEnvoiProjet {
   updateRuntime: (convId: string, updater: (prev: ConvRuntime) => ConvRuntime) => void;
   updateTurnsFor: (convId: string, updater: (prev: AgentTurn[]) => AgentTurn[]) => void;
   autoAllowToolsRef: { readonly current: ReadonlySet<string> };
-  injectorsRef: { readonly current: Map<string, (text: string) => void> };
+  injectorsRef: { readonly current: Map<string, (text: string, attachments?: SentAttachment[]) => void> };
+  /**
+   * T-087/T-064 — copie locale (RUNTIME, jamais persistée) des pièces d'un
+   * push encore sans nouvelle du tour, par conversation. Sert à les
+   * restaurer dans le tiroir si `push_perdu` prouve que ce push n'a jamais
+   * été vu par le modèle ; jetée dès que le tour se clôt (voir `finally`).
+   */
+  pushesEnCoursRef: { readonly current: Map<string, PushEnCoursDeTour<DraftAttachment>[]> };
   setPermissionQueue: (updater: (prev: PermissionRequestItem[]) => PermissionRequestItem[]) => void;
   /* ── signaux vers le reste de la page ── */
   fermerMenuSlash: () => void;
@@ -124,7 +130,6 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     cwd,
     selectedProjectId,
     selectedProjectIdRef,
-    fournisseurs,
     streaming,
     sessionId,
     turns,
@@ -142,6 +147,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     updateTurnsFor,
     autoAllowToolsRef,
     injectorsRef,
+    pushesEnCoursRef,
     setPermissionQueue,
     fermerMenuSlash,
     signalerMcpInit,
@@ -178,6 +184,33 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
       ...prev,
       { targetId, permissionId, toolName, toolInput, engine, projectId: selectedProjectId },
     ]);
+  }
+
+  /**
+   * T-087 — un push glissé dans le tour (claude.push) n'a jamais été vu par
+   * le modèle : la bulle qui affirmait « message parti » cesse de mentir
+   * (`withPushPerdu`), et `contenu` est reposé en file — le chemin d'auto-envoi
+   * de fin de tour existe déjà et le renverra tout seul. T-064 — s'il portait
+   * des pièces jointes, la copie locale gardée par `pushesEnCoursRef` permet
+   * de les restaurer dans le tiroir ; introuvable (état déjà purgé), un avis
+   * EXPLICITE le dit plutôt que de les perdre en silence.
+   */
+  function gererPushPerdu(convId: string, contenu: string, avaitPieces: boolean) {
+    updateTurnsFor(convId, (prev) => withPushPerdu(prev, contenu));
+    updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, contenu] }));
+    if (!avaitPieces) return;
+    const { trouve, reste } = retirerPushCorrespondant(pushesEnCoursRef.current.get(convId) ?? [], contenu);
+    pushesEnCoursRef.current.set(convId, reste);
+    if (trouve && trouve.attachments.length > 0) {
+      restoreAttachments(trouve.attachments);
+      setAttachmentsError(
+        "Pièces jointes restaurées : le message glissé pendant le tour n'a jamais été vu par l'agent — il repart avec elles au prochain envoi.",
+      );
+    } else {
+      setAttachmentsError(
+        "Une pièce jointe envoyée pendant le tour n'a pas été vue par l'agent et n'a pas pu être restaurée automatiquement : à rejoindre à la main.",
+      );
+    }
   }
 
   /**
@@ -248,6 +281,12 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
           updateTurnsFor(convId, (prev) => withBlocks(prev, target.id, (b) => appendToLastBlock(b, "thinking", delta))),
         onToolUse: common.onToolUse,
         onToolResult: common.onToolResult,
+        // T-102 — le seul signe de vie d'un sous-agent, qui peut occuper le
+        // tour des dizaines de minutes sans rien écrire dans le fil.
+        onSousAgentBattement: (toolUseId, outils, dernierOutil, instant) =>
+          updateTurnsFor(convId, (prev) =>
+            withSousAgentBattement(prev, toolUseId, outils, dernierOutil, instant),
+          ),
         onBackgroundTasks: (count, descriptions) =>
           updateTurnsFor(convId, (prev) =>
             prev.map((t) =>
@@ -272,6 +311,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
           ),
         onPermissionRequest: (permissionId, toolName, toolInput) =>
           gererDemandePermission("claude", handle.id, permissionId, toolName, toolInput),
+        onPushPerdu: (contenu, avaitPieces) => gererPushPerdu(convId, contenu, avaitPieces),
       },
     );
     return handle;
@@ -318,49 +358,12 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     return handle;
   }
 
-  /**
-   * R2/R7 §C — stratégie DESCENDANTE : la règle vit dans `routageAuto.ts`
-   * (avec sa jumelle montante du Chat). Ne reste ici que le branchement :
-   * affinité lue dans le runtime de la conversation, fournisseurs et table
-   * injectés.
+  /*
+   * T-080 — le bandeau de débord a disparu avec le mode Auto : le débord
+   * était produit par la résolution de route, et les Projets ne routent plus.
+   * Il reste vivant côté Chat (stratégie montante), d'où `debordNotice.ts`
+   * conservé. Un bandeau hérité d'avant la bascule s'efface au premier tour.
    */
-  async function resolveAutoRoute(convId: string, content: string) {
-    const runtime = getRuntime(convId);
-    const affinite =
-      runtime.routedTier && runtime.routedTarget
-        ? { tier: runtime.routedTier, target: runtime.routedTarget, reasons: runtime.routedReasons ?? undefined }
-        : null;
-    return resoudreRouteDescendante(affinite, content, cwd, {
-      router: routerRoute,
-      estUtilisable: (t) => estCibleUtilisable(t, fournisseurs),
-      lireTable: async () => mergeRoutingTable(await readRoutingTable()),
-    });
-  }
-
-  /**
-   * R3 — pose/efface le bandeau de débord de la conversation d'après la
-   * résolution du tour qui part (même contrat que ChatPage.tsx).
-   * `unconfigured` : cible de débord non déclarée — bandeau dédié, le tour
-   * part sur l'abonnement (voir `resolveAutoRoute`).
-   */
-  /**
-   * Bandeau de débord — les règles vivent dans `debordNotice.ts`, partagé avec
-   * l'autre page. Ne reste ici que le branchement : où écrire, et comment lire
-   * le plafond.
-   */
-  async function applyDebordNotice(
-    convId: string,
-    debord: RouteDebord | null,
-    model: string,
-    unconfigured = false,
-  ): Promise<void> {
-    await appliquerDebordNotice<ConvRuntime>((majeur) => updateRuntime(convId, majeur), {
-      debord,
-      model,
-      unconfigured,
-      lirePlafond: () => readRoutingDebord().then((d) => d?.plafondUsdMois ?? null),
-    });
-  }
 
   async function handleSend(overrideContent?: string) {
     // Conversation À LAQUELLE ce tour appartient, figée ici : tout ce qui suit
@@ -388,27 +391,45 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
       const pending = liveDraft.trim();
       if (!pending) return;
       fermerMenuSlash();
-      // Ni une demande glissée (claude.push) ni la file ne transportent de
-      // pièces jointes : on le DIT et on les garde dans le tiroir pour le
-      // prochain message complet, plutôt que de les laisser partir en fumée.
-      if (attachments.length > 0) {
-        setAttachmentsError(
-          "Pièces jointes conservées : elles ne partent pas avec un message envoyé pendant un tour — elles seront jointes à votre prochain message complet.",
-        );
-      }
       const runtime = getRuntime(convId);
       const inject = injectorsRef.current.get(convId);
       if (inject && runtime.activeEngine === "claude" && runtime.activeRequestId) {
         // Le brouillon part tout de suite : si le sidecar refuse (tour déjà
         // clos), il est reposé en file juste en dessous — jamais perdu.
         updateRuntime(convId, (r) => ({ ...r, draft: "" }));
-        const pushed = await claudePush(runtime.activeRequestId, pending).catch(() => false);
+        // T-064 — un push glissé dans un tour Claude EN COURS porte désormais
+        // ses pièces jointes (même contrat que claude.start) : elles partent
+        // MAINTENANT, comme pour un envoi normal.
+        const pushDrafts = attachments;
+        const pushAttachments = toContractAttachments(pushDrafts);
+        if (pushDrafts.length > 0) clearAttachments();
+        const pushed = await claudePush(runtime.activeRequestId, pending, pushAttachments).catch(() => false);
         if (pushed) {
-          inject(pending);
+          // T-087 — copie locale gardée pour restaurer les pièces si ce push
+          // est un jour signalé perdu (chunk `push_perdu`, voir onPushPerdu).
+          const file = pushesEnCoursRef.current.get(convId) ?? [];
+          pushesEnCoursRef.current.set(convId, [...file, { contenu: pending, attachments: pushDrafts }]);
+          inject(pending, toSentAttachments(pushDrafts));
           return;
+        }
+        // Course avec la fin du tour : le sidecar a refusé le dépôt. La file
+        // d'attente reste TEXTE SEUL (T-064 point 4) — les pièces reviennent
+        // dans le composeur plutôt que de partir en fumée.
+        if (pushDrafts.length > 0) {
+          restoreAttachments(pushDrafts);
+          setAttachmentsError(
+            "Pièces jointes conservées : le tour s'est terminé avant l'envoi — elles seront jointes à votre prochain message complet.",
+          );
         }
         updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, pending] }));
         return;
+      }
+      // Moteur neutre, ou pas de tour Claude en cours à glisser dedans : ni la
+      // file ni une demande glissée ne s'appliquent ici, texte seul.
+      if (attachments.length > 0) {
+        setAttachmentsError(
+          "Pièces jointes conservées : elles ne partent pas avec un message envoyé pendant un tour — elles seront jointes à votre prochain message complet.",
+        );
       }
       updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, pending], draft: "" }));
       return;
@@ -428,14 +449,11 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     const engineSelected: "claude" | "neutral" = engineProviderId !== null ? "neutral" : "claude";
     // R2 — tour « Auto (routeur) » : le moteur/modèle réels ne sont connus
     // qu'après résolution de la cible, juste en dessous.
-    const isAutoTurn = model === AUTO_MODEL;
-    // Pièces jointes : non supportées par `neutral.start` (voir le contrat), et
-    // le mode Auto peut y router — `attachmentsSupported`/les bascules de
-    // moteur les vident déjà en amont, mais on reste défensif ici plutôt que
-    // de risquer un envoi silencieux vers le mauvais moteur. Capturées avant
+    // Pièces jointes : non supportées par `neutral.start` (voir le contrat).
+    // Capturées avant
     // tout envoi : le brouillon n'est purgé qu'en cas de succès (voir le
     // `try`/`catch` plus bas).
-    const attachmentsAllowed = usesComposer && engineSelected === "claude" && !isAutoTurn;
+    const attachmentsAllowed = usesComposer && engineSelected === "claude";
     const contractAttachments = attachmentsAllowed ? toContractAttachments(attachments) : [];
     const sentAttachments = attachmentsAllowed ? toSentAttachments(attachments) : [];
     // Brouillons d'origine, gardés pour les reposer si le tour échoue (voir le
@@ -457,44 +475,12 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
       ...(usesComposer ? { draft: "" } : {}),
     }));
 
-    // R2/R7 — mode Auto : résolution de la cible AVANT le reste (le moteur
-    // réel conditionne l'injection de connaissances et l'historique neutre).
-    // Stratégie DESCENDANTE : premier tour au sommet de la table (`complexe`
-    // imposé), affinité de session ensuite (voir `resolveAutoRoute`).
-    let engine = engineSelected;
-    let turnProviderId: string | null = engineProviderId;
-    let turnModel = model;
-    let autoRoute: Awaited<ReturnType<typeof resolveAutoRoute>> | null = null;
-    if (isAutoTurn) {
-      try {
-        autoRoute = await resolveAutoRoute(convId, rawContent);
-      } catch (err) {
-        // Échec du routage (sidecar injoignable…) : tour marqué en erreur,
-        // comme n'importe quel échec de moteur.
-        const message = err instanceof Error ? err.message : String(err);
-        updateRuntime(convId, (r) => ({
-          ...r,
-          streaming: false,
-          turns: [
-            ...r.turns,
-            { id: nextId("u"), role: "user", content: rawContent, displayContent: rawContent, status: "done" },
-            { id: nextId("a"), role: "assistant", blocks: [], status: "error", errorMessage: message },
-          ],
-        }));
-        return;
-      }
-      engine = autoRoute.target.engine === "neutral" ? "neutral" : "claude";
-      turnProviderId = autoRoute.target.engine === "neutral" ? (autoRoute.target.providerId ?? "") : null;
-      turnModel = autoRoute.target.model;
-      // Moteur réel du tour, pour un abandon correctement routé.
-      updateRuntime(convId, (r) => ({ ...r, activeEngine: engine }));
-      // R3 — bandeau de débord : posé au tour concerné, effacé au tour normal.
-      await applyDebordNotice(convId, autoRoute.debord, autoRoute.target.model, autoRoute.debordUnconfigured);
-    } else {
-      // R3 — tour à moteur/modèle choisis MANUELLEMENT : jamais bloqué ni
-      // bandeau-isé — un éventuel bandeau de débord précédent s'efface.
-      updateRuntime(convId, (r) => (r.debordNotice ? { ...r, debordNotice: null } : r));
-    }
+    const engine = engineSelected;
+    const turnProviderId: string | null = engineProviderId;
+    const turnModel = model;
+    // Bandeau de débord hérité d'une session d'avant T-080 : effacé au premier
+    // tour — plus rien ne le repose, le laisser afficherait un état périmé.
+    updateRuntime(convId, (r) => (r.debordNotice ? { ...r, debordNotice: null } : r));
 
     // Injection des connaissances (épinglées + auto `.iaction/connaissances/`,
     // voir `injectedKnowledge`) SEULEMENT au premier tour de la session :
@@ -562,33 +548,12 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
         role: "assistant",
         blocks: [],
         status: "streaming",
-        // R2 — badge « ⚡ auto : tier → modèle » porté par le tour assistant
-        // (persisté avec lui — l'infobulle liste les raisons du classement).
-        ...(autoRoute
-          ? { routeTier: autoRoute.tier, routeModel: autoRoute.target.model, routeReasons: autoRoute.reasons }
-          : {}),
       },
     ]);
     collerEnBas();
 
-    // R2/R6 — affinité de session EN ATTENTE : mémorisée au PREMIER signe de
-    // succès du tour (premier texte reçu, ou `done` sans erreur) — un tour
-    // routé qui échoue (cible Ollama éteinte…) ne verrouille jamais la
-    // conversation sur une cible morte. R7 §C — la session reste ensuite au
-    // sommet (aucune descente automatique) : le plancher montant du Chat (§B)
-    // ne s'applique pas à ce flux.
-    let commitAffinity: (() => void) | null = null;
-    if (autoRoute?.pendingAffinity) {
-      const { tier: routedTier, target: routedTarget, reasons: routedReasons } = autoRoute;
-      commitAffinity = () => {
-        commitAffinity = null;
-        updateRuntime(convId, (r) => ({ ...r, routedTier, routedTarget, routedReasons }));
-      };
-    }
-
     const common = {
       onText: (delta: string) => {
-        commitAffinity?.();
         updateTurnsFor(convId, (prev) => withBlocks(prev, streamTarget.id, (b) => appendToLastBlock(b, "text", delta)));
       },
       onToolUse: (toolUseId: string, toolName: string, toolInput: unknown) => {
@@ -614,9 +579,6 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     // S2 — imputation du tour au projet ouvert (encart « Usage par projet »).
     if (selectedProjectId) meta.projectId = selectedProjectId;
     if (cwd) meta.projectPath = cwd;
-    if (autoRoute) meta.routeTier = autoRoute.tier;
-    // R3 — tour réellement débordé : marqué pour le plafond mensuel (events.jsonl).
-    if (autoRoute?.debord?.active) meta.routeDebord = true;
 
     const { id, done } =
       engine === "neutral"
@@ -629,7 +591,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     // nouvelle bulle assistant, et redirige le flux vers elle — la suite de la
     // réponse s'affiche donc APRÈS la demande, comme dans Claude Code.
     if (engine === "claude") {
-      injectorsRef.current.set(convId, (text: string) => {
+      injectorsRef.current.set(convId, (text: string, injectedAttachments?: SentAttachment[]) => {
         const nextAssistantId = nextId("a");
         // La bulle en cours est close (`continued`) avant la redirection :
         // plus rien ne la repassera à « done » ensuite (le `done` du tour ne
@@ -639,7 +601,16 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
           ...prev.map((t) =>
             t.id === streamTarget.id && t.status === "streaming" ? { ...t, status: "done" as const, continued: true } : t,
           ),
-          { id: nextId("u"), role: "user", content: text, displayContent: text, status: "done", injected: true },
+          {
+            id: nextId("u"),
+            role: "user",
+            content: text,
+            displayContent: text,
+            status: "done",
+            injected: true,
+            // T-064 — vignette comme pour un message normal, si le push en portait.
+            ...(injectedAttachments && injectedAttachments.length > 0 ? { attachments: injectedAttachments } : {}),
+          },
           // `suiteDeTour` : le fournisseur a déjà répondu plus haut dans ce
           // tour — cette bulle attend le prochain outil, pas le premier octet
           // (T-027, sinon l'avis « aucune donnée reçue » s'y affichait).
@@ -652,9 +623,6 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
 
     try {
       const data = await done;
-      // Tour terminé sans erreur (même sans texte reçu) : second signe de
-      // succès qui fixe l'affinité en attente (no-op si déjà fixée).
-      commitAffinity?.();
       const parsed = engine === "neutral" ? parseNeutralDone(data) : parseClaudeDone(data);
       if (engine === "claude" && parsed.sessionId) {
         updateRuntime(convId, (r) => ({ ...r, sessionId: parsed.sessionId }));
@@ -675,6 +643,9 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
       restoreAttachments(sentDrafts);
     } finally {
       injectorsRef.current.delete(convId);
+      // T-087 — ce qui reste ici a été acquitté (sinon `push_perdu` l'aurait
+      // déjà retiré via gererPushPerdu) : rien à garder au-delà du tour.
+      pushesEnCoursRef.current.delete(convId);
       // Filet de sécurité : après la fin du tour (done, erreur ou abort),
       // aucune bulle de cette conversation ne doit rester « streaming » —
       // sinon curseur clignotant à vie et bulle perdue à la persistance.

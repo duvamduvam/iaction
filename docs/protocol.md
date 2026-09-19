@@ -268,10 +268,11 @@ Les prix OpenRouter arrivent en $/token (chaînes) → convertis en $/million
   l'ordre que construit ChatPage.tsx (`toApiMessages`).
 - Requêtes concurrentes autorisées (plusieurs chats en parallèle).
 
-### Pièces jointes (`chat.send`, `claude.start`)
+### Pièces jointes (`chat.send`, `claude.start`, `claude.push`)
 
 Le DERNIER message utilisateur peut porter des pièces jointes. Paramètre
-commun aux deux moteurs :
+commun aux moteurs — `claude.push` (T-064) suit exactement le même contrat que
+`claude.start`, voir plus bas :
 
 ```json
 "attachments": [
@@ -429,8 +430,20 @@ continue sans que l'utilisateur ait à recopier quoi que ce soit.
   `claude.permission` correspondant : `allow` + `message` = réponse rendue au
   modèle, `deny` (ou message vide) = « question ignorée », l'agent poursuit en
   l'annonçant. Aucun nouveau chunk ni nouvelle méthode : côté UI une question
-  EST une modale bloquante de plus (rendu à choix cliquables dans
+  EST un panneau de permission de plus (rendu à choix cliquables dans
   `AgentPage`).
+- **Le panneau ne bloque pas l'app** (T-089, 2026-08-27). Il n'a plus de voile
+  opaque, se déplace par sa barre de titre et se **met de côté** en pastille :
+  répondre suppose souvent d'aller regarder le fil, l'arborescence ou un
+  fichier, ce que l'ancienne modale interdisait précisément. Mettre de côté ne
+  répond ni n'ignore — l'agent attend toujours, les choix déjà cochés sont
+  conservés, et la pastille reste le rappel visible de cette attente.
+- **`context` par question** (facultatif, chaîne préformatée) : les faits déjà
+  vérifiés par l'agent — listing avec tailles et dates, extrait, chiffres —
+  affichés au-dessus des choix. Contrat côté outil : dès que la question porte
+  sur ce que l'utilisateur n'a pas sous les yeux, l'agent le renseigne, et il
+  n'y met que du mesuré. Absent ou difforme, il est simplement ignoré (le
+  parseur de `questionsAgent.ts` reste défensif).
 - L'outil lui-même n'est **jamais** soumis à `canUseTool` (auto-autorisé) :
   la modale de question est déjà l'interaction humaine.
 - **La réponse peut ne correspondre à AUCUN choix proposé** : chaque question
@@ -512,6 +525,8 @@ Jamais en mode `chatOnly`.
 | `background_tasks` | `{count, descriptions[]}` | liste COMPLÈTE des tâches de fond vivantes lancées par le modèle (sous-agents en arrière-plan…) — sémantique REPLACE, `count: 0` = tout est terminé |
 | `background_wait` | `{count, descriptions[]}` | le tour du modèle est fini mais `count` tâche(s) de fond tournent encore : le sidecar garde le process ouvert, leurs rapports réveilleront l'agent (le `done` viendra du tour suivant) |
 | `compact` | `{trigger, preTokens}` | compaction de contexte terminée (`trigger` = `manual` pour « /compact », `auto` pour la compaction automatique du CLI ; `preTokens` = contexte avant compaction, `null` si inconnu) — un tour « /compact » ne produit AUCUN texte : sans ce chunk, l'UI n'a aucun signal de fin de travail |
+| `push_perdu` | `{contenu, avaitPieces}` | T-087 — un `claude.push` jamais injecté (aucun `tool_result` du fil depuis) ressort ici, **avant** le `done`/`error` de clôture : l'UI repose `contenu` en file d'attente et marque la bulle « en cours de tour » correspondante comme reportée ; `avaitPieces` commande la restauration des pièces jointes (voir § `claude.push`) |
+| `sous_agent_battement` | `{toolUseId, outils, dernierOutil, instant}` | T-102 — un sous-agent (`Task`/`Agent`, en vol) vient d'utiliser un outil de plus. `toolUseId` = id du `Task`/`Agent` LANCEUR (le même que son `tool_use` dans le fil, pas celui de l'outil intérieur) ; `outils` = compteur CUMULÉ d'outils vus chez ce sous-agent ; `dernierOutil` = nom du dernier outil observé ; `instant` = epoch ms de cette observation. Ne réintroduit PAS le détail que T-092 a retiré du fil (jamais l'entrée/sortie de l'outil) : sert uniquement à faire battre une ligne discrète sous l'appel `Agent`, pour qu'un sous-agent qui tourne plusieurs dizaines de minutes reste distinguable d'un blocage |
 
 Fin de tour : `done` avec
 `{sessionId, subtype:"success|error_…", result, usage:{inputTokens,outputTokens,cacheReadInputTokens?}, totalCostUsd, contextTokens}`
@@ -608,10 +623,23 @@ Appelle `query.interrupt()` sur le tour en cours. Le tour interrompu émet son
 `done` avec le dernier état connu (`subtype` d'interruption du SDK).
 Réponse : `done` `{aborted: bool}`.
 
+**Rappel factuel au tour suivant (T-102)** — si le tour interrompu portait
+encore au moins un sous-agent en vol (`Task`/`Agent` sans `tool_result`), le
+sidecar prépare un texte factuel (type/description du sous-agent, durée
+écoulée, qui a demandé l'arrêt — `sidecar/src/rappelInterruption.ts`) et le
+préfixe au **prochain** `claude.start` de la MÊME session (`params.sessionId`
+identique), consommé une seule fois. Motif : le `tool_result` d'un `Agent`
+annulé ne dit au modèle ni sa durée ni la cause de l'arrêt — sans ce rappel, le
+modèle comble le trou lui-même (constaté le 2026-08-29, docs/tickets.md T-102 :
+« rien ne tournait, j'attendais ta main », faux sur toute la ligne). Sans
+sous-agent en vol à l'abandon, ou sans session connue (abandon avant tout
+`system:init`), aucun rappel n'est préparé.
+
 ### `claude.push`
 
 ```json
-{"id":"req-12c","method":"claude.push","params":{"targetId":"req-10","content":"ajoute aussi le CHANGELOG"}}
+{"id":"req-12c","method":"claude.push","params":{"targetId":"req-10",
+  "content":"ajoute aussi le CHANGELOG","attachments":[]}}
 ```
 
 Glisse une demande utilisateur dans le tour **en cours** (`targetId`), sans le
@@ -622,16 +650,34 @@ Vérifié sur le vrai moteur : message poussé à T+6 s, pris en compte à T+18 
 la fin du premier `Bash`, dans le même tour (un seul `result`). C'est ce qui
 permet d'interroger l'agent pendant qu'il attend ses tâches de fond.
 
+`attachments` (T-064) : même forme et même validation que `claude.start` (§
+Pièces jointes plus haut) — `buildUserMessage` construit un message à blocs
+identique, texte ou pièces.
+
 Réponse : `done` `{pushed: bool}` — `false` (jamais une erreur) si le tour
 n'existe plus ou a été interrompu ; l'UI se rabat alors sur sa file d'attente
-plutôt que de perdre le message. `content` est **texte seul** : pas de pièces
-jointes sur un message poussé.
+plutôt que de perdre le message. **`pushed: true` est un accusé de DÉPÔT dans
+l'entrée streamée, PAS un accusé de RÉCEPTION par le modèle** (T-087) : il est
+émis dès l'empilement, avant tout retour d'outil qui déclencherait
+l'injection.
 
-Deux limites de nature, pas d'implémentation : un tour **sans aucun appel
-d'outil** n'offre aucun point d'injection (le message ne sera vu qu'au tour
-suivant) — c'est le cas du Chat en mode `chatOnly` ; et le moteur neutre
-(`neutral.start`) n'a pas d'entrée streamée à alimenter, donc pas de
-`claude.push`.
+**Limite de nature, pas d'implémentation** : un tour **sans aucun appel
+d'outil** après le push (rédaction du texte final, mode `chatOnly` sans
+outil…) n'offre aucun point d'injection — le message n'est vu par personne, ni
+maintenant ni au tour suivant. Le sidecar le sait et le dit : à la clôture du
+tour (`result` normal, abort ou silence), chaque push resté sans
+`tool_result` DU FIL depuis son envoi ressort en chunk `push_perdu`
+(`{contenu, avaitPieces}`), **avant** le `done`/`error` de la requête, plus une
+ligne de journal `warn`. Signal d'acquittement retenu : un `tool_result` du
+fil reçu après un push prouve qu'une injection a été possible depuis (voir
+`sidecar/src/poussesEnAttente.ts`) — c'est un PROXY, pas la preuve qu'il a
+injecté CE push précisément ; l'acquittement par écho direct du message
+injecté est plus précis mais reporté (mesure sur le vrai moteur non faite,
+voir docs/tickets.md T-087). Côté UI : `contenu` est reposé dans la file
+d'attente du tour suivant, et la bulle « en cours de tour » correspondante est
+marquée reportée plutôt que de continuer à affirmer que le message est parti.
+Le moteur neutre (`neutral.start`) n'a pas d'entrée streamée à alimenter, donc
+pas de `claude.push` du tout.
 
 ### `claude.release`
 
@@ -708,6 +754,15 @@ aucune session → `done` `{titles: []}` (jamais `error`), amélioration
 purement cosmétique qui ne doit jamais bloquer l'affichage du panneau
 Sessions.
 
+**Et ne traîne jamais non plus** (T-137) : l'attente de `listSessions` est
+bornée à **8 s**, au-delà desquelles la réponse est le même `{titles: []}`.
+La promesse « best effort » ne valait auparavant que pour les EXCEPTIONS —
+une lenteur laissait la requête sans réponse indéfiniment, ce qui s'est vu
+sur des machines où le premier import du SDK dépasse plusieurs secondes. Le
+dépassement écrit une ligne `warn` (`cwd`, délai) : le repli est silencieux
+pour l'utilisateur, jamais pour le journal. `IACTION_SESSION_TITLES_TIMEOUT_MS`
+change la borne — prévu pour les tests, pas pour un réglage d'exploitation.
+
 ## Méthodes Lot 6 — agent du moteur neutre (« tous agents à égalité »)
 
 Boucle agentique tool-calling OpenAI-compatible dans le sidecar, pour donner
@@ -782,6 +837,46 @@ Tous les chemins sont résolus relativement à `cwd` et DOIVENT rester dans
 
 ## Méthodes conso (mini-tranche du Lot 8)
 
+### Cadence des sondes coûteuses — `usage.claude.init` et `usage.credits` (T-086)
+
+Ces deux méthodes ne sont pas de simples lectures : `usage.claude.init` joue un
+**vrai micro-tour Claude** et `usage.credits` fait un **vrai appel réseau**. Le
+sidecar tient donc leur cadence en mémoire de **PROCESSUS**
+(`sidecar/src/cadenceSondesConso.ts`), pas de fenêtre : un seul programme reçoit
+toutes les requêtes, quel que soit le nombre de fenêtres qui les envoient.
+Conséquence pour l'appelant, dans les deux sens :
+
+- **Coalescing** : deux appels reçus alors qu'une sonde est déjà en vol
+  reçoivent tous les deux la réponse de CETTE sonde — jamais une seconde n'est
+  déclenchée.
+- **Cadence stable** : un appel reçu moins de 5 minutes après la précédente
+  sonde réelle reçoit immédiatement le dernier résultat connu, sans réseau ni
+  tour Claude.
+- **Silence de saturation** (`usage.claude.init` seulement, T-059) : après un
+  refus daté (« resets 7:10pm »), la sonde reste muette jusqu'à cette heure
+  (30 min par défaut si le message ne la porte pas) — elle répond avec le
+  refus mémorisé plutôt que d'insister toutes les 5 min sur une issue déjà
+  connue.
+- **Recul après échec** (`usage.credits` seulement, T-085) : un échec réseau
+  déclenche un recul exponentiel (15 s, 30 s, 1 min, 2 min, 4 min, plafonné à
+  5 min), remis à zéro par le premier succès qui suit.
+
+Il n'y a donc plus de notion de fenêtre « releveuse » côté UI : **chaque
+fenêtre peut appeler à son propre rythme** (`ui/src/encartConso.tsx`, un
+battement de 30 s) — c'est le sidecar qui décide, à chaque appel, si un
+coût réel a lieu ou si le dernier résultat suffit. C'est ce qui remplace le
+bail `localStorage` d'`ui/src/cadenceUsage.ts` (T-086, deux fenêtres = deux
+fois les sondes avant ce correctif) : la question « les fenêtres
+partagent-elles leur stockage ? » cesse d'exister, puisqu'il n'y a qu'un seul
+processus qui reçoit les requêtes des deux.
+
+`ui/src/cadenceUsage.ts` garde uniquement le silence de saturation, pour un
+second lecteur SANS RAPPORT avec cette cadence : le réveil « au reset »
+(`ui/src/reouvertureQuota.ts`, T-120), qui le lit comme repli quand aucun
+relevé chiffré n'est encore mémorisé. L'encart conso continue de l'ARMER/LEVER
+à chaque réponse d'`usage.claude.init` pour que ce second lecteur reste
+informé — le sidecar, lui, n'en a plus besoin pour décider s'il sonde.
+
 ### `usage.credits` (ex-`usage.openrouter`)
 
 > **T-023** — la méthode portait un nom de marque dans le protocole. Elle
@@ -798,7 +893,21 @@ Tous les chemins sont résolus relativement à `cwd` et DOIVENT rester dans
 
 GET `{baseUrl}/credits` (API officielle OpenRouter, clé requise) →
 `done` `{totalCredits, totalUsage, remaining}` (montants en dollars).
-Erreur HTTP/réseau/clé absente → `error`.
+
+**Clé absente → `done` `{disponible: false, raison: "cle-absente"}`, PAS `error`**
+(T-057). Une clé non configurée est un état choisi par l'utilisateur, durable, et
+que le prochain essai ne changera pas : la journaliser en erreur toutes les
+5 minutes a produit 1 197 lignes rouges sans informer de rien. L'appelant
+distingue ainsi « pas de relevé possible » (ne pas réessayer) de « la requête a
+échoué » (réessayer avec recul). `disponible` n'apparaît **que** dans ce cas :
+une réponse en succès ne porte pas le champ.
+
+Erreur HTTP ou réseau → `error`, dont le message porte désormais
+`[providerId · hôte]` (T-085) : la cause sans la cible — « fetch failed
+(ERR_TLS_CERT_ALTNAME_INVALID) » — a bloqué un diagnostic pendant trois jours.
+L'hôte seul, jamais l'URL complète : un chemin peut porter un identifiant.
+
+`providerId` inconnu → `error` : c'est un appel faux, pas un état.
 
 ### `usage.claude`
 
@@ -822,10 +931,23 @@ enveloppé défensivement). `done` :
  "capturedAt": "ISO"}
 ```
 
-`windows` relaie **toutes** les fenêtres présentes dans `rate_limits` (clé
-brute de l'API → fenêtre), y compris celles spécifiques à un modèle (ex.
-hebdo Opus/Fable) dont le nommage n'est pas garanti par cette API
-expérimentale. `fiveHour`/`sevenDay` restent extraits à part (compatibilité).
+`windows` relaie **toutes les fenêtres chiffrées** de `rate_limits`, y compris
+celles spécifiques à un modèle, dont le nommage n'est pas garanti par cette API
+expérimentale : soit par leur clé brute (`seven_day_opus`…), soit par leur nom
+d'affichage quand l'API les range dans le tableau `model_scoped` (`Fable`).
+`fiveHour`/`sevenDay` restent extraits à part (compatibilité). Deux exclusions
+explicites : une fenêtre sans `utilization` numérique (case vide de la réponse)
+et `extra_usage`, qui mesure une dépense en euros et non une part de quota.
+
+**Un instantané sans une seule fenêtre chiffrée n'est pas un relevé** (T-087).
+La méthode d'usage peut répondre `rate_limits_available: true` avec un
+`subscription_type` connu et des `rate_limits` vides — l'abonnement s'applique,
+le point d'usage n'a pas encore répondu. Cette réponse n'est **jamais** mémorisée
+comme dernier instantané : `usage.claude` continue de servir le précédent (ou
+`{"available": false}` s'il n'y en a pas), l'historique `claude-windows.jsonl`
+n'enregistre rien, et l'appelant garde ce qu'il affiche. Accepté comme un relevé,
+il effaçait le dernier connu partout à la fois — encart, cache disque,
+historique, et par lui l'entrée du routeur pour la décision de débord.
 
 Contrainte vérifiée en réel : la méthode d'usage du SDK est une requête de
 contrôle vers le processus CLI et doit partir PENDANT le tour (après le
@@ -841,12 +963,33 @@ writing ») — d'où la capture opportuniste sur les messages `assistant`.
 Initialise le relevé sans conversation : joue un micro-tour chat pur
 (`claude-haiku-4-5`, prompt « ping », aucun outil, cwd = home) et renvoie le
 même `done` que `usage.claude` (instantané capturé pendant ce tour, mémorisé
-comme dernier instantané connu). Coût négligeable ; à réserver à une action
-explicite de l'utilisateur (bouton ↻ de l'encart conso). Erreur du micro-tour
-→ `error`.
+comme dernier instantané connu). Coût négligeable, mais pas nul — voir
+« Cadence des sondes coûteuses » ci-dessus : le sidecar ne joue RÉELLEMENT ce
+micro-tour qu'au rythme qu'il autorise (5 min, ou le silence de saturation en
+cours), quel que soit le nombre d'appels reçus entre-temps. Erreur du
+micro-tour → `error`.
 
 `{"available": false}` tant qu'aucun tour Claude n'a été joué dans cette
 session sidecar (ou si les limites ne s'appliquent pas — clé API).
+
+Refus pour cause de compte SATURÉ (T-059) : le SDK lève une exception dont le
+message porte l'heure de réinitialisation (« You've hit your session limit ·
+resets 7:10pm (Europe/Paris) »). Ce n'est pas une panne : le sidecar la
+reconnaît (`sidecar/src/claudeSaturation.ts`) et répond `done` plutôt
+qu'`error` :
+
+```json
+{"available": false, "saturation": {"fenetre": "session", "resetsAt": "2026-08-20T17:10:00.000Z"}}
+```
+
+`fenetre` vaut `"session"` ou `"hebdo"` ; `resetsAt` vaut `null` quand le
+message ne porte aucune heure exploitable — le sidecar applique alors un
+silence par défaut de 30 min avant de resonder (voir « Cadence des sondes
+coûteuses » ci-dessus, `sidecar/src/cadenceSondesConso.ts`). L'appelant
+(encart conso) arme en plus le silence côté UI (`ui/src/cadenceUsage.ts`,
+`armerSilence`) — pas pour décider de resonder, mais pour que le réveil
+« au reset » (`ui/src/reouvertureQuota.ts`) en soit informé. Un refus non
+reconnu reste une `error` : seule la saturation est une donnée.
 
 ## Méthodes O1 — agents & orchestrations (CRUD YAML)
 
@@ -1451,33 +1594,56 @@ génériques que le snapshot usage.claude).
 
 ```json
 {"totals":{"tours":120,"orchTours":34,"conversations":18,
-  "avgPromptTokens":2100,"totalTokens":900000},
+  "contexteMedian":21000,"totalTokens":900000},
  "buckets":[{"start":"2026-07-19","tours":12,"orchTours":4,
-  "conversations":3,"avgPromptTokens":1800,"totalTokens":80000}],
+  "conversations":3,"contexteMedian":18000,"totalTokens":80000}],
  "models":[{"model":"claude-fable-5","engine":"claude","tours":40,
   "totalTokens":600000}],
  "routage":{"parTier":{"trivial":{"tours":10},"simple":{"tours":25}},
-  "toursAuto":35,"partCoutNulPct":78,
+  "toursAuto":35,"partCoutNulPct":78,"partAbonnementPct":76,"partLocalPct":2,
   "mixAbo":[{"model":"claude-haiku-4-5","tours":20}],
   "debordMoisUsd":1.25,"coutPeriodeUsd":3.40,"coutInconnuTours":2},
  "parProjet":[{"projectId":"orgai","name":"OrgAI","tours":40,
   "totalTokens":300000,"partTokensPct":33,"autonomeTours":12,
   "autonomeTokens":120000,"autonomePct":40},
   {"projectId":"chat","name":"Chat","tours":30,"totalTokens":270000,
-   "partTokensPct":30,"autonomeTours":0,"autonomeTokens":0,"autonomePct":0}]}
+   "partTokensPct":30,"autonomeTours":0,"autonomeTokens":0,"autonomePct":0}],
+ "sobriete":{"toursErreur":38,"toursAbandon":5,
+  "parCause":[{"cause":"aucune cause enregistrée, antérieur au 2026-08-01","tours":17}],
+  "parCauseAbandon":[{"cause":"arrêt demandé","tours":4}],
+  "toursVentiles":210,"toursAvecDelegation":6,
+  "tokensFil":580000,"tokensDelegue":21000,"tokensRoleInconnu":0,
+  "parModeleReel":[{"model":"claude-opus-5","tokens":610000,"costUsd":404.36,"toursDelegue":2}],
+  "cacheReadTokens":1200000,"cacheCreationTokens":90000,"cacheHitPct":78,
+  "coutVentileUsd":406.67,"toursAvecCout":198,"concentrationTop10Pct":41,
+  "coutTourMedianUsd":0.42,"coutTourMaxUsd":11.30,
+  "contexteMedian":21000,"contexteP90":68000,
+  "dureeMedianeMs":18400,"dureeP90Ms":92000,
+  "heures":[0,0,1,0,0,0,0,1,3,5,6,8,7,6,5,4,6,7,9,6,3,2,1,0]},
+ "escaladeTours":[{"conversationId":"conv-abc","ts":"2026-07-19T22:04:00.000Z",
+  "model":"claude-haiku-4-5","erreur":true}]}
 ```
 
 - `conversations` = `conversationId` distincts (événements sans id ignorés
   pour ce compteur) ; `orchTours` = événements avec `orchRunId` (le « niveau
   d'orchestration » = orchTours/tours, calculé côté UI).
-- `avgPromptTokens` = moyenne des `promptTokens` non nuls (`null` si aucun).
+- `contexteMedian` = **médiane** de `contextTokens` (occupation réelle de la
+  fenêtre de contexte, cache compris), `null` si aucun tour de la tranche n'en
+  porte. Remplace `avgPromptTokens` (T-067) : celui-ci moyennait les
+  `promptTokens` du SDK, qui EXCLUENT le cache — médiane mesurée à 6 tokens
+  sur 1 031 tours, soit un KPI qui ne mesurait rien. Médiane et non moyenne :
+  la distribution est trop étalée pour qu'une moyenne décrive un tour réel.
 - `models` trié par `tours` décroissant, `model` null → `"(inconnu)"`.
 - `routage` (R3, encart « Routage » de Supervision) — calculé sur la MÊME
   période `from`/`to` que le reste : `parTier` = tours par `routeTier` ;
   `toursAuto` = événements portant un `routeTier` ; `partCoutNulPct` = part
-  (arrondie, %) des tours à coût nul — moteur `claude` (abonnement) ou
+  (arrondie, %) des tours hors facturation API — moteur `claude` (abonnement) ou
   provider local (id contenant `ollama`/`local`/`lmstudio`, même heuristique
-  que `scripts/usage-baseline.mjs`) — `null` si aucun tour ; `mixAbo` = tours
+  que `scripts/usage-baseline.mjs`) — `null` si aucun tour, **servi avec ses
+  deux moitiés** `partAbonnementPct` et `partLocalPct` (T-068 : un tour
+  d'abonnement est gratuit en dollars et consomme le QUOTA, un tour local ne
+  consomme ni l'un ni l'autre ; les additionner annonçait « 98 % de gratuité »
+  pendant que la fenêtre 5 h était à 104 %) ; `mixAbo` = tours
   moteur claude par modèle (trié décroissant) ; `debordMoisUsd` = somme des
   `costUsd` des événements `routeDebord: true` du **mois calendaire
   courant** (indépendant de `from`/`to` — c'est la valeur comparée au
@@ -1519,6 +1685,63 @@ génériques que le snapshot usage.claude).
   - tri par tokens décroissants puis par tours, `(non attribué)` toujours en
     dernier — c'est un résidu, pas un projet. Un projet déclaré dont l'id
     vaudrait littéralement `chat` serait fusionné avec le pseudo-projet Chat.
+- `sobriete` (T-071, encarts « Sobriété » de Supervision, voir
+  `docs/etude-supervision.md` §6) — trois familles calculées sur le même
+  balayage `from`/`to` que le reste, mais PAS toutes sur le même périmètre :
+  - **Fiabilité** (`toursErreur`, `toursAbandon`, `parCause`,
+    `parCauseAbandon`) — calculée sur TOUT l'historique de la période, sans
+    dépendre de la ventilation T-066. `parCause`/`parCauseAbandon` groupent par
+    classe d'erreur (`résultat Claude: <subtype>` du SDK, `HTTP <code>`, le
+    message tronqué à 60 caractères, ou
+    `"(aucune cause enregistrée, antérieur au 2026-08-01)"` — T-076 : la clé
+    `errorMessage` n'existe pas dans le JSON des tours écrits avant cette
+    date, ce n'est pas un défaut courant). Les interruptions volontaires
+    (`status: aborted`) ont leur propre ventilation `parCauseAbandon` — les
+    fondre dans `parCause` remettrait un usage normal dans la colonne des
+    pannes (T-082).
+  - **Délégation et cache** (`toursVentiles`, `toursAvecDelegation`,
+    `tokensFil`, `tokensDelegue`, `tokensRoleInconnu`, `parModeleReel`,
+    `cacheReadTokens`, `cacheCreationTokens`, `cacheHitPct`) — n'existent QUE
+    pour les tours portant la ventilation par modèle T-066 (`ev.ventilation`,
+    voir `claudeVentilation.ts`). `toursVentiles` est le DÉNOMINATEUR à
+    afficher : une part calculée dessus sans le montrer serait un chiffre faux
+    qui a l'air juste (T-035). `parModeleReel` = un modèle réellement appelé
+    (fil ou délégué) → `{tokens, costUsd, toursDelegue}`, trié par tokens
+    décroissants ; un sous-agent tournant sur le MÊME modèle que le fil est
+    indiscernable et compte comme `fil` — la part déléguée est donc un
+    MINORANT. `cacheHitPct` = `cacheRead / (cacheRead + cacheCreation +
+    entrée fraîche)` (arrondi, %), `null` tant qu'aucune entrée n'a été
+    mesurée (jamais 0 %).
+  - **Concentration et distributions** (`coutVentileUsd`, `toursAvecCout`,
+    `concentrationTop10Pct`, `coutTourMedianUsd`, `coutTourMaxUsd`,
+    `contexteMedian`, `contexteP90`, `dureeMedianeMs`, `dureeP90Ms`) — mêmes
+    tours ventilés que ci-dessus. `coutVentileUsd` = somme des `costUsd` de la
+    ventilation (le « coût équivalent API », T-072) ; `concentrationTop10Pct`
+    = part de ce coût portée par les 10 % de tours les plus chers (arrondie),
+    `null` si aucun coût ventilé. `contexteMedian`/`contexteP90` = occupation
+    RÉELLE de la fenêtre de contexte par tour (`contextTokens`, cache
+    compris) — à NE PAS confondre avec `totals.contexteMedian`, qui porte sur
+    tous les tours de la période, ventilés ou non. `dureeMedianeMs`/
+    `dureeP90Ms` = durée du tour (`durationMs`), `null` tant qu'aucune durée
+    n'a été enregistrée.
+  - `heures` — 24 entrées, nombre de tours par heure LOCALE sur TOUT
+    l'historique de la période (même périmètre que la fiabilité, indépendant
+    de la ventilation).
+  - `null` avec un sidecar antérieur à T-071 (champ absent).
+- `escaladeTours` (T-074, encart « Signal d'escalade » de Supervision, voir
+  `docs/etude-supervision.md` §5.3/§7.7) — PROJECTION MINIMALE, une entrée par
+  tour portant un `conversationId` ET un `ts` exploitables :
+  `{conversationId, ts, model, erreur}`. Volontairement PAS un pré-calcul :
+  l'algorithme de détection (un tour en erreur suivi IMMÉDIATEMENT, dans la
+  MÊME conversation, par un tour sur un tier de routage strictement supérieur
+  — seule l'escalade INCONTESTABLE compte, une « qualité insuffisante » sans
+  erreur n'étant pas mesurable sans juge, §7.5) vit UNIQUEMENT côté UI
+  (`ui/src/escaladeSignal.ts`, testé), pour ne jamais faire vivre deux
+  implémentations de la même règle. `model` vaut `"(inconnu)"` si l'événement
+  n'en portait pas — GARDÉ plutôt qu'écarté : le supprimer romprait
+  l'adjacence entre le tour qui précède et celui qui suit, et ferait paraître
+  consécutifs deux tours qui ne l'étaient pas. `erreur` = `status === "error"`
+  du tour. `null` avec un sidecar antérieur à T-074 (champ absent).
 
 ### `usage.claude.history`
 
@@ -1714,6 +1937,48 @@ volontairement borné à UN événement par process, émis quand le process est
 déjà mort : le relais ligne à ligne, lui, doit s'en abstenir absolument, sous
 peine de la boucle stderr → `app:log` → `log.append` → stderr.
 
+#### Collage d'image via le presse-papier natif — lignes `collage : …` (T-048)
+
+Constat du 2026-08-14 : coller une capture d'écran figeait le composeur ~5 s,
+sans vignette ni frappe prise en compte pendant ce temps (docs/tickets.md,
+T-048). Trois causes possibles — négociation du presse-papier, encodage PNG,
+encodage base64 — et aucune mesure pour trancher. Deux lignes, une par
+processus, réunissent désormais les quatre segments que le ticket demandait
+d'horodater avant tout correctif :
+
+```json
+{"ts":"2026-09-19T10:04:12.500Z","level":"info","scope":"ui",
+ "msg":"collage : image du presse-papier (repli natif)",
+ "fields":{"peintureMs":9,"invokeMs":4830,"octets":2097152,
+           "largeur":1920,"hauteur":1080,"base64Ms":340}}
+{"ts":"2026-09-19T10:04:12.497Z","level":"info","scope":"rust",
+ "msg":"collage : presse-papier lu (rust)",
+ "fields":{"getImageMs":4790,"encodePngMs":38,"octets":2097152}}
+```
+
+- `peintureMs` (côté UI) — événement `paste` → vignette « en chargement »
+  RÉELLEMENT peinte (deux `requestAnimationFrame` imbriqués après le rendu de
+  `beginImage`) : la mesure la plus honnête possible depuis le DOM, mais qui
+  ne PROUVE pas que les pixels ont atteint l'écran physique (compositeur/
+  pilote graphique hors de portée) ;
+- `invokeMs` (côté UI) — aller-retour complet de la commande Tauri
+  `clipboard_read_image` ;
+- `getImageMs` / `encodePngMs` (côté Rust, `clipboard.rs`) — le détail de ce
+  même aller-retour, chronométré séparément côté natif : c'est lui qui
+  distingue « le presse-papier négocie » de « on encode » ; absent si le
+  presse-papier ne contenait pas d'image ;
+- `octets`/`largeur`/`hauteur` — taille et dimensions du PNG produit, lues
+  dans son en-tête `IHDR` (pas de décodage complet) ;
+- `base64Ms` (côté UI) — `FileReader` → `dataUrl` posée (encodage base64,
+  suspect secondaire du ticket).
+
+Niveau `info` (et non `debug`) délibérément : les deux jalons posés le
+2026-08-15 étaient en `debug`, jamais écrits par défaut (voir plus bas,
+`IACTION_LOG_LEVEL`), ce qui explique très probablement pourquoi ils sont
+restés invisibles plus d'un mois malgré l'instrumentation en place. Une ligne
+par processus et par collage — jamais plus, voir Attachments.tsx
+(`collerImageDuPressePapierNatif`) et journalCollage.ts.
+
 ### Forme d'une entrée
 
 ```json
@@ -1727,7 +1992,7 @@ peine de la boucle stderr → `app:log` → `log.append` → stderr.
   décroissant). `debug` n'est PAS écrit par défaut — voir `IACTION_LOG_LEVEL`.
 - `scope` : énumération **fermée** — `sidecar`, `rust`, `ui`, `claude`,
   `neutral`, `orchestrator`, `taches`, `knowledge`, `speech`, `router`,
-  `usage`, `mcp`. Un scope inconnu est ramené à `sidecar` (jamais un rejet).
+  `usage`, `mcp`, `reveil`. Un scope inconnu est ramené à `sidecar` (jamais un rejet).
 - `msg` : une ligne, sans saut de ligne (les sauts sont remplacés par des
   espaces à l'écriture — une entrée = une ligne JSONL).
 - `reqId` / `runId` / `stepId` : corrélation, `null` par défaut. Un `reqId` de
@@ -2142,7 +2407,7 @@ petits, aucune dépendance nouvelle).
 
 ```json
 {"id":"req-95","method":"knowledge.index","params":{"cwd":"/chemin/projet",
-  "pinned":["/chemin/projet/docs/note.md"]}}
+  "pinned":["/chemin/projet/docs/note.md"], "force":false}}
 ```
 
 (Re)construit l'index, **incrémental par mtime** : un fichier dont le mtime
@@ -2152,6 +2417,13 @@ complète (vecteurs incomparables). Un fichier binaire/trop gros (> 1 Mo) est
 ignoré mais inscrit dans `meta.files` (pas de `stale` perpétuel). Chunks
 streamés de progression `{file, done, total}` (un par fichier traité), puis
 `done` :
+
+`force` (optionnel, défaut `false`, T-115) : ignore la réutilisation par
+mtime et ré-embarque TOUTES les sources. L'incrémentalité par mtime a un
+angle mort — un contenu changé à mtime préservé (restauration d'une
+sauvegarde, synchro qui n'actualise pas la date) laisse un chunk faux dans
+l'index sans que rien ne le signale jamais. `force:true` est la réparation ;
+c'est ce que pose le bouton « Reconstruire l'index » de l'UI.
 
 ```json
 {"files":3,"chunks":12,"model":"nomic-embed-text"}
@@ -2609,12 +2881,28 @@ Pour l'arborescence + éditeur de la page Agent (le Rust reste mince) :
 
 Persistance d'état UI par clé (conversations par projet, etc.) dans
 `{app_data_dir}/state/<name>.json` — séparé de la config (qui reste éditable
-à la main) :
+à la main). **T-061** : les conversations vivent ÉCLATÉES — `projet-<slug>.json`
+par projet (`{id, entree}`, l'`id` du fichier fait foi), `chatconv-<id>.json`
+par conversation de Chat plus l'index `chat-index.json` ; les monolithes
+d'avant sont migrés au premier chargement puis mis de côté
+(`…-avant-eclatement.json`). Le sidecar lit ce rangement en LECTURE SEULE
+(`usageProjets.ts`, repli monolithe tant qu'un poste n'a pas migré) :
 
 - `state_read(name: String) -> Result<Value, String>` — `{}` si absent.
   `name` : `[a-z0-9-]{1,64}` (rejeté sinon, anti-traversée).
 - `state_write(name: String, value: Value) -> Result<(), String>` — écriture
   atomique, création du répertoire au besoin.
+- `state_list(prefix: String) -> Result<Vec<String>, String>` — noms d'état
+  existants commençant par `prefix`, triés, sans l'extension (T-061). C'est la
+  primitive de l'état ÉCLATÉ (un fichier par projet, par conversation) : sans
+  elle, l'interface devrait tenir un index — c'est-à-dire recréer un fichier
+  partagé, exactement ce que l'éclatement supprime. Les fichiers au nom hors
+  charte sont ignorés.
+- `state_rename(name: String, new_name: String) -> Result<(), String>` —
+  renomme un état ; REFUSE d'écraser une cible existante (renommer n'est
+  jamais un moyen détourné de détruire un historique). Sert la mise de côté
+  du monolithe migré (`…-avant-eclatement`) et le retrait non destructif
+  (`retire-…`).
 - `fs_mkdir(path: String) -> Result<(), String>` — création récursive
   (utilisé par l'init `.iaction/` dans un projet).
 - `fs_rename(path: String, new_name: String) -> Result<String, String>` —
@@ -2636,7 +2924,7 @@ Persistance d'état UI par clé (conversations par projet, etc.) dans
   env nettoyée du piège Snap). Renvoie le répertoire retenu.
 - `system_stats() -> SystemStats` — instantané
   `{cpuPct, memUsedMb, memTotalMb, gpuPct, gpuMemUsedMb, gpuMemTotalMb,
-  gpuTempC, cpuTempC, ramTempC}`.
+  gpuTempC, gpuIndisponible, cpuTempC, ramTempC}`.
   `cpuPct` est un delta entre deux appels (null au premier) ; GPU via
   `nvidia-smi` (null si absent), `gpuTempC` venant de la même requête
   (colonne `temperature.gpu`) — elle est lue seulement SI la colonne est
@@ -2650,12 +2938,20 @@ Persistance d'état UI par clé (conversations par projet, etc.) dans
   hors Linux, ou faute de matériel de mesure (l'absence de capteur de
   barrette est le cas courant), et l'indicateur n'est alors pas affiché.
   Jamais d'erreur : les champs indisponibles sont null/0.
-  Deux règles portent sur le LANCEMENT de `nvidia-smi`, et elles valent
-  contrat (T-054) : il est lancé **sans fenêtre de console**
-  (`CREATE_NO_WINDOW` sous Windows — sans quoi la sonde fait clignoter un
-  terminal à chaque appel), et un binaire **introuvable** verrouille la sonde
-  pour la session (les champs GPU restent null, plus aucun process n'est
-  lancé). Un `nvidia-smi` présent mais en échec, lui, reste réinterrogé.
+  `gpuIndisponible` (T-129) : cause verbatim (stderr + code de sortie) du
+  DERNIER échec de `nvidia-smi` quand le binaire EXISTE mais échoue (pilote
+  qui recharge, carte occupée, mismatch NVML après une mise à jour du
+  pilote…) — `null` en fonctionnement nominal, ET quand `nvidia-smi` est
+  simplement absent du poste (l'absence de carte n'est pas une panne).
+  L'échec est journalisé côté Rust (event `app:log`, niveau `error`) une
+  seule fois par cause — au premier échec, puis à chaque CHANGEMENT de
+  message, jamais à chaque tick de la sonde (5 s) : un échec répété de même
+  cause ne réécrit pas la ligne (voir T-057). Les tentatives réelles
+  s'espacent ensuite en repli exponentiel plafonné à 5 minutes (base 5 s,
+  doublée à chaque échec consécutif) plutôt que de relancer `nvidia-smi` à
+  chaque tick ; un succès referme la fenêtre d'échec, journalise un
+  rétablissement (niveau `info`) et rétablit la cadence nominale — la sonde
+  se remet donc en route seule, sans redémarrage de l'application.
 
 ## Commandes Tauri hors relais (Lot 1)
 

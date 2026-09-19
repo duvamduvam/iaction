@@ -84,6 +84,18 @@ process.env.XDG_CONFIG_HOME = defaultXdgConfigHome;
 export const defaultXdgDataHome = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-test-xdg-data-"));
 process.env.XDG_DATA_HOME = defaultXdgDataHome;
 
+/**
+ * Dossier Claude Code jetable, imposé pour la même raison que les deux
+ * précédents (T-081).
+ *
+ * `agents.list` lit désormais `~/.claude/agents` — le dossier du CLI, pas
+ * celui de l'application. Sans ce défaut, la suite lirait les agents RÉELS du
+ * poste : un test qui compte les agents deviendrait vert ou rouge selon la
+ * machine qui le lance, et personne ne saurait pourquoi.
+ */
+export const defaultClaudeConfigDir = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-test-claude-"));
+process.env.CLAUDE_CONFIG_DIR = defaultClaudeConfigDir;
+
 export function fail(message) {
   console.error(`ECHEC: ${message}`);
   process.exitCode = 1;

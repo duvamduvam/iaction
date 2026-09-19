@@ -46,6 +46,17 @@ describe("parseAskQuestions — défensif : une modale qui plante bloque le tour
     expect(parseAskQuestions({ questions: [{ question: "" }, { pas: "une question" }, 42] })).toEqual([]);
   });
 
+  it("le contexte joint est repris tel quel ; absent ou vide, la clé n'existe pas (T-089)", () => {
+    const [avec] = parseAskQuestions({
+      questions: [{ question: "C'est quoi ce dossier ?", context: "3F4A.mov  210 Mo\n8B2C.mov  188 Mo" }],
+    });
+    expect(avec.context).toBe("3F4A.mov  210 Mo\n8B2C.mov  188 Mo");
+    const [sans] = parseAskQuestions({ questions: [{ question: "Q ?", context: "" }] });
+    expect("context" in sans).toBe(false);
+    const [difforme] = parseAskQuestions({ questions: [{ question: "Q ?", context: { pas: "une chaîne" } }] });
+    expect("context" in difforme).toBe(false);
+  });
+
   it("une option sans label disparaît, la question survit", () => {
     const [q] = parseAskQuestions({
       questions: [{ question: "Q ?", options: [{ description: "sans label" }, { label: "OK" }] }],

@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +23,30 @@ export default defineConfig(async () => ({
 
   define: {
     __VERSION_APPLICATION__: JSON.stringify(versionApplication),
+  },
+
+  /*
+   * T-133 — FUSEAU FIGÉ POUR LES TESTS.
+   *
+   * Les runners GitHub tournent en UTC, ce poste en Europe/Paris. Un test du
+   * réveil vérifie qu'une heure de mur est préservée au passage à l'heure
+   * d'été (nuit du 29 mars) : en Europe l'écart réel vaut 22 h 30, en UTC il
+   * vaut 23 h 30 — aucune nuit ne saute. Le test passait donc ici et cassait
+   * les DEUX constructions de la release, sans que rien dans son code n'ait
+   * annoncé qu'il dépendait du fuseau de la machine.
+   *
+   * Figer le fuseau rend la suite reproductible partout et garde au test ses
+   * dents : sur un runner UTC, la transition qu'il exerce n'existe pas, donc
+   * il ne prouverait plus rien — il passerait sans rien vérifier, ce qui est
+   * pire qu'un échec. Europe/Paris et non UTC pour cette raison exacte : c'est
+   * le fuseau où les bascules d'heure ont lieu, et l'application est
+   * locale-first.
+   *
+   * Le code de production, lui, ne présume d'aucun fuseau : il lit toujours
+   * celui du poste.
+   */
+  test: {
+    env: { TZ: "Europe/Paris" },
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

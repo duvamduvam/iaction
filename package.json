@@ -1,7 +1,7 @@
 {
   "name": "iaction",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "workspaces": [
     "ui",
@@ -19,13 +19,15 @@
     "build:windows": "tauri build --bundles nsis",
     "lint": "eslint .",
     "ui:test": "npm run test -w ui",
-    "verif": "npm run lint && npm run cliquet:test && npm run cliquet && npm run casse:test && npm run casse && npm run bundle:test && npm run routage:test && npm run routage && npm run audit:test && npm run audit && npm run tickets:test && npm run version:test && npm run version:verifier && npm run test -w ui && npm run sidecar:test && cargo test --quiet --manifest-path src-tauri/Cargo.toml",
+    "ui:typecheck": "npm run typecheck -w ui",
+    "verif": "node scripts/session-en-cours.mjs && npm run session:test && npm run lint && npm run cliquet:test && npm run cliquet && npm run casse:test && npm run casse && npm run bundle:test && npm run bundledev:test && npm run routage:test && npm run routage && npm run audit:test && npm run audit && npm run tickets:test && npm run version:test && npm run version:verifier && npm run ui:typecheck && npm run test -w ui && npm run sidecar:test && cargo test --quiet --manifest-path src-tauri/Cargo.toml",
     "cliquet": "node scripts/cliquet-taille.mjs",
     "casse": "node scripts/collisions-casse.mjs",
     "routage": "node scripts/routage-defauts.mjs",
     "routage:test": "node scripts/routage-defauts.test.mjs",
     "casse:test": "node scripts/collisions-casse.test.mjs",
     "bundle:test": "node scripts/preparer-bundle.test.mjs",
+    "bundledev:test": "node scripts/assurer-bundle-dev.test.mjs",
     "cliquet:maj": "node scripts/cliquet-taille.mjs --maj",
     "cliquet:test": "node scripts/cliquet-taille.test.mjs",
     "audit": "node scripts/audit-publication.mjs",
@@ -35,7 +37,8 @@
     "version:test": "node scripts/versionner.test.mjs",
     "version:poser": "node scripts/versionner.mjs",
     "tickets:miroir": "node scripts/refleter-tickets.mjs",
-    "publier": "bash scripts/publier-instantane.sh"
+    "publier": "bash scripts/publier-instantane.sh",
+    "session:test": "node scripts/session-en-cours.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

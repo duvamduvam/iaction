@@ -146,6 +146,101 @@ export function trendRange(bucket: UsageBucketKind, anchor: string, today: strin
   return { from: zone.from, to: to < zone.from ? zone.from : to };
 }
 
+/**
+ * Avancement d'une période EN COURS, ou `null` si elle est révolue.
+ *
+ * ── Le constat (T-070) ─────────────────────────────────────────────────
+ * Le lundi, la vue Semaine affiche exactement les chiffres de la vue Jour.
+ * Le calcul est juste — la fenêtre est tronquée à aujourd'hui, c'est même la
+ * seule chose honnête à faire — mais rien ne le dit, et une égalité qu'on ne
+ * s'explique pas se lit comme une panne. Le 1er du mois, même effet.
+ *
+ * Rendre `{ecoules, total}` plutôt qu'un pourcentage : « jour 3/7 » se lit
+ * sans calcul mental, et surtout ne suggère pas une PROPORTION des chiffres
+ * (43 % de la semaine écoulée ne veut pas dire 43 % de son activité).
+ *
+ * Une période future ne peut pas exister ici : la navigation est plafonnée à
+ * aujourd'hui (`shiftAnchor`). Le cas est traité quand même, en la déclarant
+ * non commencée — un `ecoules` négatif serait pire qu'un cas en trop.
+ */
+export interface AvancementPeriode {
+  /** Jours entamés, aujourd'hui compris (1 = premier jour de la période). */
+  ecoules: number;
+  /** Jours que la période comptera une fois complète. */
+  total: number;
+}
+
+export function avancementPeriode(
+  periode: Periode,
+  today: string = todayLocalStr(),
+): AvancementPeriode | null {
+  // Révolue : plus rien ne s'y ajoutera, aucun avertissement n'a de sens.
+  if (periode.to < today) return null;
+  const total = joursEntre(periode.from, periode.to) + 1;
+  // Une période d'UN jour n'a pas d'avancement à montrer : « jour 1/1 » est
+  // du bruit. Le fait qu'elle soit en cours se dit ailleurs (le bouton
+  // « Aujourd'hui » est déjà désactivé).
+  if (total <= 1) return null;
+  if (today < periode.from) return { ecoules: 0, total };
+  return { ecoules: joursEntre(periode.from, today) + 1, total };
+}
+
+/** Nombre de jours pleins entre deux dates locales `YYYY-MM-DD`. */
+function joursEntre(depuis: string, jusqua: string): number {
+  const ms = parseLocalDate(jusqua).getTime() - parseLocalDate(depuis).getTime();
+  return Math.round(ms / 86_400_000);
+}
+
+/**
+ * Période précédente COMPARABLE à celle qu'on affiche (T-075).
+ *
+ * Le piège, et la raison pour laquelle cette fonction existe plutôt qu'un
+ * simple `shiftAnchor(-1)` : comparer une semaine entamée depuis trois jours à
+ * une semaine complète produit un « −57 % » qui ne dit rien d'autre que
+ * « il reste quatre jours ». Une comparaison fausse est pire que pas de
+ * comparaison — c'est le même défaut que T-070, vu de l'autre bout.
+ *
+ * La période précédente est donc TRONQUÉE au même nombre de jours écoulés
+ * quand la période courante est en cours, et rendue entière sinon.
+ */
+export function periodePrecedenteComparable(
+  bucket: UsageBucketKind,
+  anchor: string,
+  today: string = todayLocalStr(),
+): { periode: Periode; tronquee: boolean } {
+  const courante = periodRange(bucket, anchor);
+  const precedente = periodRange(bucket, shiftAnchor(bucket, anchor, -1, today));
+  const avancement = avancementPeriode(courante, today);
+  if (avancement === null || avancement.ecoules >= avancement.total) {
+    return { periode: precedente, tronquee: false };
+  }
+  // `ecoules - 1` : `from` compte déjà pour un jour.
+  const fin = addDaysStr(precedente.from, Math.max(0, avancement.ecoules - 1));
+  const to = fin > precedente.to ? precedente.to : fin;
+  return { periode: { from: precedente.from, to }, tronquee: true };
+}
+
+/**
+ * Variation relative en %, ou `null` quand elle ne veut rien dire.
+ *
+ * `null` sur un précédent à zéro : « +∞ % » ou « +100 % » seraient tous deux
+ * des inventions. Zéro → zéro rend `null` aussi — « stable » sur deux périodes
+ * vides est une information que personne n'a demandée.
+ */
+export function variationPct(actuel: number, precedent: number): number | null {
+  if (!Number.isFinite(actuel) || !Number.isFinite(precedent)) return null;
+  if (precedent === 0) return null;
+  return ((actuel - precedent) / precedent) * 100;
+}
+
+/** « +12 % » / « −7 % » / « = » — le signe est porté par le texte, pas par une couleur. */
+export function formatVariation(pct: number | null): string | null {
+  if (pct === null) return null;
+  const arrondi = Math.round(pct);
+  if (arrondi === 0) return "=";
+  return `${arrondi > 0 ? "+" : "−"}${Math.abs(arrondi)} %`;
+}
+
 export function formatPeriodLabel(bucket: UsageBucketKind, periode: Periode): string {
   const d = parseLocalDate(periode.from);
   if (bucket === "day") {

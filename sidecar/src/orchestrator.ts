@@ -27,7 +27,8 @@ import { handleClaudeAbort, handleClaudePermission, handleClaudeStart } from "./
 import { handleNeutralAbort, handleNeutralPermission, handleNeutralStart } from "./neutralAgent.js";
 import { resolveRoute, type RouteTier } from "./router.js";
 import { normaliserModePourMoteur } from "./permissions.js";
-import { globalConfigRoot, projectDir } from "./appPaths.js";
+import { claudeUserAgentsDir, globalConfigRoot, projectDir } from "./appPaths.js";
+import { baseNameNoExt, buildImportedAgent, lireAgentImporte, parseFrontmatter } from "./agentsImportes.js";
 
 // ---------------------------------------------------------------------------
 // Utilitaires
@@ -41,10 +42,6 @@ async function atomicWriteFile(absPath: string, content: string): Promise<void> 
   const tmp = `${absPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   await fsp.writeFile(tmp, content, "utf8");
   await fsp.rename(tmp, absPath);
-}
-
-function baseNameNoExt(filePath: string): string {
-  return path.basename(filePath).replace(/\.[^./]+$/, "");
 }
 
 /** `candidate` (fichier ou dossier) est-il `dir` lui-même ou un de ses descendants ? */
@@ -271,93 +268,17 @@ function invalidAgentEntry(filePath: string, scope: AgentScope, message: string)
 }
 
 // ---------------------------------------------------------------------------
-// Import .claude/agents/*.md — frontmatter YAML entre `---` + corps markdown
+// Import .claude/agents/*.md — voir agentsImportes.ts (sorti en T-081)
 // ---------------------------------------------------------------------------
 
-interface FrontmatterResult {
-  frontmatter: Record<string, unknown> | null;
-  body: string;
-  error?: string;
-}
-
-/** Parseur maison simple : délimiteurs `---` en début de fichier, YAML entre les deux, corps après. */
-function parseFrontmatter(content: string): FrontmatterResult {
-  const lines = content.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") {
-    return { frontmatter: null, body: content, error: "frontmatter manquant (le fichier doit commencer par '---')" };
-  }
-  let endIdx = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === "---") {
-      endIdx = i;
-      break;
-    }
-  }
-  if (endIdx === -1) {
-    return { frontmatter: null, body: content, error: "délimiteur de fermeture '---' du frontmatter introuvable" };
-  }
-  const fmText = lines.slice(1, endIdx).join("\n");
-  const body = lines.slice(endIdx + 1).join("\n");
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(fmText);
-  } catch (err) {
-    return { frontmatter: null, body, error: `frontmatter YAML invalide: ${errMessage(err)}` };
-  }
-  if (!isPlainObject(parsed)) {
-    return { frontmatter: null, body, error: "frontmatter doit être un objet YAML (mapping clé/valeur)" };
-  }
-  return { frontmatter: parsed, body };
-}
-
-/** Le champ `tools` de Claude Code est soit une liste, soit une chaîne "Read, Write, Bash". */
-function normalizeImportedTools(value: unknown): string[] | null {
-  if (Array.isArray(value)) {
-    const arr = value.filter((t): t is string => typeof t === "string" && t.trim().length > 0).map((t) => t.trim());
-    return arr.length > 0 ? arr : null;
-  }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const arr = value
-      .split(",")
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
-    return arr.length > 0 ? arr : null;
-  }
-  return null;
-}
-
-function buildImportedAgent(filePath: string, frontmatter: Record<string, unknown>, body: string): AgentNormalized {
-  const fallbackName = baseNameNoExt(filePath);
-  const name = isNonEmptyString(frontmatter.name) ? frontmatter.name : fallbackName;
-  const description = isNonEmptyString(frontmatter.description) ? frontmatter.description : "";
-  const tools = normalizeImportedTools(frontmatter.tools);
-  return {
-    name,
-    description,
-    engine: "claude",
-    provider: null,
-    model: null,
-    permissionMode: "default",
-    instructions: body.trim(),
-    tools,
-    mcp: true,
-    knowledge: [],
-    maxTurns: null,
-  };
-}
-
+/** Enveloppe locale : la lecture est dans `agentsImportes.ts`, la mise en
+ *  forme « entrée de liste » (scope, chemin, lecture seule) reste ici. */
 async function loadImportedAgentEntry(filePath: string): Promise<AgentListEntry> {
-  let content: string;
-  try {
-    content = await fsp.readFile(filePath, "utf8");
-  } catch (err) {
-    return invalidAgentEntry(filePath, "claude-code", `lecture impossible: ${errMessage(err)}`);
+  const lu = await lireAgentImporte(filePath);
+  if (!lu.ok) {
+    return invalidAgentEntry(filePath, "claude-code", lu.raison);
   }
-  const { frontmatter, body, error } = parseFrontmatter(content);
-  if (error || !frontmatter) {
-    return invalidAgentEntry(filePath, "claude-code", error ?? "frontmatter manquant");
-  }
-  return { ...buildImportedAgent(filePath, frontmatter, body), scope: "claude-code", path: filePath, readOnly: true };
+  return { ...lu.agent, scope: "claude-code", path: filePath, readOnly: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -412,6 +333,22 @@ export async function handleAgentsList(
     for (const f of await listFilesWithExt(claudeAgentsDir(cwd), ".md")) {
       entries.push(await loadImportedAgentEntry(f));
     }
+  }
+
+  // T-081 — agents Claude Code DU POSTE (`~/.claude/agents`). Le moteur projet
+  // les charge déjà (`settingSources: ["user",…]`) : ils sont lançables comme
+  // sous-agents, et l'app ne savait pas les nommer — donc ni afficher leur
+  // modèle déclaré, ni les proposer au sélecteur.
+  //
+  // Précédence du SDK respectée : à nom égal, le manifeste du PROJET gagne et
+  // celui du poste est écarté. Sans ce filtre, l'UI afficherait deux entrées
+  // homonymes dont une jamais exécutée — un doublon qui mentirait.
+  const nomsDejaVus = new Set(entries.map((e) => e.name.trim().toLowerCase()));
+  for (const f of await listFilesWithExt(claudeUserAgentsDir(), ".md")) {
+    const entry = await loadImportedAgentEntry(f);
+    if (nomsDejaVus.has(entry.name.trim().toLowerCase())) continue;
+    nomsDejaVus.add(entry.name.trim().toLowerCase());
+    entries.push(entry);
   }
 
   emitter.done(id, { agents: entries });
@@ -1307,7 +1244,12 @@ function classifyStepOutcome(doneData: Record<string, unknown>): {
 } {
   const subtype = typeof doneData.subtype === "string" ? doneData.subtype : "unknown";
   if (subtype === "aborted") {
-    return { status: "aborted" };
+    // T-076 — "failed" pose toujours un message, "aborted" n'en posait
+    // aucun : la même étape interrompue restait muette dans le rapport final
+    // (orch.run done, `steps[id].message`) alors que sa jumelle en échec disait
+    // pourquoi. Le tour lui-même sait la vraie raison (arrêt, refus…) — voir
+    // claudeFinDeTour.ts — mais ce niveau-ci n'en reçoit que le subtype.
+    return { status: "aborted", message: `étape interrompue (subtype: ${subtype})` };
   }
   if (subtype === "success" || subtype === "max_turns") {
     return { status: "success" };

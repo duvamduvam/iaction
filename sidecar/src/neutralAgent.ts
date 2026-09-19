@@ -24,6 +24,7 @@ import { needsPermission as needsPermissionRegistre, versModeNeutre } from "./pe
 import { buildHeaders, getProvider, joinUrl, type EngineEmitter, type Provider } from "./engine.js";
 import { formatSearchResults, sanitizeTopK, searchKnowledge } from "./knowledge.js";
 import { recordUsageEvent, type UsageStatus } from "./usageStats.js";
+import { libelleAbandonUtilisateur } from "./claudeFinDeTour.js";
 
 // ---------------------------------------------------------------------------
 // Utilitaires
@@ -464,7 +465,7 @@ async function toolSearchKnowledge(cwd: string, input: unknown): Promise<ToolExe
   if (!outcome.ok) {
     return { isError: true, content: outcome.message };
   }
-  return { isError: false, content: formatSearchResults(outcome.results) };
+  return { isError: false, content: formatSearchResults(outcome.results, outcome.builtAt, outcome.stale) };
 }
 
 const KNOWN_TOOLS = new Set([
@@ -1248,10 +1249,9 @@ export async function handleNeutralStart(
     model,
     promptTokens: cumulativeInput,
     completionTokens: cumulativeOutput,
-    status,
+    status, errorMessage: libelleAbandonUtilisateur(status), // T-076
     meta: params.meta,
-    // R6-A — usage étendu R0 cumulé sur la boucle (plafond de débord).
-    costUsd: cumulativeCostUsd,
+    costUsd: cumulativeCostUsd, // R6-A — usage étendu R0 cumulé sur la boucle (plafond de débord).
     cachedTokens: cumulativeCachedTokens,
   });
 

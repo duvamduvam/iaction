@@ -116,6 +116,41 @@ def sky(top, mid):
     )
 
 
+# Atténuation et fondu du haut — CUITS DANS L'IMAGE, et non posés en CSS.
+# Ils y étaient (`opacity` + `mask-image` sur `.app-shell::before`, un élément
+# `position:fixed` plein viewport) : sous le renderer LOGICIEL de la session de
+# dev (WEBKIT_DISABLE_DMABUF_RENDERER=1, voir scripts/dev.sh), toute
+# invalidation touchant cette couche masquée la fait re-rasteriser EN ENTIER —
+# le petit rectangle sale d'un caractère tapé devenait un repeint de tout
+# l'écran, soit ~8 Mpx au CPU à chaque frappe. Cuits ici, ils font partie de la
+# raster cachée : la couche redevient une image que l'on recopie (T-083).
+#
+# Le fondu est exprimé dans l'espace de l'IMAGE et non du viewport — sur les
+# rapports d'écran usuels (l'image est en 16/9, `background-size: cover`) la
+# différence est de quelques pixels de rognage, et l'atténuation suit désormais
+# le dessin plutôt que la fenêtre.
+FONDU_OPAQUE = 0.60  # part basse laissée pleine (mesurée depuis le bas)
+FONDU_NUL = 0.97     # part au-delà de laquelle il ne reste plus rien
+ATTENUATION = 0.55   # ex-`opacity` de la règle CSS
+
+
+def fondu():
+    """Masque de luminance : plein en bas, éteint vers le haut."""
+    return (
+        f'<linearGradient id="fondu" gradientUnits="userSpaceOnUse" '
+        f'x1="0" y1="{H:.0f}" x2="0" y2="0">'
+        '<stop offset="0" stop-color="#fff"/>'
+        f'<stop offset="{FONDU_OPAQUE}" stop-color="#fff"/>'
+        f'<stop offset="{FONDU_NUL}" stop-color="#000"/>'
+        '<stop offset="1" stop-color="#000"/>'
+        '</linearGradient>'
+        '<mask id="fondu-haut" maskUnits="userSpaceOnUse" '
+        f'x="0" y="0" width="{W:.0f}" height="{H:.0f}">'
+        f'<rect x="0" y="0" width="{W:.0f}" height="{H:.0f}" fill="url(#fondu)"/>'
+        '</mask>'
+    )
+
+
 def horizon_line(color):
     return (
         f'<line x1="0" y1="{YH:.0f}" x2="{W:.0f}" y2="{YH:.0f}" '
@@ -254,13 +289,14 @@ for name, v in VARIANTS.items():
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W:.0f} {H:.0f}" '
         'preserveAspectRatio="xMidYMax slice">'
-        f"<defs>{''.join(defs)}</defs>"
+        f"<defs>{''.join(defs)}{fondu()}</defs>"
+        + f'<g mask="url(#fondu-haut)" opacity="{ATTENUATION}">'
         + sky(*v["sky_c"])
         + (bodies[0] if "sun" in v["objs"] else "")
         + horizon_line(v["horizon"])
         + grid(v["well"])
         + "".join(b for o, b in zip(v["objs"], bodies) if o != "sun")
-        + "</svg>"
+        + "</g></svg>"
     )
     path = f"{outdir}/{name}.svg"
     with open(path, "w") as f:

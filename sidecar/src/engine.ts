@@ -28,6 +28,7 @@ import {
 } from "./profilFournisseur.js";
 import { recordUsageEvent, type UsageStatus } from "./usageStats.js";
 import { injecterContexteWeb } from "./webSearch.js";
+import { LIBELLE_INTERRUPTION } from "./claudeFinDeTour.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -574,7 +575,9 @@ export async function handleChatSend(
     emitter.done(id, { finishReason, usage, modelUsed });
   } catch (err) {
     if (controller.signal.aborted) {
-      recordChatSendUsage(id, params, providerId, model, "aborted", usage, modelUsed);
+      // T-076 — même trou que le moteur neutre et Claude (T-082) : un
+      // `aborted` sans cause, ici toujours un arrêt demandé (`chat.abort`).
+      recordChatSendUsage(id, params, providerId, model, "aborted", usage, modelUsed, LIBELLE_INTERRUPTION.abandon);
       emitter.done(id, { finishReason: "aborted", usage: null, modelUsed });
     } else {
       // La cause (`UND_ERR_CONNECT_TIMEOUT`, `ENOTFOUND`…) part avec le
@@ -586,58 +589,6 @@ export async function handleChatSend(
     }
   } finally {
     inFlight.delete(id);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// usage.credits
-// ---------------------------------------------------------------------------
-
-export async function handleUsageCredits(
-  id: string,
-  params: Record<string, unknown>,
-  emitter: EngineEmitter,
-): Promise<void> {
-  const providerId = params.providerId;
-  if (!isNonEmptyString(providerId)) {
-    emitter.error(id, "params.providerId manquant ou invalide");
-    return;
-  }
-  const provider = providers.get(providerId);
-  if (!provider) {
-    emitter.error(id, `fournisseur inconnu: ${providerId}`);
-    return;
-  }
-  if (!isNonEmptyString(provider.apiKey)) {
-    emitter.error(id, `clé API manquante pour ${providerId}`);
-    return;
-  }
-  try {
-    // T-023 — chemin déclaré ; sans profil, `credits` comme avant.
-    const res = await fetch(joinUrl(provider.baseUrl, provider.traits?.creditsPath ?? "credits"), {
-      method: "GET",
-      headers: buildHeaders(provider),
-    });
-    if (!res.ok) {
-      const body = await readBoundedBody(res);
-      emitter.error(id, `HTTP ${res.status} ${res.statusText}: ${body}`);
-      return;
-    }
-    const json = (await res.json()) as unknown;
-    const data = isPlainObject(json) ? json.data : undefined;
-    if (
-      !isPlainObject(data) ||
-      typeof data.total_credits !== "number" ||
-      typeof data.total_usage !== "number"
-    ) {
-      emitter.error(id, "réponse inattendue de /credits (forme inconnue)");
-      return;
-    }
-    const totalCredits = data.total_credits;
-    const totalUsage = data.total_usage;
-    emitter.done(id, { totalCredits, totalUsage, remaining: totalCredits - totalUsage });
-  } catch (err) {
-    emitter.error(id, messageReseau(err));
   }
 }
 

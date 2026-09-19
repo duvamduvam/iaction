@@ -6,7 +6,6 @@
  * - `subscribeStatus` / `subscribeReady` / `subscribeLog` pour les
  *   abonnements React (add/remove synchrones dans un Set : sûrs même
  *   avec le double montage des effets en StrictMode).
- *
  * Les listeners Tauri eux-mêmes sont initialisés une seule fois, au
  * chargement du module (durée de vie = durée de vie de l'app), donc
  * indépendants du cycle de vie des composants React.
@@ -73,16 +72,10 @@ export interface RequestOptions {
   /** Reçoit le `data` brut de chaque événement `chunk` (forme dépendante de la méthode). */
   onChunk?: (data: Record<string, unknown>) => void;
   /**
-   * Requête de SONDE : on interroge pour SAVOIR, et un refus est une réponse
-   * valide (T-007).
-   *
-   * Son échec est journalisé en `debug`, pas en `error`. Ce n'est pas un
-   * assouplissement de la doctrine — rien n'est tu, la ligne existe toujours —
-   * mais l'inverse : un journal qui écrit « error » 140 fois pour une réponse
-   * attendue n'est plus lisible, et c'est alors la VRAIE panne qui se perd
-   * dans le bruit. Le 2026-08-15, `app.jsonl` portait 140 de ces lignes, deux
-   * kilo-octets de HTML chacune, pour une sonde dont l'échec est le
-   * fonctionnement nominal.
+   * Requête de SONDE (T-007) : on interroge pour SAVOIR, un refus est une
+   * réponse valide — journalisé en `debug`, pas en `error`. Rien n'est tu,
+   * mais un journal qui crie 140 fois pour une réponse attendue n'est plus
+   * lisible, et c'est alors la VRAIE panne qui se perd dans le bruit.
    */
   sonde?: boolean;
 }
@@ -100,6 +93,15 @@ const readySubscribers = new Set<(info: ReadyInfo) => void>();
 const logSubscribers = new Set<(line: string) => void>();
 
 let requestCounter = 0;
+/**
+ * T-062 — préfixe par fenêtre, calculé une fois au chargement du module : chaque webview a
+ * son propre compteur reparti de zéro, mais les événements sont diffusés à TOUTES les fenêtres.
+ *
+ * Exporté depuis T-086 : c'est l'identité de fenêtre la plus utile qui existe côté interface,
+ * puisque c'est ELLE qu'on lit dans le journal (`req-xxxxxx-42`). Le verrou de cadence des
+ * relevés s'en sert, si bien qu'une ligne du journal suffit à dire quelle fenêtre sondait.
+ */
+export const identifiantFenetre = Math.random().toString(36).slice(2, 8);
 
 /**
  * Rejette toutes les requêtes en vol, avec un message qui dit la vérité.
@@ -119,6 +121,16 @@ function rejeterRequetesEnVol(etat: string): void {
   for (const [id, handlers] of enVol) {
     handlers.reject(new Error(`${handlers.method} interrompu : ${cause} (requête ${id})`));
   }
+}
+
+/**
+ * T-076 — message d'un event `error` de protocole : une chaîne VIDE compte
+ * comme absente, pas comme un message légitime (la garde précédente laissait
+ * passer `message: ""`, un événement muet malgré son étiquette d'erreur).
+ * Exportée : pure, testée sans mock de Tauri.
+ */
+export function messageErreurProtocole(data: Record<string, unknown>): string {
+  return typeof data.message === "string" && data.message.length > 0 ? data.message : "Erreur inconnue";
 }
 
 function handleSidecarEvent(payload: RawSidecarEvent): void {
@@ -143,8 +155,7 @@ function handleSidecarEvent(payload: RawSidecarEvent): void {
       break;
     case "error": {
       pending.delete(payload.id);
-      const message =
-        typeof payload.data.message === "string" ? payload.data.message : "Erreur inconnue";
+      const message = messageErreurProtocole(payload.data);
       // L2 — journalisation AUTOMATIQUE de toute erreur de protocole : avant
       // ce point, chaque appelant affichait l'erreur dans son coin puis
       // l'oubliait. GARDE ANTI-RÉCURSION : ne jamais journaliser l'échec
@@ -207,7 +218,9 @@ async function setupListeners(): Promise<void> {
   ]);
 }
 
-const listenersReady = setupListeners();
+// T-055 — hors webview (tests Node), pas de `window` : rien à écouter, et le
+// module doit rester importable sans s'installer par effet de bord d'import.
+const listenersReady = typeof window === "undefined" ? Promise.resolve() : setupListeners();
 
 /**
  * Envoie une requête au sidecar (`sidecar_request`) et suit sa réponse.
@@ -220,7 +233,7 @@ export function request(
   options: RequestOptions = {},
 ): RequestHandle {
   requestCounter += 1;
-  const id = `req-${requestCounter}`;
+  const id = `req-${identifiantFenetre}-${requestCounter}`;
 
   const done = new Promise<Record<string, unknown>>((resolve, reject) => {
     pending.set(id, { method, sonde: options.sonde, onChunk: options.onChunk, resolve, reject });
@@ -231,9 +244,7 @@ export function request(
         pending.delete(id);
         const message = err instanceof Error ? err.message : String(err);
         // L2 — la requête n'a même pas pu partir (sidecar mort, stdin absent).
-        // MÊME GARDE ANTI-RÉCURSION que ci-dessus : quand le sidecar est mort,
-        // journaliser l'échec d'un `log.append` en déclencherait un autre, qui
-        // échouerait pareil — boucle infinie.
+        // MÊME GARDE ANTI-RÉCURSION que ci-dessus (log.append sur lui-même).
         if (method !== LOG_APPEND_METHOD) {
           logUi("error", "ui", `envoi au sidecar impossible : ${message}`, {
             reqId: id,
@@ -247,7 +258,6 @@ export function request(
   return { id, done };
 }
 
-/** État courant du sidecar (appel direct, hors abonnement aux events). */
 /**
  * Relance un sidecar mort (`sidecar_restart`, côté Rust).
  *
@@ -259,6 +269,7 @@ export async function restartSidecar(): Promise<void> {
   await invoke("sidecar_restart");
 }
 
+/** État courant du sidecar (appel direct, hors abonnement aux events). */
 export async function fetchStatus(): Promise<StatusPayload> {
   return invoke<StatusPayload>("sidecar_status");
 }
@@ -707,10 +718,23 @@ export interface ClaudeStartCallbacks {
   onPermissionRequest?: (permissionId: string, toolName: string, toolInput: unknown) => void;
   /** Liste COMPLÈTE des tâches de fond vivantes (remplace la précédente — vide = tout est fini). */
   onBackgroundTasks?: (count: number, descriptions: string[]) => void;
+  /**
+   * T-102 — signe de vie d'un sous-agent : compteur cumulé et dernier outil,
+   * jamais la liste que T-092 a retirée du fil. Sans lui, un `Agent` peut
+   * occuper le tour 38 min sans rien qui le distingue d'un blocage.
+   */
+  onSousAgentBattement?: (
+    toolUseId: string,
+    outils: number,
+    dernierOutil: string | null,
+    instant: number,
+  ) => void;
   /** Tour du modèle terminé mais le sidecar attend les rapports de `count` tâche(s) de fond. */
   onBackgroundWait?: (count: number, descriptions: string[]) => void;
   /** Compaction de contexte terminée (« /compact » ou compaction auto) — `preTokens` = taille du contexte avant, si connue. */
   onCompact?: (trigger: string, preTokens: number | null) => void;
+  /** T-087 — un `claude.push` jamais injecté (aucun retour d'outil depuis) : à reposer en file, jamais perdu en silence. */
+  onPushPerdu?: (contenu: string, avaitPieces: boolean) => void;
 }
 
 function str(data: Record<string, unknown>, key: string, fallback = ""): string {
@@ -756,6 +780,14 @@ const CLAUDE_CHUNK_HANDLERS: Record<string, ClaudeChunkHandler> = {
     callbacks.onToolResult?.(str(data, "toolUseId"), data.isError === true, str(data, "summary")),
   permission_request: (data, callbacks) =>
     callbacks.onPermissionRequest?.(str(data, "permissionId"), str(data, "toolName", "outil"), data.toolInput),
+  sous_agent_battement: (data, callbacks) =>
+    callbacks.onSousAgentBattement?.(
+      str(data, "toolUseId"),
+      typeof data.outils === "number" ? data.outils : 0,
+      typeof data.dernierOutil === "string" ? data.dernierOutil : null,
+      // Instant pris à la SOURCE, pas au rendu (T-101) : sinon « il y a 40 s » dérive.
+      typeof data.instant === "number" ? data.instant : Date.now(),
+    ),
   background_tasks: (data, callbacks) =>
     callbacks.onBackgroundTasks?.(
       typeof data.count === "number" ? data.count : 0,
@@ -768,6 +800,7 @@ const CLAUDE_CHUNK_HANDLERS: Record<string, ClaudeChunkHandler> = {
     ),
   compact: (data, callbacks) =>
     callbacks.onCompact?.(str(data, "trigger", "manual"), typeof data.preTokens === "number" ? data.preTokens : null),
+  push_perdu: (data, callbacks) => callbacks.onPushPerdu?.(str(data, "contenu"), data.avaitPieces === true),
 };
 
 /**
@@ -828,13 +861,24 @@ export async function claudeAbort(targetId: string): Promise<boolean> {
 }
 
 /**
- * S3 — glisse une demande dans le tour EN COURS (`targetId`) : le moteur
- * l'injecte au prochain retour d'outil, sans couper le tour ni en ouvrir un
- * nouveau. `false` si le tour n'existe plus ou a été interrompu — l'appelant
- * doit alors se rabattre sur la file d'attente.
+ * S3/T-064 — glisse une demande (et ses pièces jointes) dans le tour EN COURS
+ * (`targetId`) : le moteur l'injecte au prochain retour d'outil, sans couper
+ * le tour ni en ouvrir un nouveau. `true` est un accusé de DÉPÔT, pas de
+ * réception (T-087) : un tour sans retour d'outil après ce push le repose de
+ * lui-même en file via le chunk `push_perdu` (voir `onPushPerdu`). `false` si
+ * le tour n'existe plus ou a été interrompu — l'appelant doit alors se
+ * rabattre sur la file d'attente.
  */
-export async function claudePush(targetId: string, content: string): Promise<boolean> {
-  const { done } = request("claude.push", { targetId, content });
+export async function claudePush(
+  targetId: string,
+  content: string,
+  attachments?: ChatAttachment[],
+): Promise<boolean> {
+  const { done } = request("claude.push", {
+    targetId,
+    content,
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
+  });
   const data = await done;
   return data.pushed === true;
 }
@@ -970,95 +1014,6 @@ export async function neutralAbort(targetId: string): Promise<boolean> {
   return data.aborted === true;
 }
 
-/* ---------- Helpers typés « Méthodes conso » (mini-tranche du Lot 8) ---------- */
-
-export interface ClaudeUsageWindow {
-  utilization: number;
-  resetsAt: string;
-}
-
-/** Dernier instantané connu des limites d'abonnement Claude (`usage.claude`). */
-export interface ClaudeUsageSnapshot {
-  available: boolean;
-  subscriptionType: string | null;
-  fiveHour: ClaudeUsageWindow | null;
-  sevenDay: ClaudeUsageWindow | null;
-  /**
-   * Toutes les fenêtres relayées par le sidecar (clé brute de l'API → fenêtre),
-   * dont celles spécifiques à un modèle (ex. hebdo Opus/Fable) — voir
-   * docs/protocol.md § usage.claude.
-   */
-  windows: Record<string, ClaudeUsageWindow>;
-  capturedAt: string | null;
-}
-
-function parseUsageWindow(value: unknown): ClaudeUsageWindow | null {
-  if (!value || typeof value !== "object") return null;
-  const w = value as Record<string, unknown>;
-  if (typeof w.utilization === "number" && typeof w.resetsAt === "string") {
-    return { utilization: w.utilization, resetsAt: w.resetsAt };
-  }
-  return null;
-}
-
-/**
- * Interroge le dernier instantané des limites d'abonnement Claude (fenêtres
- * 5h / 7j). `available: false` tant qu'aucun tour Claude n'a été joué dans
- * cette session sidecar (ou fournisseur clé API, sans limites applicables).
- */
-export async function usageClaude(): Promise<ClaudeUsageSnapshot> {
-  const { done } = request("usage.claude", {});
-  return parseClaudeUsageSnapshot(await done);
-}
-
-/**
- * Initialise le relevé d'abonnement via un micro-tour Claude économique
- * (haiku, chat pur — voir docs/protocol.md § usage.claude.init). À réserver à
- * une action explicite de l'utilisateur.
- */
-export async function usageClaudeInit(): Promise<ClaudeUsageSnapshot> {
-  const { done } = request("usage.claude.init", {});
-  return parseClaudeUsageSnapshot(await done);
-}
-
-function parseClaudeUsageSnapshot(data: Record<string, unknown>): ClaudeUsageSnapshot {
-  if (data.available !== true) {
-    return { available: false, subscriptionType: null, fiveHour: null, sevenDay: null, windows: {}, capturedAt: null };
-  }
-  const windows: Record<string, ClaudeUsageWindow> = {};
-  if (data.windows && typeof data.windows === "object") {
-    for (const [key, value] of Object.entries(data.windows as Record<string, unknown>)) {
-      const parsed = parseUsageWindow(value);
-      if (parsed) windows[key] = parsed;
-    }
-  }
-  return {
-    available: true,
-    subscriptionType: typeof data.subscriptionType === "string" ? data.subscriptionType : null,
-    fiveHour: parseUsageWindow(data.fiveHour),
-    sevenDay: parseUsageWindow(data.sevenDay),
-    windows,
-    capturedAt: typeof data.capturedAt === "string" ? data.capturedAt : null,
-  };
-}
-
-/** Crédits restants OpenRouter ($). `usageCredits` est une SONDE (T-055, doctrine T-007) : appelée en boucle par l'encart de conso, son refus est une réponse (pas de clé, hors ligne) et se journalise en `debug`, pas en `error`. */
-export interface OpenrouterUsage {
-  totalCredits: number;
-  totalUsage: number;
-  remaining: number;
-}
-
-export async function usageCredits(providerId: string): Promise<OpenrouterUsage> {
-  const { done } = request("usage.credits", { providerId }, { sonde: true });
-  const data = await done;
-  return {
-    totalCredits: typeof data.totalCredits === "number" ? data.totalCredits : 0,
-    totalUsage: typeof data.totalUsage === "number" ? data.totalUsage : 0,
-    remaining: typeof data.remaining === "number" ? data.remaining : 0,
-  };
-}
-
 /* ---------- Helpers typés « claude.commands » (menu « / » du composeur) ---------- */
 
 /** Un slash-command/skill invocable pour un projet (voir docs/protocol.md, `claude.commands`). */
@@ -1103,76 +1058,9 @@ export async function claudeCommands(cwd: string): Promise<SlashCommandInfo[]> {
   return out;
 }
 
-/* ---------- Helpers typés R5 : connaissances indexées (`knowledge.*`) ---------- */
-
-/** Progression streamée d'un `knowledge.index` (un chunk par fichier traité). */
-export interface KnowledgeIndexProgress {
-  file: string;
-  done: number;
-  total: number;
-}
-
-/** `done` d'un `knowledge.index` (voir docs/protocol.md, `knowledge.index`). */
-export interface KnowledgeIndexResult {
-  files: number;
-  chunks: number;
-  model: string;
-}
-
-/** État de l'index d'un projet (voir docs/protocol.md, `knowledge.status`). */
-export interface KnowledgeStatus {
-  exists: boolean;
-  files: number;
-  chunks: number;
-  model: string | null;
-  builtAt: string | null;
-  /** Un document source a changé/apparu/disparu depuis la construction de l'index. */
-  stale: boolean;
-}
-
-/**
- * (Re)construit l'index d'embeddings du projet (incrémental par mtime).
- * `pinned` : chemins des documents épinglés (l'état `project-knowledge` vit
- * côté UI, le sidecar collecte lui-même automatiques + détectées). Rejette en
- * cas d'erreur (fournisseur d'embeddings inconnu, réseau…) — message lisible.
- */
-export async function knowledgeIndex(
-  cwd: string,
-  pinned: string[],
-  onProgress?: (progress: KnowledgeIndexProgress) => void,
-): Promise<KnowledgeIndexResult> {
-  const { done } = request(
-    "knowledge.index",
-    { cwd, ...(pinned.length > 0 ? { pinned } : {}) },
-    {
-      onChunk: (data) => {
-        if (typeof data.file === "string" && typeof data.done === "number" && typeof data.total === "number") {
-          onProgress?.({ file: data.file, done: data.done, total: data.total });
-        }
-      },
-    },
-  );
-  const data = await done;
-  return {
-    files: typeof data.files === "number" ? data.files : 0,
-    chunks: typeof data.chunks === "number" ? data.chunks : 0,
-    model: typeof data.model === "string" ? data.model : "",
-  };
-}
-
-/** État de l'index du projet — `pinned` participe au calcul de `stale` (mêmes chemins que l'indexation). */
-export async function knowledgeStatus(cwd: string, pinned: string[]): Promise<KnowledgeStatus> {
-  const { done } = request("knowledge.status", { cwd, ...(pinned.length > 0 ? { pinned } : {}) });
-  const data = await done;
-  return {
-    exists: data.exists === true,
-    files: typeof data.files === "number" ? data.files : 0,
-    chunks: typeof data.chunks === "number" ? data.chunks : 0,
-    model: typeof data.model === "string" && data.model ? data.model : null,
-    builtAt: typeof data.builtAt === "string" && data.builtAt ? data.builtAt : null,
-    stale: data.stale === true,
-  };
-}
+// Helpers typés R5 (`knowledge.*`, connaissances indexées) : sortis dans
+// connaissancesClient.ts (cliquet de taille) — voir aussi consoClient.ts,
+// même patron.
 
 /* ---------- Helpers typés « claude.sessionTitles » (titres courts calculés par le CLI) ---------- */
 

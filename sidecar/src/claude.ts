@@ -23,14 +23,9 @@ import os from "node:os";
 import { pathToFileURL } from "node:url";
 import { isNonEmptyString, isPlainObject } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
-import {
-  formatTextAttachmentPrefix,
-  isImageAttachment,
-  isTextAttachment,
-  validateAttachments,
-  type Attachment,
-} from "./attachments.js";
+import { validateAttachments, type Attachment } from "./attachments.js";
 import * as journal from "./journal.js";
+import { createTurnPrompt } from "./claudeTurnPrompt.js";
 import { buildAskUserMcpServer, type AskUserAnswer } from "./askUser.js";
 import { buildKnowledgeMcpServer } from "./knowledge.js";
 import {
@@ -43,10 +38,24 @@ import {
 } from "./mcp.js";
 import { ASK_USER_TOOL_NAME, composerInstructionSysteme, resumerPalette } from "./paletteTour.js";
 import { ensureProjectDoc } from "./projectDoc.js";
-import { recordClaudeWindowsSnapshot, recordUsageEvent, type UsageStatus } from "./usageStats.js";
+import { recordUsageEvent } from "./usageStats.js";
+import { recordClaudeWindowsSnapshot } from "./fenetresAbonnement.js";
+import { extractModelUsage } from "./claudeVentilation.js";
 import { executerClaudeCommands } from "./claudeCommands.js";
 import { resolveQueryFn } from "./claudeQueryFn.js";
-import { armerPlafondSilence, cloturerTourSansResultatFinal, type ResultatDeTour } from "./claudeFinDeTour.js";
+import { creerRegistrePushes, executerClaudePush, signalerPushesPerdus } from "./poussesEnAttente.js";
+import { decorerErreurClaude } from "./diagnosticErreurClaude.js";
+import { origineMessage } from "./claudeSousAgents.js";
+import { creerSuiviSousAgents, estLanceurSousAgent } from "./sousAgentsJournal.js";
+import { creerRegistreRappels, preparerRappelSurAbandon, type DemandeurAbandon } from "./rappelInterruption.js";
+import {
+  armerPlafondSilence,
+  cloturerTourSansResultatFinal,
+  enregistrerResultatFinal,
+  subtypePourInterface,
+  type Interruption,
+  type ResultatDeTour,
+} from "./claudeFinDeTour.js";
 import {
   captureUsageSnapshot,
   executerClaudeUsage,
@@ -260,125 +269,13 @@ export function extractContextTokens(usage: unknown): number | null {
   return total > 0 ? total : null;
 }
 
-export function decorateAuthError(message: string): string {
-  // Limite d'abonnement : à distinguer d'un défaut d'authentification (le mot
-  // « limit » côtoie souvent « credit »/« plan » dans ces messages), sinon
-  // l'utilisateur reçoit un conseil de reconnexion sans rapport.
-  if (/usage limit|rate.?limit|limit reached|quota/i.test(message)) {
-    return `${message} — limite d'abonnement atteinte ; voir la jauge de session en en-tête pour le temps restant avant réinitialisation.`;
-  }
-  if (/auth|login|api key/i.test(message)) {
-    return `${message} — connectez-vous via \`claude login\` ou configurez une clé API dans Fournisseurs.`;
-  }
-  return message;
-}
-
-// ---------------------------------------------------------------------------
-// Pièces jointes — construction du prompt à blocs (voir docs/protocol.md,
-// section Pièces jointes, § « Moteur Claude »). Uniquement emprunté quand
-// params.attachments contient au moins une pièce ; sans pièces jointes, le
-// prompt reste une simple chaîne (chemin inchangé, zéro régression).
-// ---------------------------------------------------------------------------
-
 /**
- * Un unique message utilisateur SDK (forme `SDKUserMessage` minimale : les
- * champs optionnels du SDK — uuid, session_id, etc. — sont omis, le SDK ne
- * les exige pas) porté par un flux asynchrone d'un seul élément, comme l'exige
- * la signature `query({prompt: string | AsyncIterable<SDKUserMessage>})`.
+ * Décoration d'un message d'erreur du moteur. Le classement vit désormais dans
+ * `diagnosticErreurClaude.ts` (T-118), qui a ajouté aux deux familles d'origine
+ * — abonnement, authentification — les deux qui manquaient : HTTPS intercepté
+ * et API injoignable. Nom conservé pour les appelants et les tests existants.
  */
-function buildUserMessage(promptText: string, attachments: Attachment[]): Record<string, unknown> {
-  const textPrefixes = attachments
-    .filter(isTextAttachment)
-    .map((doc) => formatTextAttachmentPrefix(doc.name, doc.content));
-  const text = [...textPrefixes, promptText].filter((part) => part.length > 0).join("\n\n");
-
-  const content: Array<Record<string, unknown>> = [{ type: "text", text }];
-  for (const image of attachments.filter(isImageAttachment)) {
-    content.push({
-      type: "image",
-      source: { type: "base64", media_type: image.mediaType, data: image.data },
-    });
-  }
-
-  return { type: "user", message: { role: "user", content }, parent_tool_use_id: null };
-}
-
-/**
- * Prompt d'un tour en ENTRÉE STREAMÉE : yield le message utilisateur, puis
- * reste suspendu jusqu'à `close()` — en livrant au passage les messages
- * poussés par `push()` (claude.push, voir plus bas).
- *
- * Pourquoi ne pas passer une simple chaîne : avec un prompt-chaîne (ou un
- * générateur d'un seul élément), le SDK ferme l'entrée aussitôt et le CLI
- * s'ARRÊTE de lui-même après le `result` — emportant ses tâches de fond
- * (`run_in_background`), tuées à mi-course. Vécu le 2026-07-31 : un
- * `make docs-build` lancé en fond meurt 5 s après la fin du tour, et le tour
- * suivant reçoit ses `task-notification` « orphelines ». Garder l'entrée
- * ouverte laisse le process vivre : les tâches poursuivent, leurs rapports
- * réveillent l'agent (nouveau tour → nouveau `result`), et c'est le sidecar
- * qui décide de la fin (plafond BACKGROUND_WAIT_TIMEOUT_MS ou claude.release).
- * `close()` est donc OBLIGATOIRE en fin de tour, sinon le process CLI fuit.
- *
- * S3 — `push()` glisse un message utilisateur SUPPLÉMENTAIRE dans cette même
- * entrée pendant que le tour tourne (« demande en cours de route », méthode
- * `claude.push`). Le CLI l'injecte au prochain retour d'outil, DANS le tour
- * courant — vérifié sur le vrai moteur : un message poussé à T+6 s a été pris
- * en compte à T+18 s (fin du premier Bash), sans `result` intermédiaire. Même
- * comportement que Claude Code dans VSCode. Le générateur ne se termine
- * toujours que sur `close()`.
- */
-function createTurnPrompt(
-  promptText: string,
-  attachments: Attachment[],
-): {
-  iterable: AsyncIterable<Record<string, unknown>>;
-  push: (text: string) => void;
-  close: () => void;
-} {
-  const queued: Record<string, unknown>[] = [];
-  let closed = false;
-  // Réveil du générateur suspendu : `null` quand personne n'attend (push
-  // avant la première suspension → le message reste simplement dans `queued`).
-  let wake: (() => void) | null = null;
-
-  function signal(): void {
-    const resolve = wake;
-    wake = null;
-    resolve?.();
-  }
-
-  async function* gen(): AsyncGenerator<Record<string, unknown>> {
-    yield buildUserMessage(promptText, attachments);
-    while (true) {
-      while (queued.length > 0) {
-        yield queued.shift() as Record<string, unknown>;
-      }
-      if (closed) {
-        return;
-      }
-      await new Promise<void>((resolve) => {
-        wake = resolve;
-      });
-    }
-  }
-
-  return {
-    iterable: gen(),
-    push: (text: string) => {
-      if (closed) {
-        return;
-      }
-      // Pas de pièces jointes sur un message poussé : le contrat `claude.push`
-      // est volontairement texte seul (voir docs/protocol.md § claude.push).
-      queued.push(buildUserMessage(text, []));
-      signal();
-    },
-    close: () => {
-      closed = true;
-      signal();
-    },
-  };
-}
+export const decorateAuthError = decorerErreurClaude;
 
 // ---------------------------------------------------------------------------
 // Support MCP — la lecture de <cwd>/.mcp.json, les interrupteurs locaux, les
@@ -411,14 +308,19 @@ interface RunState {
   pendingQuestions: Map<string, PendingQuestion>;
   permCounter: number;
   aborted: boolean;
+  /** T-082 — pourquoi le tour a été COUPÉ, quand il l'a été : c'est ce que lit
+      la clôture pour ne pas maquiller une interruption en panne. Distinct
+      d'`aborted`, qui ne connaît que `claude.abort` et commande l'interrupt. */
+  interruption: Interruption;
+  abortDemandeur: DemandeurAbandon | null; // T-102 — pour le rappel du tour suivant (rappelInterruption.ts)
   /** Tour du modèle fini mais process gardé ouvert en attente des rapports de
       tâches de fond (voir le case "result") : seul état où claude.release agit. */
   waitingBackground: boolean;
   /** Ferme l'entrée streamée du tour (voir createTurnPrompt) : sans cet appel,
       le process CLI reste vivant en attente d'un message qui ne viendra pas. */
   closePrompt: () => void;
-  /** S3 — glisse un message utilisateur dans le tour EN COURS (claude.push). */
-  pushPrompt: (text: string) => void;
+  /** S3/T-064 — glisse un message et ses pièces jointes dans le tour EN COURS. */
+  pushPrompt: (text: string, attachments: Attachment[]) => void;
 }
 
 /** Plafond d'attente des rapports de tâches de fond après la fin du tour du
@@ -464,6 +366,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
 
   /** Tours en cours, indexés par l'id de la requête claude.start correspondante. */
   const runs = new Map<string, RunState>();
+  const rappelsInterruption = creerRegistreRappels(); // T-102 — rappel du tour suivant après un abandon (rappelInterruption.ts)
 
   /** Dernier instantané connu des limites d'abonnement (voir usage.claude). */
   let lastUsageSnapshot: ClaudeUsageSnapshot | null = null;
@@ -537,15 +440,17 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       emitter.error(id, attachmentsValidation.message);
       return;
     }
-    // Entrée streamée TOUJOURS (pièces jointes ou non) : c'est ce qui garde le
-    // process CLI en vie après le `result` — voir createTurnPrompt.
-    const turnPrompt = createTurnPrompt(prompt, attachmentsValidation.attachments);
-    const promptForQuery: AsyncIterable<Record<string, unknown>> = turnPrompt.iterable;
-
     const sessionIdParam = params.sessionId;
     const modelParam = params.model;
     const permissionModeParam = params.permissionMode;
     const systemPromptParam = params.systemPrompt;
+    // T-102 — rappel d'un abandon avec sous-agent en vol (rappelInterruption.ts).
+    const rappelInterruption = rappelsInterruption.consommer(isNonEmptyString(sessionIdParam) ? sessionIdParam : null);
+    const promptAvecRappel = rappelInterruption ? `${rappelInterruption}\n\n${prompt}` : prompt;
+    // Entrée streamée TOUJOURS (pièces jointes ou non) : c'est ce qui garde le
+    // process CLI en vie après le `result` — voir createTurnPrompt.
+    const turnPrompt = createTurnPrompt(promptAvecRappel, attachmentsValidation.attachments);
+    const promptForQuery: AsyncIterable<Record<string, unknown>> = turnPrompt.iterable;
 
     // Guide d'intégration déposé dans le projet (.iaction/connaissances/,
     // voir projectDoc.ts) : rafraîchi en début de tour projet, best effort.
@@ -566,6 +471,8 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     // outils MCP (canUseTool). Jamais en mode chat pur.
     const knowledgeServer = chatOnly ? null : await buildKnowledgeMcpServer(cwd);
 
+    // T-087 — comptabilité des push non acquittés de CE tour (voir poussesEnAttente.ts).
+    const registrePushes = creerRegistrePushes();
     const runState: RunState = {
       // Initialisé juste après l'appel à queryFn ci-dessous.
       query: undefined as unknown as ClaudeQuery,
@@ -573,9 +480,13 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       pendingQuestions: new Map(),
       permCounter: 0,
       aborted: false,
+      interruption: null, abortDemandeur: null,
       waitingBackground: false,
       closePrompt: turnPrompt.close,
-      pushPrompt: turnPrompt.push,
+      pushPrompt: (text, pushedAttachments) => {
+        turnPrompt.push(text, pushedAttachments);
+        registrePushes.enregistrer(text, pushedAttachments.length > 0);
+      },
     };
 
     /**
@@ -731,6 +642,11 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
         journaliser la durée réelle de chaque appel à la réception du résultat
         (observabilité : quels serveurs servent, lesquels traînent). */
     const inFlightMcpCalls = new Map<string, { server: string; tool: string; startedAt: number }>();
+    /** Sous-agents lancés par CE tour (bloc `Task`/`Agent` du fil) en vol —
+        voir sousAgentsJournal.ts (T-102 : un sous-agent pouvait tourner
+        38 min sans UNE ligne de journal — le fil ne voit passer que son
+        lancement et son tool_result, jamais le détail écarté depuis T-092). */
+    const sousAgents = creerSuiviSousAgents();
     /** Passe à true sur le message `result` FINAL : provoque la sortie de la boucle (voir ce case). */
     let turnFinished = false;
     /** Tâches de fond vivantes (system/background_tasks_changed, sémantique REPLACE :
@@ -835,7 +751,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     // sans le moindre message, pas même `system:init`, faisait attendre
     // l'interface pour toujours. Armé ici, désarmé au PREMIER message reçu.
     const plafondSilence = armerPlafondSilence({
-      id, emitter, model: lastModel, sessionId: lastSessionId, auSilence: nettoyerFinDeTour,
+      id, emitter, model: lastModel, sessionId: lastSessionId, meta: params.meta, auSilence: nettoyerFinDeTour,
     });
 
     try {
@@ -856,6 +772,15 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
           clearBackgroundWaitWatchdog();
           runState.waitingBackground = false;
         }
+        // T-092 — tout ce qu'un sous-agent produit porte `parent_tool_use_id` :
+        // c'est du travail du fil, ce n'est pas de la PAROLE du fil.
+        const deSousAgent = origineMessage(message) === "sous-agent";
+        // T-102 — même champ, gardé cette fois : quel sous-agent (quel `Task`
+        // lanceur, voir sousAgentsJournal.ts) a produit CE message.
+        const parentToolUseId =
+          deSousAgent && typeof (message as { parent_tool_use_id?: unknown }).parent_tool_use_id === "string"
+            ? (message as { parent_tool_use_id: string }).parent_tool_use_id
+            : null;
 
         switch (message.type) {
           case "system": {
@@ -935,7 +860,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
           }
           case "stream_event": {
             const event = message.event;
-            if (isPlainObject(event) && event.type === "content_block_delta") {
+            if (isPlainObject(event) && event.type === "content_block_delta" && !deSousAgent) {
               const delta = event.delta;
               if (isPlainObject(delta) && delta.type === "text_delta" && typeof delta.text === "string") {
                 sawAssistantOutput = true;
@@ -953,10 +878,13 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
             break;
           }
           case "assistant": {
+            // T-082 — le modèle reparle après un refus : le tour a survécu,
+            // l'indicateur ne doit plus couvrir une panne survenue ensuite.
+            if (runState.interruption === "refus") runState.interruption = null;
             const inner = message.message;
             // Usage de CET appel (une réponse modèle = un appel) : on retient le
             // dernier vu, seul reflet fidèle de l'occupation du contexte.
-            if (isPlainObject(inner)) {
+            if (isPlainObject(inner) && !deSousAgent) {
               const ctx = extractContextTokens(inner.usage);
               if (ctx !== null) lastContextTokens = ctx;
             }
@@ -974,12 +902,9 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
                 // perdu — cas réel : les messages d'erreur synthétisés par le
                 // CLI (« API Error: 529 Overloaded », model "<synthetic>"),
                 // qui étaient invisibles dans l'UI (« terminé sans résultat »).
-                if (block.type === "text" && !sawTextDeltaForCall) {
+                if (block.type === "text" && !sawTextDeltaForCall && !deSousAgent) {
                   const text = typeof block.text === "string" ? block.text : "";
-                  if (text.trim()) {
-                    sawAssistantOutput = true;
-                    emitter.chunk(id, { kind: "text", delta: text });
-                  }
+                  if (text.trim()) { sawAssistantOutput = true; emitter.chunk(id, { kind: "text", delta: text }); }
                 }
                 if (block.type === "tool_use") {
                   sawAssistantOutput = true;
@@ -989,16 +914,23 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
                   if (toolUseId && mcp) {
                     inFlightMcpCalls.set(toolUseId, { ...mcp, startedAt: Date.now() });
                   }
-                  emitter.chunk(id, {
-                    kind: "tool_use",
-                    toolUseId,
-                    toolName,
-                    toolInput: block.input ?? {},
-                  });
+                  if (deSousAgent) {
+                    // T-102 — battement : compteur + dernier outil (jamais la liste retirée par T-092).
+                    const battement = sousAgents.compterOutil(parentToolUseId, toolName);
+                    if (battement) emitter.chunk(id, { kind: "sous_agent_battement", ...battement, instant: Date.now() });
+                  } else {
+                    emitter.chunk(id, { kind: "tool_use", toolUseId, toolName, toolInput: block.input ?? {} });
+                    if (toolUseId && toolName && estLanceurSousAgent(toolName)) {
+                      sousAgents.lancer(id, toolUseId, block.input);
+                    }
+                  }
                 }
               }
             }
             // Prochain appel API : nouveau cycle deltas → message assistant.
+            // Jamais sur un message de sous-agent (T-092) : le cycle du fil
+            // n'est pas fini, et le rouvrir ici réémettait son texte en entier.
+            if (deSousAgent) { sawAssistantOutput = true; break; }
             sawTextDeltaForCall = false;
             tryCaptureUsage();
             break;
@@ -1030,13 +962,14 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
                     resultChars: summary.length,
                   });
                 }
-                emitter.chunk(id, {
-                  kind: "tool_result",
-                  toolUseId,
-                  isError,
-                  summary,
-                  durationMs,
-                });
+                if (!deSousAgent) {
+                  emitter.chunk(id, { kind: "tool_result", toolUseId, isError, summary, durationMs });
+                  // T-087 — tool_result DU FIL = acquittement des push antérieurs.
+                  registrePushes.acquitterSurToolResult();
+                  // T-102 — ce tool_result clôt-il un sous-agent vu partir ?
+                  const issue = !isError ? "ok" : runState.interruption === "abandon" ? "annulé" : "erreur";
+                  sousAgents.terminer(id, toolUseId, issue);
+                }
               }
             }
             break;
@@ -1050,7 +983,15 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
             const resultUsage = extractUsage(message.usage);
             const doneData = {
               sessionId: lastSessionId,
-              subtype: resultSubtype,
+              // T-102 — `error_during_execution` est ambigu (panne OU tour
+              // coupé, voir claudeFinDeTour.ts) : sur un ABANDON explicite
+              // (claude.abort), l'UI reçoit la classe déjà connue ici
+              // (`runState.interruption`), jamais le subtype brut du SDK — voir
+              // `subtypePourInterface`, volontairement borné à l'abandon.
+              // `enregistrerResultatFinal` ci-dessous continue de recevoir
+              // `resultSubtype` (inchangé) : le journal et l'usage gardent la
+              // cause technique exacte, y compris pour un refus.
+              subtype: subtypePourInterface(resultSubtype, runState.interruption),
               result: typeof message.result === "string" ? message.result : null,
               usage: resultUsage,
               // Occupation réelle de la fenêtre de contexte (dernier appel), à ne
@@ -1108,37 +1049,22 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
               break;
             }
 
-            const resultStatus: UsageStatus = resultSubtype === "success" ? "done" : "error";
-            // Un seul événement d'usage par claude.start, sur le result FINAL
-            // (usage/coût cumulés du process ; les résultats intermédiaires
-            // ci-dessus n'en émettent pas pour ne pas compter double).
-            recordUsageEvent({
+            // T-082 — usage + journal de la fin de tour : voir
+            // claudeFinDeTour.ts, qui décide seul « panne ou interruption ».
+            enregistrerResultatFinal({
               id,
-              engine: "claude",
-              method: "claude.start",
-              providerId: null,
-              model: lastModel,
-              promptTokens: resultUsage?.inputTokens ?? null,
-              completionTokens: resultUsage?.outputTokens ?? null,
-              status: resultStatus,
-              // L4 — le `subtype` du SDK EST la cause (error_max_turns,
-              // error_during_execution…). `message.result` n'est pas repris :
-              // sur un tour réussi il porte la réponse de l'assistant, et le
-              // journal ne doit jamais contenir de corps de réponse.
-              errorMessage: resultStatus === "error" ? `résultat Claude: ${resultSubtype}` : null,
               meta: params.meta,
+              model: lastModel,
+              sessionId: lastSessionId,
+              subtype: resultSubtype,
+              interruption: runState.interruption,
+              usage: resultUsage,
+              ventilation: extractModelUsage(message.modelUsage, lastModel),
+              contextTokens: lastContextTokens,
+              durationMs: Date.now() - turnStartedAt,
             });
-            if (resultStatus === "error") {
-              // T-015 — l'échec était consigné dans le magasin d'usage et NULLE
-              // PART ailleurs : le journal, celui que lit la page Système et
-              // qu'on ouvre quand quelque chose cloche, n'en recevait rien.
-              // Même règle que ci-dessus : le `subtype` EST la cause, et
-              // `message.result` n'entre jamais ici.
-              journal.error("claude", "tour Claude terminé en erreur", {
-                reqId: id,
-                fields: { subtype: resultSubtype, sessionId: lastSessionId, model: lastModel },
-              });
-            }
+            // T-087 — AVANT le done, jamais après (voir poussesEnAttente.ts).
+            signalerPushesPerdus({ id, emitter, pushes: registrePushes.vider() });
             emitter.done(id, doneData);
             const snapshot = await captureUsageSnapshot(query);
             if (snapshot) {
@@ -1167,7 +1093,12 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       // l'exception qui remonte n'est que l'écho de son interrupt — on ne
       // signale pas le même échec deux fois.
       if (!runState.aborted && !plafondSilence.aSignale()) {
-        const message = err instanceof Error ? err.message : String(err);
+        // T-076 — une exception au message vide (rare mais réel : certaines
+        // erreurs du SDK n'en portent aucun) devenait un événement muet malgré
+        // la trace de journal juste en dessous ; repli explicite plutôt que
+        // silence.
+        const message =
+          (err instanceof Error ? err.message : "") || String(err) || "exception sans message";
         denyAllPending(runState, "Tour interrompu");
         runs.delete(id);
         recordUsageEvent({
@@ -1200,6 +1131,8 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
         // sidecar — et un watchdog armé pouvait tirer 10 min plus tard sur une
         // query morte.
         nettoyerFinDeTour();
+        // T-087 — même règle que le `result` normal : avant l'error, jamais après.
+        signalerPushesPerdus({ id, emitter, pushes: registrePushes.vider() });
         emitter.error(id, decorateAuthError(message));
         return;
       }
@@ -1215,8 +1148,11 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     nettoyerFinDeTour();
     denyAllPending(runState, "Tour interrompu");
     runs.delete(id);
+    preparerRappelSurAbandon(rappelsInterruption, runState.interruption === "abandon", runState.abortDemandeur, lastSessionId, sousAgents.instantane()); // T-102 — pour le PROCHAIN tour, pas de contrainte d'ordre avec done/error
 
     if (!turnFinished && !plafondSilence.aSignale()) {
+      // T-087 — clôture ANORMALE (abort/silence) : avant le done/error à venir.
+      signalerPushesPerdus({ id, emitter, pushes: registrePushes.vider() });
       // Fin ANORMALE : voir claudeFinDeTour.ts — un tour qui rate laisse un
       // événement d'usage, une ligne de journal `error` et un message à
       // l'interface, jamais le silence (T-015).
@@ -1230,6 +1166,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
         pendingResult: pendingResultDone,
         sawResult,
         aborted: runState.aborted,
+        interruption: runState.interruption,
         sawAssistantOutput,
       });
     }
@@ -1274,6 +1211,12 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     if (decision === "allow") {
       pending.resolve({ behavior: "allow" });
     } else {
+      // T-082 — un refus coupe généralement le tour côté CLI, et le SDK rend
+      // alors `error_during_execution` : sans cet indicateur, un usage
+      // parfaitement normal était compté comme une panne. Un abandon déjà
+      // posé prime (il est définitif) ; l'indicateur s'efface si le modèle
+      // reparle malgré le refus (voir le cas `assistant`).
+      if (run.interruption === null) run.interruption = "refus";
       const message = isNonEmptyString(params.message) ? params.message : "Refusé par l'utilisateur";
       pending.resolve({ behavior: "deny", message });
     }
@@ -1291,11 +1234,26 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       return;
     }
     const run = runs.get(targetId);
+    // T-102 — un « arrêt demandé » ne laissait AUCUNE trace : ni qui, ni
+    // quand. `reqId: targetId` rattache la ligne au journal du tour visé
+    // (même reqId que ses autres lignes, ex. « serveurs MCP du tour »).
+    // L'origine se lit dans id/targetId : l'orchestrateur (timeout de run,
+    // orch.abort) rappelle TOUJOURS avec `id === targetId` (voir
+    // orchestrator.ts, `stepRunner.abort(engine, info.internalId, {targetId:
+    // info.internalId}, …)`) ; un abandon posé par l'UI porte un id de
+    // requête protocolaire distinct.
+    const demandeur: DemandeurAbandon = id === targetId ? "orchestration" : "protocole"; // T-102 — repris dans abortDemandeur
+    journal.info("claude", "abandon demandé", {
+      reqId: targetId,
+      fields: { demandeur, trouve: run !== undefined },
+    });
     if (!run) {
       emitter.done(id, { aborted: false });
       return;
     }
     run.aborted = true;
+    run.interruption = "abandon";
+    run.abortDemandeur = demandeur;
     denyAllPending(run, "Tour interrompu");
     run.closePrompt();
     run.query.interrupt().catch(() => {
@@ -1305,39 +1263,10 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     emitter.done(id, { aborted: true });
   }
 
-  /**
-   * S3 — glisse un message utilisateur dans le tour EN COURS, sans l'attendre
-   * ni le couper : le CLI l'injecte au prochain retour d'outil (comportement
-   * de Claude Code dans VSCode). Utile surtout quand l'agent attend des
-   * tâches de fond — on peut l'interroger pendant qu'il patiente.
-   *
-   * `pushed: false` (jamais une erreur) si le tour n'existe plus ou a été
-   * interrompu : côté UI, c'est le signal pour remettre le message dans la
-   * file d'attente du tour suivant plutôt que de le perdre.
-   */
-  function handleClaudePush(
-    id: string,
-    params: Record<string, unknown>,
-    emitter: EngineEmitter,
-  ): void {
-    const targetId = params.targetId;
-    const content = params.content;
-    if (!isNonEmptyString(targetId)) {
-      emitter.error(id, "params.targetId manquant ou invalide");
-      return;
-    }
-    if (!isNonEmptyString(content)) {
-      emitter.error(id, "params.content manquant ou invalide");
-      return;
-    }
-    const run = runs.get(targetId);
-    if (!run || run.aborted) {
-      emitter.done(id, { pushed: false });
-      return;
-    }
-    run.pushPrompt(content);
-    emitter.done(id, { pushed: true });
-  }
+  // S3/T-064/T-087 — `claude.push` (glisser une demande + pièces jointes dans
+  // le tour EN COURS) est entièrement porté par `executerClaudePush`, voir
+  // poussesEnAttente.ts : même raison qu'usage/commands (Étape 9), un
+  // handler qui ne lit/écrit QUE `runs` n'a pas à vivre dans ce fichier.
 
   /** Rendre la main pendant l'attente des rapports de tâches de fond : clôt le
       tour SANS le marquer interrompu — interrupt() fait retomber la boucle de
@@ -1386,7 +1315,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     handleClaudeStart,
     handleClaudePermission,
     handleClaudeAbort,
-    handleClaudePush,
+    handleClaudePush: (id, params, emitter) => executerClaudePush(runs, id, params, emitter),
     handleClaudeRelease,
     handleClaudeUsage: (id, params, emitter) => executerClaudeUsage(depotUsage, id, params, emitter),
     handleClaudeUsageInit: (id, params, emitter) =>

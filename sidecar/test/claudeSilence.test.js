@@ -17,6 +17,11 @@
  * explicite, et le journal une ligne `error` nommant session et modèle — sans
  * jamais de corps de réponse.
  *
+ * Un troisième bloc (T-076) vit ici pour la même raison que les deux
+ * premiers — c'est le même chemin de code (le `catch` autour du for-await du
+ * flux SDK) : une exception au MESSAGE VIDE devenait un événement d'usage et
+ * une ligne de journal muets, malgré un échec bien réel.
+ *
  * Lancement isolé : node sidecar/test/claudeSilence.test.js
  */
 
@@ -243,9 +248,83 @@ async function testPlafondDeSilence() {
       sc.received.filter((e) => e.id === "silence-1" && e.event === "error").length === 1,
       "le plafond de silence ne doit signaler l'échec qu'une seule fois",
     );
+
+    // T-076 — un tour mort de silence était ABSENT du taux d'erreur : aucun
+    // événement d'usage n'était écrit. Vérifié via usage.stats (agrégat de
+    // sobriété), et écrit UNE seule fois (les deux gardes en aval de claude.ts
+    // s'effacent devant `plafondSilence.aSignale()`). L'écriture d'events.jsonl
+    // est mise en file (jsonlStore.enqueueWrite) : quelques essais, comme pour
+    // le journal plus haut.
+    let causePlafond;
+    for (let essai = 0; essai < 20 && !causePlafond; essai++) {
+      sc.send({ id: `us-silence-${essai}`, method: "usage.stats", params: {} });
+      const doneUsSilence = await sc.waitFor(
+        (e) => e.id === `us-silence-${essai}` && e.event === "done",
+        3000,
+        "usage.stats après plafond de silence",
+      );
+      causePlafond = doneUsSilence.data.sobriete.parCause.find((c) => c.cause.includes("plafond de silence"));
+      if (!causePlafond) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert(
+      causePlafond !== undefined && causePlafond.tours === 1,
+      "l'agrégat de sobriété doit compter EXACTEMENT une panne « plafond de silence »",
+    );
   } finally {
     await sc.arreter();
   }
 }
 
-await lancer("silences d'un tour Claude", testTourSansResultat, testPlafondDeSilence);
+/**
+ * 3. Le flux lève une exception au message VIDE : le journal ET l'événement
+ *    d'usage doivent quand même porter une cause exploitable, jamais "".
+ */
+async function testExceptionMessageVide() {
+  const sc = await demarrerSidecar("fakeClaudeExceptionVide.mjs");
+  try {
+    sc.send({ id: "exv-1", method: "claude.start", params: { cwd: "/tmp", prompt: "bonjour ?" } });
+
+    const err = await sc.waitFor((e) => e.id === "exv-1" && e.event === "error", 5000, "error du tour exv-1");
+    assert(
+      typeof err.data?.message === "string" && err.data.message.length > 0,
+      `l'erreur transmise à l'interface ne doit jamais être vide, reçu ${JSON.stringify(err.data)}`,
+    );
+
+    const entrees = await sc.lireErreursDuJournal("lecture-exv");
+    const ligne = entrees.find((e) => e.msg === "exception pendant le tour Claude");
+    assert(
+      ligne !== undefined,
+      `le journal doit contenir « exception pendant le tour Claude », reçu ${JSON.stringify(
+        entrees.map((e) => e.msg),
+      )}`,
+    );
+    assert(
+      typeof ligne.fields.erreur === "string" && ligne.fields.erreur.length > 0,
+      `la cause journalisée ne doit jamais être vide, reçu ${JSON.stringify(ligne.fields)}`,
+    );
+    assertPasDeCorpsDeReponse(ligne);
+
+    // Même repli côté événement d'usage (agrégat de sobriété, usage.stats).
+    let causeExv;
+    for (let essai = 0; essai < 20 && !causeExv; essai++) {
+      sc.send({ id: `us-exv-${essai}`, method: "usage.stats", params: {} });
+      const doneUsExv = await sc.waitFor(
+        (e) => e.id === `us-exv-${essai}` && e.event === "done",
+        3000,
+        "usage.stats après exception au message vide",
+      );
+      causeExv = doneUsExv.data.sobriete.parCause.find((c) => c.cause.length > 0 && c.cause !== "(aucune cause enregistrée, antérieur au 2026-08-01)");
+      if (!causeExv) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert(causeExv !== undefined, "l'agrégat de sobriété doit compter une panne avec une cause non vide");
+  } finally {
+    await sc.arreter();
+  }
+}
+
+await lancer(
+  "silences d'un tour Claude",
+  testTourSansResultat,
+  testPlafondDeSilence,
+  testExceptionMessageVide,
+);
