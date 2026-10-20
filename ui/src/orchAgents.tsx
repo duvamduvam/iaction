@@ -336,7 +336,7 @@ export function AgentEditor({ mode, cwd, hasProject, providers, initial, initial
                 id="ag-model"
                 value={model}
                 onChange={(e) => setModel(e.currentTarget.value)}
-                placeholder="ex. claude-fable-5, qwen3.5:4b"
+                placeholder="ex. claude-fable-5-1, qwen3.5:4b"
               />
             </div>
             <div className="field">

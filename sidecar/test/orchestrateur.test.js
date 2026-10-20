@@ -232,6 +232,44 @@ async function testOrchestratorCrud() {
       `al4 reviewer.instructions incorrect: ${JSON.stringify(foundImported.instructions)}`,
     );
 
+    // 4 bis. T-081 — agents Claude Code DU POSTE (`~/.claude/agents`, isolé par
+    // CLAUDE_CONFIG_DIR dans le harness). Le SDK les charge et peut les lancer :
+    // `agents.list` doit savoir les nommer, avec leur modèle déclaré. Et à nom
+    // égal, le manifeste du PROJET gagne — la précédence du SDK, pas un doublon.
+    const posteAgentsDir = path.join(process.env.CLAUDE_CONFIG_DIR, "agents");
+    await fsp.mkdir(posteAgentsDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(posteAgentsDir, "explorateur.md"),
+      "---\nname: explorateur\ndescription: Balayage en lecture seule.\nmodel: haiku\n---\nTu localises, tu ne juges pas.\n",
+      "utf8",
+    );
+    // Homonyme de l'agent projet écrit en 4 : c'est celui du projet qui doit rester.
+    await fsp.writeFile(
+      path.join(posteAgentsDir, "reviewer.md"),
+      "---\nname: reviewer\ndescription: Version du poste, doit être écartée.\nmodel: opus\n---\nCorps du poste.\n",
+      "utf8",
+    );
+    send4({ id: "al5", method: "agents.list", params: { cwd: tmpProject } });
+    const doneAl5 = await waitFor4(
+      (e) => e.id === "al5" && (e.event === "done" || e.event === "error"),
+      3000,
+      "agents.list al5",
+    );
+    const foundPoste = doneAl5.data.agents.find((a) => a.name === "explorateur");
+    assert(
+      foundPoste,
+      `agents.list al5 doit contenir l'agent du poste 'explorateur', reçu ${JSON.stringify(doneAl5.data.agents.map((a) => a.name))}`,
+    );
+    assert(
+      foundPoste.model === "haiku" && foundPoste.scope === "claude-code" && foundPoste.readOnly === true,
+      `al5 'explorateur' doit porter son modèle déclaré et le scope claude-code: ${JSON.stringify(foundPoste)}`,
+    );
+    const homonymes = doneAl5.data.agents.filter((a) => a.name === "reviewer");
+    assert(
+      homonymes.length === 1 && homonymes[0].description === "Relit le code.",
+      `al5 'reviewer' du PROJET doit primer sur celui du poste, reçu ${JSON.stringify(homonymes)}`,
+    );
+
     // 5. Validation refusée : name invalide, engine neutral sans provider, permissionMode plan + neutral.
     send4({
       id: "av1",

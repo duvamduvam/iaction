@@ -485,7 +485,7 @@ export async function stopRecording(): Promise<string> {
     );
   }
 
-  const resampled = resampleLinear(samples, sampleRate, TARGET_SAMPLE_RATE);
+  const resampled = resamplePcm(samples, sampleRate, TARGET_SAMPLE_RATE);
   return bytesToBase64(new Uint8Array(encodeWavPcm16(resampled)));
 }
 
@@ -527,12 +527,46 @@ function peakLevel(samples: Float32Array): number {
 }
 
 /**
- * Ré-échantillonnage linéaire maison (48 kHz → 16 kHz en pratique). On part
- * déjà de Float32 en mémoire : un aller-retour par `OfflineAudioContext`
- * imposerait un encodage/décodage inutile. L'interpolation linéaire suffit
- * amplement pour de la parole destinée à Whisper.
+ * Demi-largeur du noyau de ré-échantillonnage, en échantillons de SORTIE.
+ * Douze lobes de part et d'autre suffisent à obtenir une atténuation très
+ * au-delà du bruit de quantification 16 bits, pour un coût négligeable devant
+ * l'appel réseau de transcription qui suit.
  */
-export function resampleLinear(
+const RESAMPLE_LOBES = 12;
+
+/** sinc normalisé — réponse impulsionnelle du passe-bas idéal. */
+function sinc(x: number): number {
+  if (x === 0) return 1;
+  const p = Math.PI * x;
+  return Math.sin(p) / p;
+}
+
+/**
+ * Ré-échantillonnage 48 kHz → 16 kHz par sinc fenêtré (Hann).
+ *
+ * ── Pourquoi pas l'interpolation linéaire ───────────────────────────────
+ * C'est ce que faisait cette fonction, et c'était FAUX pour une décimation.
+ * Passer de 48 à 16 kHz divise la bande par trois : tout ce qui dépasse
+ * 8 kHz doit disparaître AVANT de jeter deux échantillons sur trois, sinon
+ * ces fréquences se replient dans la bande utile (aliasing) au lieu de
+ * s'effacer. L'interpolation linéaire ne filtre quasiment rien.
+ *
+ * Ce qui vit au-dessus de 8 kHz dans une voix, ce sont les fricatives et les
+ * sifflantes — [s], [ʃ], [f], [t]. Autrement dit exactement les consonnes qui
+ * distinguent deux mots proches. Le repliement les transformait en bruit
+ * large bande, et le modèle de transcription, privé de ces indices, complétait
+ * par ce que sa statistique jugeait probable : « transmets » rendu « très
+ * prends », « prends-moi », « je remets ». Les voyelles, elles, passaient —
+ * d'où des phrases globalement justes mais aux mots-clés mutilés.
+ *
+ * ── La méthode ──────────────────────────────────────────────────────────
+ * Un seul noyau fait les deux opérations d'un coup : passe-bas à la nouvelle
+ * fréquence de Nyquist ET interpolation. Le sinc est fenêtré par une Hann pour
+ * le tronquer proprement, et les coefficients sont normalisés à chaque
+ * échantillon de sortie, ce qui garantit un gain unitaire y compris sur les
+ * bords où le noyau déborde du signal.
+ */
+export function resamplePcm(
   samples: Float32Array,
   fromRate: number,
   toRate: number,
@@ -541,13 +575,27 @@ export function resampleLinear(
   const ratio = fromRate / toRate;
   const length = Math.max(1, Math.floor(samples.length / ratio));
   const out = new Float32Array(length);
+  // Coupure exprimée en cycles par échantillon D'ENTRÉE : la plus basse des
+  // deux fréquences de Nyquist. En décimation (ratio > 1) c'est celle de
+  // sortie qui commande.
+  const cutoff = 0.5 / Math.max(1, ratio);
+  // Largeur du noyau côté entrée : les lobes sont comptés en échantillons de
+  // sortie, il faut donc les étirer du même facteur.
+  const half = Math.max(1, Math.ceil(RESAMPLE_LOBES * Math.max(1, ratio)));
+
   for (let i = 0; i < length; i++) {
-    const position = i * ratio;
-    const index = Math.floor(position);
-    const frac = position - index;
-    const a = samples[index];
-    const b = index + 1 < samples.length ? samples[index + 1] : a;
-    out[i] = a + (b - a) * frac;
+    const center = i * ratio;
+    const first = Math.max(0, Math.ceil(center - half));
+    const last = Math.min(samples.length - 1, Math.floor(center + half));
+    let acc = 0;
+    let norm = 0;
+    for (let j = first; j <= last; j++) {
+      const x = j - center;
+      const coef = sinc(2 * cutoff * x) * (0.5 + 0.5 * Math.cos((Math.PI * x) / half));
+      acc += samples[j] * coef;
+      norm += coef;
+    }
+    out[i] = norm !== 0 ? acc / norm : 0;
   }
   return out;
 }

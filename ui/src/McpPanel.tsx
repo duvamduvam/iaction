@@ -157,7 +157,10 @@ function AddConnectorModal({
                 autoComplete={field.secret ? "new-password" : "off"}
                 placeholder={field.placeholder}
                 value={values[field.key] ?? ""}
-                onChange={(e) => setValues((prev) => ({ ...prev, [field.key]: e.currentTarget.value }))}
+                onChange={(e) => {
+                  const valeur = e.currentTarget.value;
+                  setValues((prev) => ({ ...prev, [field.key]: valeur }));
+                }}
               />
             </div>
           ))}

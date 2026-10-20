@@ -49,6 +49,16 @@ export const HALLUCINATION_PATTERNS: string[] = [
   // Résidus d'un seul mot, très fréquents sur du silence pur
   "you",
   "bye",
+  // Politesses et hésitations produites sur du blanc — relevées le 2026-09-06
+  // en mode conversation, où elles polluaient le brouillon à chaque respiration
+  // (« … Mmm. Merci. Merci. »). Perdre un « merci » réellement prononcé est
+  // sans conséquence : il ne portait aucune consigne.
+  "Merci",
+  "Merci beaucoup",
+  "Mmm",
+  "Hmm",
+  "Hum",
+  "Euh",
 ];
 
 /**
@@ -80,13 +90,66 @@ export function normalizeForCompare(text: string): string {
 const HALLUCINATION_SET = new Set(HALLUCINATION_PATTERNS.map(normalizeForCompare));
 
 /**
+ * Annotation sonore que le modèle invente sur un bruit : « *bruit de choc* »,
+ * « [Musique] », « (rires) ». Jamais une parole de l'utilisateur.
+ */
+const ANNOTATION_SONORE = /^(\*[^*]*\*|\[[^\]]*\]|\([^)]*\))$/;
+
+/** Au-delà, un morceau qui commence par « Sous-titrage » est tenu pour une vraie phrase. */
+const SOUS_TITRAGE_MAX_MOTS = 6;
+
+/**
+ * Découpe un segment en MORCEAUX : phrases closes par « . ! ? … », retours à
+ * la ligne, et doubles espaces — la couture que laisse le modèle quand il
+ * recolle plusieurs passes (« Merci.  Merci.  Sous-titrage… »).
+ */
+function decouperEnMorceaux(text: string): string[] {
+  return text
+    .split(/(?<=[.!?…])\s+|\s{2,}|\n+/u)
+    .map((m) => m.trim())
+    .filter(Boolean);
+}
+
+/** Un MORCEAU isolé est-il un déchet (formule fantôme, annotation, crédit de sous-titrage) ? */
+function morceauFantome(morceau: string): boolean {
+  if (ANNOTATION_SONORE.test(morceau)) return true;
+  const normalized = normalizeForCompare(morceau);
+  if (!normalized) return true;
+  if (HALLUCINATION_SET.has(normalized)) return true;
+  // Crédits de sous-titrage aux variantes sans fin (« Sous-titrage ST' 501 »,
+  // « Sous-titres par… ») : reconnus à leur attaque, tant qu'ils restent courts.
+  return /^sous titr(age|es)\b/.test(normalized) && normalized.split(" ").length <= SOUS_TITRAGE_MAX_MOTS;
+}
+
+/**
+ * Retire d'un segment les morceaux fantômes et rend le reste, recollé par une
+ * espace. Rend une chaîne vide si rien d'utile ne subsiste.
+ *
+ * POURQUOI — constat du 2026-10-05, casque Bluetooth au micro bruité : la
+ * détection d'activité se déclenchait sur le souffle, et le modèle rendait des
+ * segments COMPOSÉS (« Merci.  Merci.  Sous-titrage Société Radio-Canada »,
+ * treize « Merci. » d'affilée, « *bruit de choc* »). La comparaison du segment
+ * ENTIER à la liste ne reconnaissait aucun de ces assemblages : ils
+ * s'empilaient dans le brouillon plus vite que l'utilisateur ne les effaçait.
+ *
+ * Reste conservateur : un morceau n'est retiré que s'il est, À LUI SEUL, une
+ * formule connue. « Merci à tous d'être venus » n'est pas découpé et passe.
+ */
+export function retirerHallucinations(text: string): string {
+  return decouperEnMorceaux(text)
+    .filter((m) => !morceauFantome(m))
+    .join(" ");
+}
+
+/**
  * Le texte transcrit est-il, selon toute vraisemblance, une hallucination ou
  * un déchet à ne PAS transmettre au reste de l'application ?
  *
  * Renvoie `true` pour :
  * - un texte vide, ou composé uniquement d'espaces, de ponctuation et de
  *   points de suspension (« ... », « . », « ♪ ») ;
- * - une des formules toutes faites de `HALLUCINATION_PATTERNS` ;
+ * - une des formules toutes faites de `HALLUCINATION_PATTERNS`, ou un
+ *   assemblage qui n'est fait QUE de telles formules ;
  * - un texte d'un seul mot de deux caractères ou moins qui ne figure pas dans
  *   la courte liste des mots utiles (« ok », « si »…).
  *
@@ -101,6 +164,9 @@ export function isLikelyHallucination(text: string): boolean {
   if (!normalized) return true;
 
   if (HALLUCINATION_SET.has(normalized)) return true;
+
+  // Segment COMPOSÉ uniquement de morceaux fantômes (voir `retirerHallucinations`).
+  if (!retirerHallucinations(text)) return true;
 
   const words = normalized.split(" ");
   if (words.length === 1 && words[0].length <= 2 && !USEFUL_SHORT_WORDS.has(words[0])) {

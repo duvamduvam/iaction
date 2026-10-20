@@ -88,4 +88,45 @@ describe("desempiler", () => {
     expect(desempiler([42], 0, 100)).toEqual([42]);
     expect(desempiler([], 0, 100)).toEqual([]);
   });
+
+  /*
+   * T-069 — le cas qui a motivé la seconde passe : quatre séries convergent
+   * vers le BAS du cadre (chaque début de période, où tout vaut zéro). La
+   * poussée vers le bas butait sur `max` et les empilait sur la même ligne.
+   */
+  it("reflue vers le haut quand la place manque en bas", () => {
+    const out = desempiler([236, 240, 244, 248], 0, 250);
+    const tries = [...out].sort((a, b) => a - b);
+    for (let i = 1; i < tries.length; i++) {
+      expect(tries[i] - tries[i - 1]).toBeGreaterThanOrEqual(LABEL_GAP);
+    }
+    for (const y of out) {
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThanOrEqual(250);
+    }
+    // Ordre vertical conservé malgré le reflux.
+    expect(out[0]).toBeLessThan(out[1]);
+    expect(out[1]).toBeLessThan(out[2]);
+    expect(out[2]).toBeLessThan(out[3]);
+  });
+
+  it("quatre étiquettes AU MÊME point bas restent lisibles", () => {
+    const out = desempiler([250, 250, 250, 250], 0, 250);
+    const tries = [...out].sort((a, b) => a - b);
+    for (let i = 1; i < tries.length; i++) {
+      expect(tries[i] - tries[i - 1]).toBeGreaterThanOrEqual(LABEL_GAP);
+    }
+    expect(Math.max(...out)).toBe(250);
+  });
+
+  it("cadre trop petit : empilement en haut, jamais hors du cadre", () => {
+    // 5 étiquettes, 20 px de haut, écart minimal 13 : impossible. La limite de
+    // nature est assumée — mais rien ne sort du cadre et rien n'est perdu.
+    const out = desempiler([20, 20, 20, 20, 20], 0, 20);
+    expect(out).toHaveLength(5);
+    for (const y of out) {
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThanOrEqual(20);
+    }
+  });
 });

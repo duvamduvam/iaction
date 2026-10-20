@@ -15,5 +15,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "imapflow": "^1.4.7"
+  },
+  "comment_overrides": "nodemailer n'est PAS une dépendance de cet outil : imapflow@1.4.7 l'épingle en 9.0.3, vulnérable (GHSA, correctif en 9.1.1). On refuse la version basse sans déclarer une dépendance qu'on n'a pas. À retirer le jour où imapflow 2.x sera adopté — c'est une montée MAJEURE, non éprouvable sans un vrai serveur IMAP.",
+  "overrides": {
+    "nodemailer": "^9.1.1"
   }
 }

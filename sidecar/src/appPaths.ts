@@ -230,3 +230,22 @@ export function projectDir(cwd: string, ...parts: string[]): string {
   const dir = !isDir(current) && isDir(legacy) ? legacy : current;
   return parts.length > 0 ? path.join(dir, ...parts) : dir;
 }
+
+/**
+ * T-081 — agents Claude Code DU POSTE (`~/.claude/agents`).
+ *
+ * Ce dossier n'appartient pas à l'application : c'est celui du CLI, et le
+ * moteur projet le charge déjà puisqu'il passe `settingSources: ["user",
+ * "project","local"]` (claude.ts). Les sous-agents qu'il définit sont donc
+ * LANÇABLES ; sans ce chemin, `agents.list` ne savait pas les nommer.
+ *
+ * `CLAUDE_CONFIG_DIR` est honoré : c'est la variable du CLI lui-même, et si
+ * le poste l'a déplacé, lire ailleurs serait lire un dossier vide. Le foyer
+ * vient de `PathEnv` — jamais de `os.homedir()` en dur, pour que la branche
+ * Windows s'exerce sans PC Windows (même règle que le reste du module).
+ */
+export function claudeUserAgentsDir(env: PathEnv = currentEnv()): string {
+  const configured = env.env.CLAUDE_CONFIG_DIR;
+  const root = configured && configured.trim() !== "" ? configured : path.join(env.home, ".claude");
+  return path.join(root, "agents");
+}

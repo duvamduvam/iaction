@@ -117,7 +117,7 @@ export interface SpeechConversationConfig {
    */
   sendMode: "silence" | "keyword";
   /**
-   * Mot-clé d'envoi prononcé en fin de dictée. Vide → défaut (« transmets »,
+   * Mot-clé d'envoi prononcé en fin de dictée. Vide → défaut (« banane »,
    * voir sendKeyword.ts pour la justification du choix).
    */
   sendKeyword: string;

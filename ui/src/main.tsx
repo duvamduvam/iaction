@@ -8,11 +8,16 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import ErrorBoundary from "./ErrorBoundary";
 import { jalonPremierRendu, jalonScript } from "./demarrage";
+import { installerSondeFrappe } from "./sondeFrappe";
 import "./theme.css";
 
 // Avant tout rendu : ce jalon clôt le segment « webview + chargement du JS »,
 // invisible depuis le Rust (voir demarrage.ts).
 jalonScript();
+
+// T-095 — l'instrument de latence de frappe, ÉTEINT par défaut (Ctrl+Alt+M).
+// Installé avant le rendu : l'écouteur doit horodater la touche avant React.
+installerSondeFrappe();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

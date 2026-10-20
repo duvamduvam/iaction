@@ -7,9 +7,10 @@
  * section, rendue visible — l'état, lui, reste la propriété de la page.
  */
 
-import type { FocusEvent, KeyboardEvent, RefObject } from "react";
-import { MODELES_ABONNEMENT_CLAUDE } from "./modelesAbonnementClaude";
-import { agentOptionValue, AUTO_MODEL, type AgentSelection, type ProjectSession } from "./modeleProjet";
+import { useState, type FocusEvent, type KeyboardEvent, type RefObject } from "react";
+import type { EntreeArchive } from "./archivesSessions";
+import { effortsPour, MODELES_ABONNEMENT_CLAUDE, type EffortLevel } from "./modelesAbonnementClaude";
+import { agentOptionValue, type AgentSelection, type ProjectSession } from "./modeleProjet";
 import { OllamaPanel } from "./OllamaPanel";
 import { PERMISSION_MODE_OPTIONS } from "./permissions";
 import { SidebarSection } from "./SidebarSection";
@@ -20,23 +21,30 @@ import type { DirEntry } from "./fsClient";
 import type { KnowledgeMode } from "./projectAdmin";
 import type { PinnedDoc } from "./connaissances";
 import { ModelPicker, type OptionEpinglee } from "./ModelPicker";
-import type { KnowledgeStatus, ModelDetail, PermissionMode } from "./sidecar";
+import { modeleSousAgentDeclare, sousAgentsVifs, type AgentTurn, type SousAgentVu } from "./agentTurns";
+import { useSousAgentsRecents } from "./useSousAgentsRecents";
+import type { ModelDetail, PermissionMode } from "./sidecar";
+import type { KnowledgeStatus } from "./connaissancesClient";
 
 /*
  * Modèles de l'abonnement Claude : ils ne viennent d'aucun catalogue
  * interrogeable, d'où leur présence en dur — épinglés dans le sélecteur, donc
  * jamais soumis aux filtres du catalogue neutre (T-032).
  */
-const MODEL_OPTIONS: OptionEpinglee[] = [
-  { value: "", label: "(défaut)" },
-  ...MODELES_ABONNEMENT_CLAUDE.map((m) => ({ value: m.id, label: m.id, title: m.note })),
-];
+const MODEL_OPTIONS: OptionEpinglee[] = MODELES_ABONNEMENT_CLAUDE.map((m) => ({
+  value: m.id,
+  label: m.id,
+  title: m.note,
+}));
 
-const AUTO_EPINGLE: OptionEpinglee = {
-  value: AUTO_MODEL,
-  label: "Auto (descendant)",
-  title: "Démarre sur le modèle le plus fort de la table ; descendre est un choix manuel.",
-};
+/*
+ * T-080 — plus de sentinelle « Auto (descendant) », ni d'option « (défaut) »
+ * muette. Les deux disaient la même chose — « quelqu'un d'autre choisira » —
+ * et ce quelqu'un ne choisissait rien : le mode Auto imposait le sommet de la
+ * table sans lire le prompt (T-079), et « (défaut) » laissait simplement le
+ * CLI décider sans que l'application sache dire quoi. Une session part
+ * désormais sur le modèle réglé dans Configuration, affiché en clair ici.
+ */
 
 export interface SessionsSectionProps {
   sessions: ProjectSession[];
@@ -62,6 +70,64 @@ export interface SessionsSectionProps {
     onKeyDown: (e: KeyboardEvent<HTMLUListElement>) => void;
     onFocus: (e: FocusEvent<HTMLUListElement>) => void;
   };
+  /** T-151 — sessions sorties du plafond, archivées (jamais perdues) ; absentes de la liste vive. */
+  archives: EntreeArchive[];
+  /** Clic sur une archive : restauration dans les sessions vives. */
+  restoreArchive: (id: string) => void;
+  /** Corbeille d'une archive : mise de côté, pas destruction. */
+  trashArchive: (id: string) => void;
+}
+
+/**
+ * Groupe repliable « Archives (n) », replié par défaut, absent si n = 0.
+ * Mêmes classes que la liste des sessions ; le clic restaure, la corbeille met
+ * de côté (aucune confirmation : rien n'est détruit).
+ */
+function ArchivesGroupe({
+  archives,
+  restoreArchive,
+  trashArchive,
+}: Readonly<Pick<SessionsSectionProps, "archives" | "restoreArchive" | "trashArchive">>) {
+  const [ouvert, setOuvert] = useState(false);
+  if (archives.length === 0) return null;
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn--ghost session-list__new"
+        aria-expanded={ouvert}
+        onClick={() => setOuvert((v) => !v)}
+      >
+        {ouvert ? "▾" : "▸"} Archives ({archives.length})
+      </button>
+      {ouvert && (
+        <ul className="session-list">
+          {archives.map((a) => (
+            <li key={a.id} className="session-item">
+              <button type="button" className="session-item__title" title={`Restaurer : ${a.title}`} onClick={() => restoreArchive(a.id)}>
+                {a.title}
+              </button>
+              <div className="session-item__meta">
+                <span className="session-item__date">{formatRelativeDate(a.updatedAt)}</span>
+                <span className="session-item__engine">{a.nbTours} tours</span>
+              </div>
+              <div className="session-item__actions">
+                <button
+                  type="button"
+                  className="session-item__action"
+                  title="Mettre de côté (non détruite)"
+                  aria-label={`Mettre de côté ${a.title}`}
+                  onClick={() => trashArchive(a.id)}
+                >
+                  🗑
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
 }
 
 export function SessionsSection(props: Readonly<SessionsSectionProps>) {
@@ -84,6 +150,9 @@ export function SessionsSection(props: Readonly<SessionsSectionProps>) {
     selectSession,
     handleNewSession,
     sessionsRoving,
+    archives,
+    restoreArchive,
+    trashArchive,
   } = props;
   return (
     <SidebarSection
@@ -194,6 +263,7 @@ export function SessionsSection(props: Readonly<SessionsSectionProps>) {
           ))}
         </ul>
       )}
+      <ArchivesGroupe archives={archives} restoreArchive={restoreArchive} trashArchive={trashArchive} />
     </SidebarSection>
   );
 }
@@ -212,17 +282,45 @@ export interface LlmSectionProps {
   setPermissionMode: (mode: PermissionMode) => void;
   model: string;
   setModel: (value: string) => void;
-  /** R2 — un modèle explicite efface l'affinité de session (voir le onChange). */
-  clearRoutedAffinity: () => void;
-  /** Bascule vers Auto : pièces jointes purgées (moteur réel inconnu). */
-  clearAttachments: () => void;
+  /** Effort de raisonnement (`""` = Défaut) — Claude (abonnement) seulement. */
+  effort: EffortLevel | "";
+  setEffort: (value: EffortLevel | "") => void;
   neutralModelsState: "idle" | "loading" | "error";
   neutralModels: ModelDetail[];
   neutralFeaturedIds: string[];
   basculerFavoriNeutre: (modelId: string) => void;
   neutralModelsError: string;
-  sessionId: string | null;
+  /** T-077 — ce que la session fait VRAIMENT (voir `EtatVifLlm`). */
+  vif: EtatVifLlm;
   isCompactViewport: boolean;
+}
+
+/**
+ * T-077 — état vif de la session : ce qu'elle fait VRAIMENT, par opposition
+ * aux contrôles au-dessus qui disent ce qui est demandé.
+ *
+ * T-080 a retiré la ligne « modèle réellement routé » : depuis la suppression
+ * du mode Auto, le sélecteur affiche le modèle réel — il n'y a plus d'écart
+ * entre le demandé et l'exécuté. Restent les sous-agents, qui eux ne sont
+ * visibles nulle part ailleurs que dans le transcript.
+ */
+export interface EtatVifLlm {
+  sessionId: string | null;
+  /** Tours de la session — les sous-agents s'en déduisent (`sousAgentsVifs`). */
+  turns: AgentTurn[];
+}
+
+/** Marque d'état d'un sous-agent. Hors tour, un lancement sans résultat n'est
+ *  pas « en cours » : c'est un travail interrompu, et ça se dit. */
+function marqueSousAgent(agent: SousAgentVu, streaming: boolean): { signe: string; classe: string; etat: string } {
+  if (!agent.termine) {
+    return streaming
+      ? { signe: "◉", classe: " llm-vif__agent--vif", etat: "en cours" }
+      : { signe: "⚠", classe: " llm-vif__agent--interrompu", etat: "interrompu avant son terme" };
+  }
+  return agent.erreur
+    ? { signe: "✕", classe: " llm-vif__agent--erreur", etat: "terminé en erreur" }
+    : { signe: "✓", classe: "", etat: "terminé" };
 }
 
 export function LlmSection(props: Readonly<LlmSectionProps>) {
@@ -240,16 +338,21 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
     setPermissionMode,
     model,
     setModel,
-    clearRoutedAffinity,
-    clearAttachments,
+    effort,
+    setEffort,
     neutralModelsState,
     neutralModels,
     neutralFeaturedIds,
     basculerFavoriNeutre,
     neutralModelsError,
-    sessionId,
+    vif,
     isCompactViewport,
   } = props;
+  // Les actifs d'abord : sur neuf pastilles, celle qui travaille ne doit pas
+  // se chercher (constat du 2026-10-15). Tri stable, l'ordre de lancement tient.
+  const sousAgents = [...sousAgentsVifs(vif.turns)].sort((a, b) => Number(a.termine) - Number(b.termine));
+  const sousAgentsActifs = sousAgents.filter((a) => !a.termine).length;
+  const sousAgentsRecents = useSousAgentsRecents(vif.sessionId, streaming);
   return (
     <SidebarSection id="llm" title="LLM" defaultOpen={!isCompactViewport}>
       <div className="field agent-preset">
@@ -340,6 +443,30 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
         </select>
       </div>
 
+      {/*
+        Effort de raisonnement : moteur Claude seulement, et si le modèle en offre.
+        Placé AU-DESSUS du modèle : la liste du sélecteur de modèle (portail en
+        position fixe) s'ouvre juste en dessous et masquait ce champ.
+      */}
+      {engineProviderId === null && effortsPour(model).length > 0 && (
+        <div className="field">
+          <label htmlFor="agent-effort">Effort</label>
+          <select
+            id="agent-effort"
+            value={effort}
+            disabled={streaming || (selectedAgent !== null && selectedAgent.model !== null)}
+            onChange={(e) => setEffort(e.currentTarget.value as EffortLevel | "")}
+          >
+            <option value="">Défaut</option>
+            {effortsPour(model).map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <div className="field">
         <label htmlFor="agent-model">Modèle</label>
         {/*
@@ -352,31 +479,78 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
           id="agent-model"
           value={model}
           models={engineProviderId === null ? [] : neutralModels}
-          epingles={engineProviderId === null ? [AUTO_EPINGLE, ...MODEL_OPTIONS] : [AUTO_EPINGLE]}
+          epingles={engineProviderId === null ? MODEL_OPTIONS : []}
           favoris={neutralFeaturedIds}
           onToggleFavori={engineProviderId === null ? undefined : basculerFavoriNeutre}
-          // R2 — « Auto (routeur) » restant toujours proposé, le
-          // sélecteur n'est plus verrouillé quand la liste neutre est
-          // vide (seulement pendant son chargement). Verrouillé pendant
-          // le streaming (comme ChatPage) : changer de modèle en plein
-          // tour effacerait l'affinité de routage sous le tour en cours.
+          // Verrouillé pendant le streaming (comme ChatPage) : changer de
+          // modèle en plein tour enverrait la suite ailleurs que le début.
           disabled={streaming || (selectedAgent !== null && selectedAgent.model !== null)}
           chargement={engineProviderId !== null && neutralModelsState === "loading"}
-          onChange={(value) => {
-            setModel(value);
-            // R2 — choisir un modèle explicite efface l'affinité de
-            // session (override) ; revenir sur « Auto » re-route au
-            // prochain envoi (routedTarget redevenu null). Bascule vers
-            // Auto : pièces jointes purgées (moteur réel inconnu, voir
-            // `attachmentsSupported`).
-            if (value !== AUTO_MODEL) {
-              clearRoutedAffinity();
-            } else {
-              clearAttachments();
-            }
-          }}
+          onChange={setModel}
         />
       </div>
+
+      {/*
+        T-077 — les sous-agents du dernier tour. Le titre distingue « en cours »
+        de « dernier tour » : afficher les deux pareil laisserait croire qu'un
+        travail fini tourne encore.
+
+        T-091 — et la liste ne survit que quelques minutes au tour : passé ce
+        délai, ou sur une conversation simplement rechargée du disque, « dernier
+        tour » parlerait d'un travail vieux de plusieurs jours au présent.
+      */}
+      {sousAgents.length > 0 && sousAgentsRecents && (
+        <div className="llm-vif__agents">
+          <span className="llm-vif__agents-titre">
+            {streaming
+              ? `Sous-agents · ${sousAgentsActifs} en cours / ${sousAgents.length}`
+              : `Sous-agents du dernier tour · ${sousAgents.length}`}
+          </span>
+          <ul>
+            {sousAgents.map((agent, i) => {
+              const marque = marqueSousAgent(agent, streaming);
+              // T-081 — le modèle que le MANIFESTE déclare pour ce type. Une
+              // intention, pas une mesure : le mot « déclaré » est dans
+              // l'infobulle, et un type inconnu (agent intégré du SDK)
+              // n'affiche rien plutôt qu'un modèle deviné.
+              const { modele, connu } = modeleSousAgentDeclare(agent.nom, projectAgentsByScope.claudeCode);
+              const libelleModele = modele ?? (connu ? "hérite du fil" : null);
+              const detailModele = libelleModele
+                ? ` · modèle déclaré : ${modele ?? "aucun, hérite du fil"}`
+                : "";
+              return (
+                <li
+                  key={`${agent.nom}-${i}`}
+                  className={`llm-vif__agent${marque.classe}`}
+                  title={
+                    (agent.description ? `${agent.description} — ${marque.etat}` : marque.etat) + detailModele
+                  }
+                  // Le signe est décoratif : l'état est porté par le libellé
+                  // accessible, sinon un lecteur d'écran annoncerait « ◉ ».
+                  aria-label={`${agent.nom} — ${marque.etat}${detailModele}`}
+                >
+                  <span className="llm-vif__agent-signe" aria-hidden="true">
+                    {marque.signe}
+                  </span>
+                  {agent.nom}
+                  {libelleModele && (
+                    <span className="llm-vif__agent-modele" aria-hidden="true">
+                      {libelleModele}
+                    </span>
+                  )}
+                  {/* Ce qu'il fait, écrit en clair pour ceux qui tournent : le
+                      nom du type seul (« implementeur » ×6) ne distingue rien. */}
+                  {streaming && !agent.termine && agent.description && (
+                    <span className="llm-vif__agent-description" aria-hidden="true">
+                      {agent.description}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       {engineProviderId !== null && (
         <OllamaPanel providerId={engineProviderId} selectedModel={model} />
@@ -396,8 +570,8 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
         >
           {engineProviderId ? (providers.find((p) => p.id === engineProviderId)?.label ?? engineProviderId) : "Claude"}
         </span>
-        <span className={`agent-session-indicator${sessionId ? " agent-session-indicator--active" : ""}`}>
-          {sessionId ? `Session ${sessionId.slice(0, 8)}` : "Aucune session"}
+        <span className={`agent-session-indicator${vif.sessionId ? " agent-session-indicator--active" : ""}`}>
+          {vif.sessionId ? `Session ${vif.sessionId.slice(0, 8)}` : "Aucune session"}
         </span>
       </div>
     </SidebarSection>
@@ -502,7 +676,7 @@ export function ConnaissancesSection(props: Readonly<ConnaissancesSectionProps>)
             ? knowledgeIndexProgress
               ? `Indexation… ${knowledgeIndexProgress.done}/${knowledgeIndexProgress.total}`
               : "Indexation…"
-            : "Indexer maintenant"}
+            : "Reconstruire l'index"}
         </button>
         {knowledgeIndexError && <p className="knowledge-rag__error">{knowledgeIndexError}</p>}
       </div>

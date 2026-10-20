@@ -80,22 +80,22 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
 } from "react";
-import { openExternal, readApps, type AppEntry } from "./appsAdmin";
-import { ouvrirReference } from "./refFichier";
+import { openExternal, useApps } from "./appsAdmin";
+import { chargerProjets, IO_ETAT, retirerProjet, sauverProjet } from "./etatEclate";
+import { ouvrirReference, type ForcageOuverture } from "./refFichier";
 import {
   AttachmentPickerButton,
   AttachmentTray,
   clipboardHasImage,
+  collerImageDuPressePapierNatif,
   filesFromClipboard,
   filesFromDrop,
   useAttachmentDraft,
 } from "./Attachments";
 import { FileEditorView, type OpenFileState } from "./FileEditor";
 import { FileTree } from "./FileTree";
-import { readClipboardImage } from "./clipboardClient";
-import { fsFindByName, fsListDir, fsReadFile, fsWriteFile, type DirEntry } from "./fsClient";
+import { fsListDir, fsReadFile, fsWriteFile, sondesDisque, type DirEntry } from "./fsClient";
 import { McpPanel } from "./McpPanel";
 import { useFavorisModeles } from "./useFavorisModeles";
 import { agentsList, type AgentInfo, type AgentScope } from "./orchestrationClient";
@@ -120,11 +120,12 @@ import {
   type SlashCommandInfo,
 } from "./sidecar";
 import { sortByRecent } from "./sessionStore";
-import { SidebarRetractable, SidebarSection } from "./SidebarSection";
+import { PanneauLateral, SidebarSection } from "./SidebarSection";
 import { useComposerLiveDraft } from "./useComposerLiveDraft";
 import { useComposerUndo } from "./useComposerUndo";
 import { useRovingFocus } from "./useRovingFocus";
 import { useStickToBottom } from "./useStickToBottom";
+import { BoutonArret, ChatComposerEnvoi } from "./ChatComposerEnvoi";
 import { asRecord } from "./base";
 import {
   contextTokens,
@@ -144,13 +145,14 @@ import { publishContext, registerCompactHandler } from "./contextBus";
 import type { ProjectsLoadState } from "./useProjects";
 import { useConversationRuntime } from "./useConversationRuntime";
 import { prochainOnglet } from "./onglets";
+import { BarreOnglets } from "./BarreOnglets";
+import { ongletApresFermeture } from "./fermetureOnglets";
 import { PermissionModal } from "./PermissionModal";
 import { cleAutoAllow } from "./permissions";
 import { type PermissionRequestItem } from "./questionsAgent";
 import {
-  AUTO_MODEL,
+  appliquerTitresIA,
   buildPersistedEntry,
-  CONVERSATIONS_STATE_KEY,
   convIdOfTab,
   convTabId,
   deriveSessionTitle,
@@ -159,7 +161,6 @@ import {
   freshRuntime,
   freshSession,
   isConvTab,
-  LAST_PROJECT_STATE_KEY,
   resolveAgentSelection,
   SAVE_DEBOUNCE_MS,
   sanitizePersistedConversations,
@@ -167,82 +168,36 @@ import {
   type AgentSelection,
   type ConvRuntime,
   type PersistedConversations,
-  type PersistedProjectEntry,
   type ProjectSession,
   type ProjectState,
 } from "./modeleProjet";
 import { dedupDocsByPath, type PinnedDoc } from "./connaissances";
-import { libelleDebordNotice } from "./debordNotice";
-import { AgentTurnView } from "./agentTranscript";
+import { type DebordNotice } from "./debordNotice";
+import { suivreInstant, type InstantSuivi } from "./heureDiscrete";
+import { BadgesProjet, BandeauxOnglets, EcranSansProjet } from "./agentPageEcrans";
+import { useBattementReveil } from "./useReveil";
+import { gererReveils } from "./reveilRuntime";
+import { ReveilBanniere, ReveilControl } from "./ReveilControl";
+import { AgentTranscript } from "./agentTranscript";
 import { ConnaissancesSection, LlmSection, SessionsSection } from "./agentSidebarDroit";
+import { effortsPour, type EffortLevel } from "./modelesAbonnementClaude";
+import { lireModeleDefaut, MODELE_DEFAUT_USINE, resoudreModeleSession } from "./modeleDefaut";
 import { creerEnvoiProjet } from "./envoiProjet";
 import { useConnaissances } from "./useConnaissances";
+import { useArchivesSessions } from "./useArchivesSessions";
+import { isUnderPath, projectStateFromPersisted, renamedPath } from "./hydratationProjet";
+import { choisirProjetInitial, cleDernierProjet } from "./fenetreProjet";
+import { etiquetteFenetreCourante, listerProjetsOuverts, poidsProjetsRecents, revendiquerProjet } from "./fenetreClient";
 
 const MAX_OPEN_FILES = 6;
 
 /* ---------- En-tête de page ---------- */
 
 /*
- * R2/R7 — « Auto (routeur) » : valeur sentinelle du sélecteur de modèle,
- * OPT-IN (jamais défaut, contrairement au Chat). CHAQUE tour est classé par
- * le routeur du sidecar (router.route, avec le `cwd` du projet — la
- * surcharge `.iaction/routage.yaml` s'applique), sous un PLANCHER de session
- * (`routedTier`) qui ne descend jamais — le modèle ne change qu'à la hausse
- * (voir resolveAutoRoute) — un modèle explicite choisi = comportement
- * strictement inchangé.
+ * T-080 — le mode Auto (routage descendant par tier) a été retiré des Projets ; `routedTier`/
+ * `routedTarget` ci-dessous ne SONT PLUS ÉCRITS ici (structure partagée avec ChatPage.tsx, où
+ * la stratégie montante reste active) — lus/restaurés pour compatibilité de forme uniquement.
  */
-
-/* ---------- État par projet (Lot Sessions : plusieurs sessions/projet) ---------- */
-
-function openFilesFromPaths(paths: string[], pendingLazy: Set<string>): OpenFileState[] {
-  return paths.map((path) => {
-    pendingLazy.add(path);
-    const name = path.slice(path.lastIndexOf("/") + 1) || path;
-    return {
-      path,
-      name,
-      kind: "loading",
-      content: "",
-      base64: "",
-      size: 0,
-      truncated: false,
-      dirty: false,
-      saving: false,
-      saveError: null,
-      errorMessage: null,
-    };
-  });
-}
-
-function projectStateFromPersisted(entry: PersistedProjectEntry, pendingLazy: Set<string>): ProjectState {
-  const sessions = entry.sessions.map(sessionStateFromPersisted);
-  if (sessions.length === 0) return emptyProjectState();
-  const activeId = sessions.some((s) => s.id === entry.activeId) ? entry.activeId : sessions[0].id;
-  const openFiles = openFilesFromPaths(entry.openFilePaths, pendingLazy);
-  const knownConvIds = entry.openConversationIds.filter((id) => sessions.some((s) => s.id === id));
-  const openConversationIds = knownConvIds.length > 0 ? knownConvIds : [activeId];
-  const activeTab =
-    entry.activeTab === EMPTY_TAB ||
-    entry.openFilePaths.includes(entry.activeTab) ||
-    (isConvTab(entry.activeTab) && openConversationIds.includes(convIdOfTab(entry.activeTab)))
-      ? entry.activeTab
-      : convTabId(activeId);
-  return { sessions, activeId, openConversationIds, openFiles, activeTab };
-}
-
-/* ---------- Menu contextuel de l'arbre : renommer/supprimer (voir FileTree.tsx) ---------- */
-
-/** `path` égal à `target`, ou situé dedans (`target` renommé/supprimé était un DOSSIER). */
-function isUnderPath(path: string, target: string): boolean {
-  return path === target || path.startsWith(`${target}/`);
-}
-
-/** Réécrit `path` si renommé — inchangé s'il ne correspond ni à `oldPath` ni à un de ses descendants. */
-function renamedPath(path: string, oldPath: string, newPath: string): string {
-  if (path === oldPath) return newPath;
-  if (path.startsWith(`${oldPath}/`)) return newPath + path.slice(oldPath.length);
-  return path;
-}
 
 /* ---------- Page ---------- */
 
@@ -294,6 +249,14 @@ export interface AgentPageHandle {
   isStreaming: () => boolean;
   /** Place le curseur dans le composeur (arrivée sur la page, vidage, nouvelle conversation). */
   focusComposer: () => void;
+  /**
+   * T-159 — ouvre, dans le projet donné, une NOUVELLE conversation qui reprend
+   * `sessionIdCopie` : l'identifiant d'une COPIE de session Claude (jamais de
+   * l'originale, voir `claude.forkSession`). Sélectionne le projet au besoin.
+   * `false` si refusée (projet inconnu, tour en cours, projet tenu par une
+   * autre fenêtre) — rien n'est alors créé.
+   */
+  reprendreSession: (projectId: string, sessionIdCopie: string, titre: string) => Promise<boolean>;
 }
 
 export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function AgentPage(
@@ -336,33 +299,34 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     routedTarget: RouteTarget | null;
   } | null>(null);
   const [clearedNotice, setClearedNotice] = useState(false);
-  /**
-   * S3 — injecteurs des tours Claude en cours, par conversation : posés par
-   * `handleSend` au démarrage du tour, retirés à sa fin. Leur présence EST le
-   * signal qu'une demande peut être glissée dans le tour (voir claude.push).
-   */
-  const injectorsRef = useRef<Map<string, (text: string) => void>>(new Map());
-  // Dernier projet ouvert, relu du disque au démarrage. `lastProjectLoaded`
-  // sert de garde : tant que la lecture n'a pas abouti, on ne sélectionne rien.
+  /** S3 — injecteurs des tours Claude en cours, par conversation : posés par
+   *  `handleSend` au démarrage du tour, retirés à sa fin. Leur présence EST
+   *  le signal qu'une demande peut être glissée dans le tour (claude.push). */
+  const injectorsRef = useRef<Map<string, (text: string, attachments?: import("./Attachments").SentAttachment[]) => void>>(new Map());
+  const pushesEnCoursRef = useRef<Map<string, import("./agentTurns").PushEnCoursDeTour<import("./Attachments").DraftAttachment>[]>>(new Map());
+  // T-062 — étiquette de CETTE fenêtre, clé de mémoire qui en découle, registre porté par la
+  // coquille : de quoi n'ouvrir un projet que dans UNE fenêtre (etude-deux-projets.md §7).
+  // `lastProjectLoaded`/`fenetresOuvertes` gardent la sélection initiale tant qu'ils n'ont rien.
+  const etiquetteFenetre = etiquetteFenetreCourante();
+  const lastProjectKey = cleDernierProjet(etiquetteFenetre);
   const lastProjectIdRef = useRef<string | null>(null);
   const [lastProjectLoaded, setLastProjectLoaded] = useState(false);
+  const [fenetresOuvertes, setFenetresOuvertes] = useState<{ ouverts: Record<string, string>; poids: Record<string, number> } | null>(null);
 
   useEffect(() => {
-    stateRead<unknown>(LAST_PROJECT_STATE_KEY)
+    stateRead<unknown>(lastProjectKey)
       .then((raw) => {
         const value = asRecord(raw).projectId;
         if (typeof value === "string" && value) lastProjectIdRef.current = value;
-      })
-      .catch(() => {
-        // best effort : sans mémoire, on ouvrira le premier projet déclaré
-      })
-      .finally(() => setLastProjectLoaded(true));
-  }, []);
+      }) // sans mémoire lisible : on ouvrira le premier projet déclaré
+      .catch(() => {}).finally(() => setLastProjectLoaded(true));
+    void Promise.all([listerProjetsOuverts(), poidsProjetsRecents()]).then(([ouverts, poids]) => setFenetresOuvertes({ ouverts, poids }));
+  }, [lastProjectKey]);
 
   /** Mémorise le projet ouvert pour le prochain démarrage (best effort). */
   function rememberLastProject(id: string) {
     lastProjectIdRef.current = id;
-    void stateWrite(LAST_PROJECT_STATE_KEY, { projectId: id }).catch(() => {});
+    void stateWrite(lastProjectKey, { projectId: id }).catch(() => {});
   }
   // État des projets non affichés à l'écran (Map en mémoire, mise en miroir
   // sur disque — voir persistedConversationsRef ci-dessous). Un `ref` suffit
@@ -390,6 +354,16 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // « Moteur » de la toolbar. Fait partie de l'état PAR PROJET (persisté).
   const [engineProviderId, setEngineProviderId] = useState<string | null>(null);
   const [model, setModel] = useState("");
+  // Effort de raisonnement : simple état de la page (comme le moteur et le mode
+  // de permission), pas par session. "" = Défaut. Retombe sur Défaut dès que le
+  // modèle courant ne supporte plus le niveau choisi.
+  const [effort, setEffort] = useState<EffortLevel | "">("");
+  useEffect(() => { setEffort((e) => (e !== "" && effortsPour(engineProviderId === null ? model : null).includes(e) ? e : "")); }, [model, engineProviderId]);
+  /** T-080 — modèle par défaut des sessions, réglé dans Configuration (modeleDefaut.ts). */
+  const [modeleDefaut, setModeleDefaut] = useState(MODELE_DEFAUT_USINE);
+  useEffect(() => { void lireModeleDefaut().then((m) => { setModeleDefaut(m); setModel((p) => (p === "" ? m : p)); }); }, []);
+  /** Modèle d'une session relue : `__auto__` (mode Auto supprimé) et le vide migrent vers le défaut. */
+  const modelePourSession = (s: ProjectSession) => resoudreModeleSession(s.engine.model, s.routedTarget?.model, modeleDefaut);
 
   // Agent sélectionné (sélecteur « Agent », section LLM) : `null` = manuel.
   // Fait partie de l'état PAR SESSION (persisté comme `engine`, voir
@@ -437,25 +411,19 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
 
   /*
    * ---------- Runtime vif PAR CONVERSATION (Lot Onglets multiples) ----------
+   * `ConvRuntime` remplace les anciens `turns`/`sessionId`/`streaming`/`activeRequestId`/
+   * `draft`/`queuedPrompts`/`mcpUsage` mono-valués : chaque conversation OUVERTE (voir
+   * `openConversationIds` plus bas) a son propre runtime, qui continue d'évoluer même onglet
+   * non affiché — c'est ce qui permet à un tour de streamer en arrière-plan.
    *
-   * `ConvRuntime` remplace les anciens `turns`/`sessionId`/`streaming`/
-   * `activeRequestId`/`draft`/`queuedPrompts`/`mcpUsage` mono-valués : chaque
-   * conversation OUVERTE (voir `openConversationIds` plus bas) a désormais
-   * son propre runtime, qui continue d'évoluer même quand son onglet n'est
-   * pas affiché — c'est ce qui permet à un tour de streamer en arrière-plan.
-   *
-   * Stocké dans une Map en `ref` (pas en `useState`) : les callbacks de
-   * streaming (`onText`, `onToolUse`… dans `sendViaClaudeEngine`/
-   * `sendViaNeutralEngine`) CAPTURENT l'id de la conversation par fermeture,
-   * exactement comme elles capturent déjà `assistantId` — elles écrivent donc
-   * toujours dans la bonne conversation via `updateRuntime(convId, …)`, quel
-   * que soit l'onglet affiché au moment où le chunk arrive. `runtimeTick` est
-   * le seul bout d'état React de ce mécanisme : il force un nouveau rendu à
-   * chaque mutation (n'importe quelle conversation), pour que le point « ● »
-   * d'un onglet en arrière-plan et le contenu affiché de la conversation
-   * active restent à jour — la DONNÉE elle-même vit dans le dépôt de runtimes,
-   * lu à chaque rendu (`getRuntime`), jamais dans un `useState` séparé (qui
-   * imposerait de recréer la Map entière à chaque delta de streaming).
+   * Stocké dans une Map en `ref` (pas `useState`) : les callbacks de streaming (`onText`,
+   * `onToolUse`… dans `sendViaClaudeEngine`/`sendViaNeutralEngine`) CAPTURENT l'id de
+   * conversation par fermeture (comme `assistantId`) et écrivent toujours dans la bonne via
+   * `updateRuntime(convId, …)`, quel que soit l'onglet affiché à l'arrivée du chunk.
+   * `runtimeTick` est le seul bout d'état React : il force un rendu à chaque mutation pour que
+   * le point « ● » d'un onglet en arrière-plan et le contenu affiché restent à jour — la
+   * DONNÉE vit dans le dépôt de runtimes, lu à chaque rendu (`getRuntime`), jamais en `useState`
+   * (qui imposerait de recréer la Map entière à chaque delta de streaming).
    */
   const { depot: runtimes, tick: runtimeTick } = useConversationRuntime<ConvRuntime>(freshRuntime);
 
@@ -472,10 +440,17 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * une réouverture de son onglet).
    */
   function ensureRuntime(
-    session: Pick<ProjectSession, "id" | "turns" | "sessionId" | "routedTier" | "routedTarget">,
+    session: Pick<ProjectSession, "id" | "turns" | "sessionId" | "routedTier" | "routedTarget" | "reveils" | "reveilsHistorique">,
   ) {
     runtimes.amorcer(session.id, () =>
-      freshRuntime(session.turns, session.sessionId, session.routedTier, session.routedTarget),
+      freshRuntime(
+        session.turns,
+        session.sessionId,
+        session.routedTier,
+        session.routedTarget,
+        session.reveils,
+        session.reveilsHistorique,
+      ),
     );
   }
 
@@ -506,6 +481,30 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   const mcpUsage = activeRuntime.mcpUsage;
   // R3 — bandeau de débord de la conversation ACTIVE (voir DebordNotice).
   const debordNotice = activeRuntime.debordNotice;
+  // T-101 — `ConvRuntime` (modeleProjet.ts) est hors périmètre de ce chantier :
+  // pas d'horodatage de source à y ranger. L'heure retenue est donc celle de
+  // la RÉCEPTION par CETTE page (repli prévu par le ticket) — `suivreInstant`
+  // ne l'avance que quand `debordNotice` change réellement, jamais au rendu.
+  const debordNoticeAtRef = useRef<InstantSuivi<DebordNotice> | null>(null);
+  debordNoticeAtRef.current = suivreInstant(debordNoticeAtRef.current, debordNotice, Date.now());
+  const debordNoticeAt = debordNoticeAtRef.current?.instant ?? null;
+  // T-120 — réveil de la conversation ACTIVE : armé/désarmé depuis ici, et sa
+  // dernière trace (§6) — voir ReveilControl.tsx.
+  const activeReveils = activeRuntime.reveils;
+  const reveilNotice = activeRuntime.reveilNotice;
+  // T-120 — enregistrement/suppression d'un réveil, avec ÉCRITURE SUR LE
+  // DISQUE immédiate : un réveil qui ne survit pas à un rechargement n'est
+  // pas une promesse (voir gererReveils, reveilRuntime.ts).
+  const { enregistrer: enregistrerReveil, supprimer: supprimerReveil } = gererReveils(
+    runtimes,
+    activeSessionId && selectedProjectId ? activeSessionId : null,
+    () => {
+      if (!selectedProjectId) return;
+      const liveSessions = buildLiveSessions();
+      setSessions(liveSessions);
+      persistProject(selectedProjectId, liveSessions, activeSessionIdRef.current);
+    },
+  );
   /**
    * S3 — une demande peut-elle être glissée dans le tour en cours ? Moteur
    * Claude uniquement : le moteur neutre n'a pas d'entrée streamée à alimenter,
@@ -599,10 +598,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     setError: setAttachmentsError,
   } = useAttachmentDraft();
   const [composerDragOver, setComposerDragOver] = useState(false);
-  // R2 — en mode « Auto (routeur) », le moteur réel n'est connu qu'après
-  // routage (possiblement neutre, qui ne supporte pas les pièces jointes) :
-  // l'ajout est donc désactivé aussi tant que la sentinelle Auto est choisie.
-  const attachmentsSupported = engineProviderId === null && model !== AUTO_MODEL;
+  // T-080 — le moteur d'un tour est désormais connu d'avance (plus de
+  // routage à l'envoi) : seul le moteur neutre interdit les pièces jointes.
+  const attachmentsSupported = engineProviderId === null;
   // Au moins une image collée encore en cours d'encodage : l'envoi doit
   // attendre (sinon on enverrait une pièce jointe sans données).
   const attachmentsPending = attachments.some((a) => a.loading);
@@ -651,18 +649,10 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     claudeDirPath: string | null;
   }>({ iactionPath: null, claudeMdPath: null, claudeDirPath: null });
 
-  // Registre d'applications externes (Lot 5, voir appsAdmin.ts) : lu une seule fois au
-  // montage — alimente le menu contextuel de FileTree (« Ouvrir avec … »). Édité depuis la
-  // page Configuration ; une modification n'est reprise ici qu'au redémarrage de l'app
-  // (câblage minimal demandé pour ce lot, pas de synchronisation live entre les deux pages).
-  const [apps, setApps] = useState<AppEntry[]>([]);
-  useEffect(() => {
-    readApps()
-      .then(setApps)
-      .catch(() => {
-        // best effort : sans registre, le menu contextuel propose seulement le repli système
-      });
-  }, []);
+  // Registre d'applications externes (Lot 5, voir appsAdmin.ts — `useApps`
+  // porte le commentaire complet, T-108) : alimente le menu contextuel de
+  // FileTree comme celui des références de fichiers du fil (menuReference.tsx).
+  const apps = useApps();
 
   // MCP : le panneau (McpPanel.tsx) interroge `mcp.status` lui-même — la page
   // ne garde que le compteur du badge et un jeton de rafraîchissement, bumpé
@@ -699,8 +689,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       if (estPerimee()) return;
       setNeutralModels(list);
       setNeutralModelsState("idle");
-      // R2 — la sentinelle « Auto » est toujours un choix valide, à préserver.
-      setModel((prev) => (prev === AUTO_MODEL || list.some((m) => m.id === prev) ? prev : (list[0]?.id ?? "")));
+      setModel((prev) => (list.some((m) => m.id === prev) ? prev : (list[0]?.id ?? "")));
     } catch (err) {
       if (estPerimee()) return;
       setNeutralModels([]);
@@ -732,7 +721,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
 
   // Recollage en bas du fil : voir useStickToBottom.ts (logique partagée avec
   // ChatPage — l'intention de l'utilisateur prime sur la position).
-  const { scrollRef, scrollProps, collerEnBas } = useStickToBottom(turns);
+  const { scrollRef, scrollProps, collerEnBas, descendreEnBas } = useStickToBottom(turns, activeSessionId);
 
   // Miroirs toujours à jour de l'état affiché, pour la sauvegarde immédiate
   // en fin de tour (`handleSend`) : à ce moment-là, l'état React capturé à
@@ -886,6 +875,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * écrasés ; l'appariement se fait sur `sessionId` — l'id de session CÔTÉ
    * SERVEUR, seul connu du CLI —, donc les conversations du moteur neutre
    * (sans session CLI) ne sont pas concernées.
+   *
+   * T-063 — `appliquerTitresIA` (modeleProjet.ts) écarte les titres qui ne
+   * distinguent plus (sessions convergentes, reprise partageant son
+   * sessionId) : à collision, le repli local est gardé, distinctif par
+   * construction.
    */
   useEffect(() => {
     if (!cwd || !selectedProjectId) return;
@@ -894,17 +888,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     let cancelled = false;
     void claudeSessionTitles(cwd, serverIds).then((titles) => {
       if (cancelled || titles.size === 0) return;
-      setSessions((prev) => {
-        let changed = false;
-        const next = prev.map((s) => {
-          if (s.titleCustom || !s.sessionId) return s;
-          const aiTitle = titles.get(s.sessionId);
-          if (!aiTitle || aiTitle === s.title) return s;
-          changed = true;
-          return { ...s, title: aiTitle };
-        });
-        return changed ? next : prev;
-      });
+      setSessions((prev) => appliquerTitresIA(prev, titles).sessions);
     });
     return () => {
       cancelled = true;
@@ -969,6 +953,35 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     claudeCode: projectAgents.filter((a) => a.scope === "claude-code"),
   };
 
+  // T-151 — sessions hors plafond : archivées, jamais abandonnées (archivesSessions.ts).
+  const archivage = useArchivesSessions(
+    selectedProjectId,
+    statePhase === "loaded",
+    (p) => new Set([...sessionsRef.current, ...(persistedConversationsRef.current[p]?.sessions ?? [])].map((s) => s.id)),
+    retirerDeLaVue,
+  );
+
+  /** Archive acquise : sort de la vue (sauf active/ouverte entre-temps) et du fichier projet, qu'on réécrit. */
+  function retirerDeLaVue(projetId: string, ids: string[]): string[] {
+    const sortantes = ids.filter((i) => i !== activeSessionIdRef.current && !openConversationIdsRef.current.includes(i));
+    if (selectedProjectIdRef.current !== projetId || sortantes.length === 0) return [];
+    setSessions((prev) => prev.filter((s) => !sortantes.includes(s.id)));
+    persistProject(projetId, sessionsRef.current, activeSessionIdRef.current);
+    return sortantes;
+  }
+
+  /** Clic sur une archive : relue, réinsérée dans les sessions vives, ouverte comme une session normale. */
+  async function restoreArchive(id: string) {
+    const projetId = selectedProjectIdRef.current;
+    const ok = await archivage.restaurerArchive(id, (persistee) => {
+      if (selectedProjectIdRef.current !== projetId) return false;
+      setSessions([...buildLiveSessions(), sessionStateFromPersisted(persistee)]);
+      return true;
+    });
+    if (ok) selectSession(id);
+    else if (selectedProjectIdRef.current === projetId) setOpenFilesNotice("Archive illisible : voir le journal.");
+  }
+
   /** Écrit l'entrée `id` dans le document persisté complet (best effort, no-op tant que non hydraté). */
   function persistProject(id: string, liveSessions: ProjectSession[], activeId?: string) {
     // Tant que l'hydratation initiale n'a pas eu lieu, `persistedConversationsRef`
@@ -989,10 +1002,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       }),
     };
     persistedConversationsRef.current = next;
-    void stateWrite(CONVERSATIONS_STATE_KEY, next).catch(() => {
+    // T-061 — seul le fichier de CE projet est écrit, plus jamais le poste entier.
+    void sauverProjet(IO_ETAT, id, next[id]).catch(() => {
       // best effort : une écriture ratée ne bloque pas l'UI, la prochaine
       // sauvegarde (debounce ou fin de tour suivant) retentera.
     });
+    void archivage.archiverHorsPlafond(id, next[id]);
   }
 
   /**
@@ -1030,7 +1045,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       [projectId]: buildPersistedEntry(nextState),
     };
     persistedConversationsRef.current = next;
-    void stateWrite(CONVERSATIONS_STATE_KEY, next).catch(() => {});
+    void sauverProjet(IO_ETAT, projectId, next[projectId]).catch(() => {});
   }
 
   /**
@@ -1058,6 +1073,10 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         // envoi routé, effacée par un override) : recopiée pour persistance.
         routedTier: runtime.routedTier,
         routedTarget: runtime.routedTarget,
+        // T-120 — le réveil vit aussi dans le runtime (armé/désarmé/consommé
+        // au battement) : recopié pareil pour persistance.
+        reveils: runtime.reveils,
+        reveilsHistorique: runtime.reveilsHistorique,
         // La config LLM (moteur/modèle/agent) n'est éditable que pour la
         // conversation active : ne l'écrase que pour celle-là (`activeId` par
         // ref — depuis un callback tardif, l'active a pu changer, et écrire la
@@ -1077,7 +1096,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   useEffect(() => {
     if (stateInitRef.current) return;
     stateInitRef.current = true;
-    stateRead<unknown>(CONVERSATIONS_STATE_KEY)
+    // T-061 — état éclaté : un fichier par projet, monolithe migré puis mis de côté.
+    chargerProjets(IO_ETAT)
       .then((raw) => {
         persistedConversationsRef.current = sanitizePersistedConversations(raw);
       })
@@ -1099,10 +1119,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     const raw = persistedConversationsRef.current;
     const validIds = new Set(projects.map((p) => p.id));
     const cleaned: PersistedConversations = {};
-    let removedAny = false;
     for (const [id, entry] of Object.entries(raw)) {
       if (validIds.has(id)) cleaned[id] = entry;
-      else removedAny = true;
+      // T-061 — un projet disparu du registre est MIS DE CÔTÉ (`retire-…`),
+      // plus jamais effacé d'un document réécrit : l'historique survit.
+      else void retirerProjet(IO_ETAT, id);
     }
     persistedConversationsRef.current = cleaned;
 
@@ -1111,10 +1132,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       // dans cet onglet avant même la fin de ce chargement disque).
       if (projectStatesRef.current.has(id)) continue;
       projectStatesRef.current.set(id, projectStateFromPersisted(entry, pendingLazyLoadsRef.current));
-    }
-
-    if (removedAny) {
-      void stateWrite(CONVERSATIONS_STATE_KEY, cleaned).catch(() => {});
     }
 
     // Course possible avec l'auto-sélection ci-dessous : si un projet a déjà
@@ -1182,7 +1199,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     runtimes.reinitialiser(kept);
     for (const conv of next.sessions) {
       if (next.openConversationIds.includes(conv.id) && !runtimes.connait(conv.id)) {
-        runtimes.poser(conv.id, freshRuntime(conv.turns, conv.sessionId, conv.routedTier, conv.routedTarget));
+        runtimes.poser(conv.id, freshRuntime(conv.turns, conv.sessionId, conv.routedTier, conv.routedTarget, conv.reveils, conv.reveilsHistorique));
       }
     }
     setSessions(next.sessions);
@@ -1191,7 +1208,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     setOpenFiles(next.openFiles);
     setActiveTab(next.activeTab);
     setEngineProviderId(activeSession.engine.providerId);
-    setModel(activeSession.engine.model);
+    setModel(modelePourSession(activeSession));
     // Résolution différée (voir le commentaire de `loadProjectAgents`) : au
     // moment d'une bascule de PROJET, `projectAgents` correspond encore à
     // l'ancien projet — c'est l'effet déclenché par le changement de `cwd`
@@ -1199,22 +1216,22 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     setSelectedAgentKey(activeSession.selectedAgent);
   }
 
-  // Aucun projet sélectionné mais la liste n'est plus vide (chargement
-  // initial, ou projet précédemment sélectionné supprimé ci-dessous) : on
-  // rouvre le DERNIER projet utilisé s'il existe encore, sinon le premier
-  // déclaré. On attend d'avoir lu le disque (`lastProjectLoaded`) pour ne pas
-  // ouvrir le premier projet puis basculer — ce qui ferait clignoter l'écran
-  // et chargerait inutilement l'état du mauvais projet.
+  // Aucun projet sélectionné mais la liste n'est plus vide (chargement initial, ou projet supprimé
+  // ci-dessous) : `choisirProjetInitial` (T-062) rouvre le dernier projet utilisé, sauf s'il est déjà
+  // ouvert AILLEURS (repli sur le libre le plus utilisé ; une fenêtre secondaire ignore le souvenir).
+  // On attend `lastProjectLoaded` ET `fenetresOuvertes` (registre + stats) : pas de bascule visible.
   useEffect(() => {
-    if (selectedProjectId !== null || projects.length === 0 || !lastProjectLoaded) return;
+    if (selectedProjectId !== null || projects.length === 0 || !lastProjectLoaded || fenetresOuvertes === null) return;
     const remembered = lastProjectIdRef.current;
-    const id = remembered && projects.some((p) => p.id === remembered) ? remembered : projects[0].id;
+    const id = choisirProjetInitial(remembered, projects.map((p) => p.id), fenetresOuvertes.ouverts, etiquetteFenetre, fenetresOuvertes.poids);
+    if (id === null) return; // tous les projets déclarés sont déjà ouverts ailleurs (cas rare)
     setSelectedProjectId(id);
-    // Réaligne la mémoire quand le projet retenu n'existe plus (supprimé).
-    if (id !== remembered) rememberLastProject(id);
+    if (id !== remembered) rememberLastProject(id); // supprimé, ou repli sur le libre le plus utilisé
     loadProjectStateIntoView(projectStatesRef.current.get(id) ?? emptyProjectState());
+    // Revendication : le registre lu plus haut n'est qu'un instantané.
+    void revendiquerProjet(etiquetteFenetre, id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, selectedProjectId, lastProjectLoaded]);
+  }, [projects, selectedProjectId, lastProjectLoaded, fenetresOuvertes]);
 
   // Le projet sélectionné a été supprimé depuis Configuration : on efface
   // son état mémorisé (mémoire + disque) et on repart d'aucune sélection
@@ -1226,7 +1243,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         const next = { ...persistedConversationsRef.current };
         delete next[selectedProjectId];
         persistedConversationsRef.current = next;
-        void stateWrite(CONVERSATIONS_STATE_KEY, next).catch(() => {});
+        // T-061 — mis de côté (`retire-…`), plus jamais effacé d'un document.
+        void retirerProjet(IO_ETAT, selectedProjectId);
       }
       setSelectedProjectId(null);
       runtimes.reinitialiser();
@@ -1237,13 +1255,20 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       setActiveTab(EMPTY_TAB);
       setPermissionQueue([]);
       setEngineProviderId(null);
-      setModel("");
+      setModel(modeleDefaut);
       setSelectedAgentKey(null);
     }
   }, [projects, selectedProjectId]);
 
-  function selectProject(id: string) {
-    if (streaming || id === selectedProjectId) return;
+  /** T-062 — revendique AVANT de basculer : une seule fenêtre par projet (coquille indisponible : voir fenetreClient.ts). */
+  async function selectProject(id: string): Promise<boolean> {
+    if (streaming) return false;
+    if (id === selectedProjectId) return true;
+    const porteur = await revendiquerProjet(etiquetteFenetre, id);
+    if (porteur) {
+      setOpenFilesNotice("Ce projet est déjà ouvert dans une autre fenêtre, elle vient de passer devant.");
+      return false;
+    }
     if (selectedProjectId) {
       const liveSessions = buildLiveSessions();
       projectStatesRef.current.set(selectedProjectId, {
@@ -1267,6 +1292,50 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     // (ils concernaient une conversation de l'ancien projet).
     setClearedNotice(false);
     clearedBackupRef.current = null;
+    return true;
+  }
+
+  /**
+   * T-159 — crée dans le projet COURANT une conversation qui reprend la copie
+   * `sessionIdCopie` (son `sessionId` part en `resume` au premier envoi). Le
+   * titre est figé (`titleCustom`) : le titre calculé depuis les tours ou par le
+   * CLI écraserait sinon « Reprise — … ». Le fil reste vide à l'écran : le
+   * contexte est chez Claude, pas dans l'historique d'IAction — d'où la note.
+   */
+  function ouvrirSessionReprise(sessionIdCopie: string, titre: string) {
+    if (!selectedProjectId) return;
+    const liveSessions = buildLiveSessions();
+    const fresh: ProjectSession = { ...freshSession(), title: titre, titleCustom: true, sessionId: sessionIdCopie };
+    const nextSessions = [...liveSessions, fresh];
+    runtimes.poser(fresh.id, freshRuntime([], sessionIdCopie));
+    setSessions(nextSessions);
+    setActiveSessionId(fresh.id);
+    setOpenConversationIds((prev) => [...prev, fresh.id]);
+    setActiveTab(convTabId(fresh.id));
+    setConfirmDeleteSessionId(null);
+    setClearedNotice(false);
+    setSelectedAgentKey(null);
+    clearAttachments();
+    persistProject(selectedProjectId, nextSessions, fresh.id);
+    setOpenFilesNotice("Session reprise en COPIE : Claude en a le contexte, mais le fil affiché démarre vide.");
+    focusComposer();
+  }
+
+  /** Reprise demandée, en attente que le projet visé soit effectivement affiché (la sélection est asynchrone). */
+  const repriseEnAttenteRef = useRef<{ projectId: string; sessionIdCopie: string; titre: string } | null>(null);
+  const [repriseTick, setRepriseTick] = useState(0);
+  useEffect(() => {
+    const reprise = repriseEnAttenteRef.current;
+    if (!reprise || reprise.projectId !== selectedProjectId) return;
+    repriseEnAttenteRef.current = null;
+    ouvrirSessionReprise(reprise.sessionIdCopie, reprise.titre);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ouvrirSessionReprise est redéfinie à chaque rendu et lit l'état courant : seuls ces deux signaux la déclenchent.
+  }, [selectedProjectId, repriseTick]);
+
+  /** R2/R7 — efface plancher + cible de session de la conversation active (vestige du mode Auto retiré par T-080, voir l'en-tête de fichier). */
+  function clearRoutedAffinity() {
+    if (!activeSessionId) return;
+    updateRuntime(activeSessionId, (r) => ({ ...r, routedTier: null, routedTarget: null, routedReasons: null }));
   }
 
   /**
@@ -1276,12 +1345,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * `sendViaClaudeEngine`/`sendViaNeutralEngine`), pas recopiés ici. `""` =
    * retour au mode manuel (`clearAgentSelection`).
    */
-  /** R2/R7 — efface plancher + cible de session de la conversation active (override du mode Auto). */
-  function clearRoutedAffinity() {
-    if (!activeSessionId) return;
-    updateRuntime(activeSessionId, (r) => ({ ...r, routedTier: null, routedTarget: null, routedReasons: null }));
-  }
-
   function handleAgentSelectChange(value: string) {
     if (streaming) return;
     if (!value) {
@@ -1294,11 +1357,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     const agent = projectAgents.find((a) => a.scope === scope && a.name === name);
     if (!agent) return;
     setSelectedAgentKey({ name: agent.name, scope: agent.scope });
-    // R2 — agent `engine: auto` : moteur/modèle choisis par le routeur à
-    // l'envoi (sentinelle Auto armée) ; sinon config explicite de l'agent.
+    // T-080 — un agent `engine: auto` n'a plus de routeur derrière lui : il
+    // part sur l'abonnement au modèle par défaut réglé dans Configuration.
     if (agent.engine === "auto") {
       setEngineProviderId(null);
-      setModel(AUTO_MODEL);
+      setModel(modeleDefaut);
     } else {
       setEngineProviderId(agent.engine === "neutral" ? agent.provider : null);
       if (agent.model !== null) setModel(agent.model);
@@ -1306,9 +1369,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       clearRoutedAffinity();
     }
     setPermissionMode(agent.permissionMode);
-    // Le moteur neutre ne supporte pas les pièces jointes (voir le contrat), et
-    // le mode Auto peut y router : on ne garde jamais un brouillon en attente
-    // pour le mauvais moteur.
+    // Le moteur neutre ne supporte pas les pièces jointes (voir le contrat) : on ne garde
+    // jamais un brouillon en attente pour le mauvais moteur.
     if (agent.engine !== "claude") clearAttachments();
   }
 
@@ -1323,7 +1385,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     if (streaming || selectedAgent !== null) return;
     const next = value === "" ? null : value;
     setEngineProviderId(next);
-    setModel("");
+    setModel(next === null ? modeleDefaut : "");
     // R2 — changer de moteur = choix explicite : l'affinité de routage tombe.
     clearRoutedAffinity();
     if (next === null) {
@@ -1497,8 +1559,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     setActiveSessionId(id);
     setOpenConversationIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
     setActiveTab(convTabId(id));
+    setOpenFilesNotice(null); // Il commente un geste, pas la conversation ouverte (T-090).
     setEngineProviderId(target.engine.providerId);
-    setModel(target.engine.model);
+    setModel(modelePourSession(target));
     // Même projet : `projectAgents` est déjà à jour, résolution immédiate.
     setSelectedAgentKey(resolveAgentSelection(target.selectedAgent, projectAgents));
     clearAttachments();
@@ -1543,7 +1606,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       setOpenConversationIds(nextOpen.includes(nextActive.id) ? nextOpen : [...nextOpen, nextActive.id]);
       setActiveTab(convTabId(nextActive.id));
       setEngineProviderId(nextActive.engine.providerId);
-      setModel(nextActive.engine.model);
+      setModel(modelePourSession(nextActive));
       setSelectedAgentKey(resolveAgentSelection(nextActive.selectedAgent, projectAgents));
       persistProject(selectedProjectId, finalSessions, nextActive.id);
     } else {
@@ -1566,39 +1629,63 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       return;
     }
     setOpenFilesNotice(null);
+    closeConversationTabs([id]);
+  }
+
+  /**
+   * Ferme PLUSIEURS onglets d'un coup — les lots du menu contextuel (« fermer
+   * les autres », « à droite », « toutes ») ; la fermeture unitaire ci-dessus
+   * n'en est qu'un cas à un élément, pour qu'il n'existe jamais deux façons de
+   * fermer un onglet.
+   *
+   * Pas de boucle sur la version unitaire : chaque passage lit
+   * `openConversationIds`/`activeSessionId` dans l'état React, qui ne bouge
+   * pas avant le rendu suivant — le deuxième onglet du lot rouvrirait le
+   * premier. Tout se décide donc ici, en une passe, sur l'état courant.
+   *
+   * Le bandeau n'est PAS touché : `BarreOnglets` vient d'y écrire ce que le
+   * lot a conservé (tour en cours), et l'effacer ferait de ces survivants un
+   * échec muet.
+   */
+  function closeConversationTabs(ids: readonly string[]) {
+    if (!selectedProjectId) return;
+    // Garde de dernier recours : un tour peut avoir démarré entre l'ouverture
+    // du menu et le clic.
+    const partants = ids.filter((id) => runtimes.consulter(id)?.streaming !== true);
+    if (partants.length === 0) return;
     const liveSessions = buildLiveSessions();
     setSessions(liveSessions);
-    runtimes.oublier(id);
-    const nextOpen = openConversationIds.filter((c) => c !== id);
+    for (const id of partants) runtimes.oublier(id);
+    const nextOpen = openConversationIds.filter((c) => !partants.includes(c));
     setOpenConversationIds(nextOpen);
 
-    // Conversation qui devient active : inchangée si on ferme un AUTRE onglet,
-    // sinon l'onglet voisin (le précédent, à défaut le premier restant).
+    // Conversation qui devient active : inchangée si le lot l'épargne, sinon
+    // le plus proche voisin de GAUCHE encore ouvert (voir ongletApresFermeture
+    // — il faut sauter ceux que le même lot emporte).
     let nextActiveId = activeSessionId;
-    if (activeSessionId === id) {
+    if (partants.includes(activeSessionId)) {
       // Bascule de conversation active : le bandeau « Conversation vidée /
       // Annuler » parlait de celle qu'on quitte (voir selectSession).
       setClearedNotice(false);
-      const idx = openConversationIds.indexOf(id);
-      const neighbour = nextOpen[Math.max(0, idx - 1)];
-      const target = neighbour ? liveSessions.find((s) => s.id === neighbour) : undefined;
+      const voisin = ongletApresFermeture(openConversationIds, activeSessionId, partants);
+      const target = voisin ? liveSessions.find((s) => s.id === voisin) : undefined;
       if (target) {
         ensureRuntime(target);
         nextActiveId = target.id;
         setActiveSessionId(target.id);
         setActiveTab(convTabId(target.id));
         setEngineProviderId(target.engine.providerId);
-        setModel(target.engine.model);
+        setModel(modelePourSession(target));
         setSelectedAgentKey(resolveAgentSelection(target.selectedAgent, projectAgents));
       } else {
         // Dernier onglet de conversation fermé : on en rouvre aussitôt un
         // vierge plutôt que de laisser l'écran vide — même effet visible que
-        // Ctrl+K, mais non destructif (la conversation fermée reste dans le
-        // panneau « Sessions »). Sans cela l'utilisateur se retrouvait sans
+        // Ctrl+K, mais non destructif (les conversations fermées restent dans
+        // le panneau « Sessions »). Sans cela l'utilisateur se retrouvait sans
         // conversation ET sans moyen d'en rouvrir une.
         const fresh: ProjectSession = { ...freshSession(), engine: { providerId: engineProviderId, model } };
-        // Purge des sessions vides au passage (celle qu'on vient de fermer si
-        // elle n'avait aucun tour), comme le fait `handleNewSession`.
+        // Purge des sessions vides au passage (celles qu'on vient de fermer si
+        // elles n'avaient aucun tour), comme le fait `handleNewSession`.
         const kept = liveSessions.filter(
           (s) => s.turns.length > 0 || s.titleCustom || runtimes.consulter(s.id)?.streaming === true,
         );
@@ -1667,6 +1754,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     sessionId,
     turns,
     model,
+    effort,
     engineProviderId,
     permissionMode,
     selectedAgent,
@@ -1679,7 +1767,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     updateRuntime,
     updateTurnsFor,
     autoAllowToolsRef,
-    injectorsRef,
+    injectorsRef, pushesEnCoursRef,
     setPermissionQueue,
     fermerMenuSlash: () => setSlashMenu((m) => ({ ...m, open: false })),
     signalerMcpInit: () => setMcpReloadToken((n) => n + 1),
@@ -1722,6 +1810,14 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     // la pastille « En file » étant visible sur l'onglet.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streaming, runtimeTick, activeSessionId]);
+
+  // T-120 — battement du réveil (§5). La bascule est ce qui fait PARTIR le
+  // tour : le drainage ci-dessus ne draine que la conversation active (voir
+  // useReveil.ts). `activeSessionIdRef` et pas `activeSessionId` : la
+  // minuterie est montée une fois, la valeur de rendu y serait figée.
+  useBattementReveil(runtimes, (convId) => {
+    if (activeSessionIdRef.current !== convId) selectSession(convId);
+  });
 
   async function handleAbort() {
     if (!activeSessionId) return;
@@ -2052,61 +2148,72 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     loadFileInto(path);
   }
 
-  /**
-   * Résout une référence de fichier cliquée dans une transcription (voir
-   * Markdown.tsx `onFileRef`) et ouvre le fichier trouvé — ou affiche une
-   * notice discrète (réutilise `openFilesNotice`, déjà rendue juste
-   * au-dessus de la zone conversation/éditeur) sinon :
-   *  - référence ABSOLUE (commence par `/`) : ouverte telle quelle si elle
-   *    est sous `cwd`, sinon notice « hors du projet » (aucune tentative de
-   *    lecture — on ne veut pas exposer le système de fichiers hors projet).
-   *  - référence avec `/` : essayée d'abord comme `cwd/ref` — un
-   *    `fsReadFile` de contrôle (pas juste `handleOpenFile`, qui ouvrirait
-   *    un onglet en erreur plutôt que de retomber sur la recherche) décide
-   *    du succès ; en cas d'échec, repli sur la recherche par nom de base.
-   *  - nom nu (ou repli ci-dessus) : `fsFindByName(cwd, nom)`.
-   */
   /* Wrappers à identité STABLE pour les composants mémoïsés (AgentTurnView /
      AgentBlockView / Markdown) : la dernière implémentation vit dans un ref,
      le useCallback sans dépendance garde la même référence à vie — sans quoi
      le memo serait inopérant (nouvelle fonction à chaque rendu). */
-  const fileRefImpl = useRef<(ref: string) => void>(() => {});
-  fileRefImpl.current = (ref) => void handleFileRef(ref);
-  const stableFileRef = useCallback((ref: string) => fileRefImpl.current(ref), []);
+  const fileRefImpl = useRef<(ref: string, forcer?: ForcageOuverture) => void>(() => {});
+  fileRefImpl.current = (ref, forcer) => void handleFileRef(ref, forcer);
+  const stableFileRef = useCallback((ref: string, forcer?: ForcageOuverture) => fileRefImpl.current(ref, forcer), []);
   const releaseBackgroundImpl = useRef<() => void>(() => {});
   releaseBackgroundImpl.current = () => void handleReleaseBackground();
   const stableReleaseBackground = useCallback(() => releaseBackgroundImpl.current(), []);
 
   /*
    * Clic sur une référence citée dans la transcription. Toute la décision vit
-   * dans refFichier.ts (T-024/T-049) : classement du chemin, registre
-   * d'applications, repli sur la recherche par nom. Ici, l'adaptation au monde
-   * réel — le disque, l'éditeur, l'encart d'avis.
+   * dans refFichier.ts (T-024/T-049/T-105) : classement du chemin, registre
+   * d'applications, repli sur la recherche par nom puis sur les répertoires
+   * vus dans le fil. Ici, l'adaptation au monde réel — le disque, l'éditeur,
+   * l'encart d'avis.
    */
-  async function handleFileRef(ref: string) {
+  async function handleFileRef(ref: string, forcer?: ForcageOuverture) {
     if (!cwd) return;
     await ouvrirReference(ref, {
       cwd,
+      turns,
       apps,
-      lireFichier: fsReadFile,
-      chercherParNom: fsFindByName,
+      forcer,
+      ...sondesDisque,
       ouvrirDansEditeur: handleOpenFile,
       ouvrirDansApp: openExternal,
       avis: setOpenFilesNotice,
     });
   }
 
-  function handleCloseTab(path: string, e: ReactMouseEvent) {
-    e.stopPropagation();
+  /** Fermeture unitaire d'un onglet de fichier (« × », clic milieu, item « Fermer »). */
+  function closeFileTab(path: string) {
     const file = openFiles.find((f) => f.path === path);
     if (file?.dirty && !window.confirm(`Fermer ${file.name} sans enregistrer les modifications ?`)) return;
-    pendingLazyLoadsRef.current.delete(path);
-    const idx = openFiles.findIndex((f) => f.path === path);
-    const remaining = openFiles.filter((f) => f.path !== path);
-    setOpenFiles(remaining);
-    if (activeTab === path) {
-      const fallback = remaining[idx] ?? remaining[idx - 1] ?? null;
-      setActiveTab(fallback ? fallback.path : "conversation");
+    closeFileTabs([path], { forcerModifie: true });
+  }
+
+  /**
+   * Ferme plusieurs onglets de fichiers d'un coup (lots du menu contextuel).
+   * Un fichier NON ENREGISTRÉ n'est jamais emporté par un lot : `BarreOnglets`
+   * l'a déjà écarté, et la garde est répétée ici — cinq confirmations natives
+   * d'affilée seraient invivables, et les avaler sans rien dire, pire.
+   * `forcerModifie` n'est posé que par la voie unitaire, qui vient d'obtenir
+   * la confirmation pour CE fichier-là.
+   */
+  function closeFileTabs(paths: readonly string[], options?: { forcerModifie?: boolean }) {
+    const partants = paths.filter(
+      (p) => options?.forcerModifie === true || openFiles.find((f) => f.path === p)?.dirty !== true,
+    );
+    if (partants.length === 0) return;
+    for (const path of partants) pendingLazyLoadsRef.current.delete(path);
+    const restants = openFiles.filter((f) => !partants.includes(f.path));
+    setOpenFiles(restants);
+    if (partants.includes(activeTab)) {
+      // Voisin de gauche encore ouvert, à défaut la conversation courante —
+      // et surtout PAS un onglet qui n'existe pas : `agent-tabs__body` ne
+      // rend alors ni éditeur ni fil, et l'écran reste blanc (T-110).
+      const voisin = ongletApresFermeture(
+        openFiles.map((f) => f.path),
+        activeTab,
+        partants,
+      );
+      if (voisin) applyActiveTab(voisin);
+      else setActiveTab(activeSessionId ? convTabId(activeSessionId) : EMPTY_TAB);
     }
   }
 
@@ -2227,7 +2334,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   useImperativeHandle(ref, () => ({
     requestSelectProject: (id: string) => {
       if (streaming || !projects.some((p) => p.id === id)) return false;
-      selectProject(id);
+      // T-062 — bascule asynchrone (revendication) : le `true` dit « demande
+      // recevable », pas « projet ouvert ». Un refus se voit dans le bandeau.
+      void selectProject(id);
       return true;
     },
     getSelectedProjectPath: () => selectedProject?.path ?? null,
@@ -2235,16 +2344,26 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     clearConversation: () => clearConversation(),
     isStreaming: () => streaming,
     focusComposer: () => focusComposer(),
+    reprendreSession: async (projectId, sessionIdCopie, titre) => {
+      if (!projects.some((p) => p.id === projectId)) return false;
+      repriseEnAttenteRef.current = { projectId, sessionIdCopie, titre };
+      if (!(await selectProject(projectId))) {
+        repriseEnAttenteRef.current = null;
+        return false;
+      }
+      // Déjà sur ce projet : la sélection ne change rien, on déclenche l'effet à la main.
+      setRepriseTick((t) => t + 1);
+      return true;
+    },
   }));
 
   const currentPermission = permissionQueue[0] ?? null;
   const activeFile = isConvTab(activeTab) ? null : (openFiles.find((f) => f.path === activeTab) ?? null);
 
-  // Roving tabindex (WAI-ARIA APG) : onglets de fichiers (←/→) et liste de
-  // sessions (↑/↓). Un seul élément tabbable par collection — l'onglet actif /
-  // la session active (ou la plus récente), le dernier focusé tant qu'on
-  // reste dans la collection.
-  const tabsRoving = useRovingFocus<HTMLDivElement>({ selector: '[role="tab"]', orientation: "horizontal" });
+  // Roving tabindex (WAI-ARIA APG) : liste de sessions (↑/↓). Un seul élément
+  // tabbable par collection — la session active (ou la plus récente), le
+  // dernier focusé tant qu'on reste dans la collection. Celui des ONGLETS est
+  // désormais tenu par BarreOnglets.tsx, avec la barre elle-même.
   const sessionsRoving = useRovingFocus<HTMLUListElement>({ selector: ".session-item__title" });
   const sortedSessions = sortByRecent(sessions);
   const tabbableSessionId = sortedSessions.some((s) => s.id === activeSessionId)
@@ -2267,8 +2386,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // n'est pas ouvert.
   const slashMatches = slashMenu.open ? matchSlashCommands(slashCommands, slashMenu.fragment) : [];
   const contextSize = contextTokens(turns);
-  // R2 — en Auto, l'encart contexte affiche le modèle routé dès qu'il est connu.
-  const contextModel = model === AUTO_MODEL ? (activeRuntime.routedTarget?.model ?? "auto") : model;
+  const contextModel = model;
   // Encart « Contexte » de l'en-tête (voir contextBus.ts) : publié tant que
   // cette page vit, effacé au démontage pour ne pas laisser un chiffre orphelin.
   useEffect(() => {
@@ -2321,23 +2439,13 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * d'affichage se calcule en booléen (ici `aucunProjet`) et se rend ici.
    */
   if (aucunProjet) {
-    return (
-      <div className="page agent-page agent-page--empty">
-        <div className="agent-empty-state">
-          <h1 className="page__title">Projets</h1>
-          <p className="empty-hint">Déclarez votre premier projet dans Configuration pour commencer.</p>
-          <button type="button" className="btn" onClick={onGoToConfig}>
-            Aller à Configuration
-          </button>
-        </div>
-      </div>
-    );
+    return <EcranSansProjet onGoToConfig={onGoToConfig} />;
   }
 
   return (
     <div className="page agent-page">
       <div className="agent-layout">
-        <SidebarRetractable id="projets-gauche" cote="left" libelle="de gauche">
+        <PanneauLateral cote="gauche">
           <SidebarSection id="project" title="Projet" defaultOpen={!isCompactViewport}>
             <div className="field">
               <label htmlFor="agent-project">Projet</label>
@@ -2346,7 +2454,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                   id="agent-project"
                   value={selectedProjectId ?? ""}
                   disabled={streaming || projects.length === 0}
-                  onChange={(e) => selectProject(e.currentTarget.value)}
+                  onChange={(e) => void selectProject(e.currentTarget.value)}
                 >
                   {projects.length === 0 && <option value="">Aucun projet</option>}
                   {projects.map((p) => (
@@ -2367,37 +2475,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
               </div>
             </div>
             {selectedProject && <div className="sidebar-project-path">{selectedProject.path}</div>}
-            {selectedProject &&
-              (projectBadges.iactionPath || projectBadges.claudeMdPath || projectBadges.claudeDirPath) && (
-                <div className="project-badges">
-                  {projectBadges.iactionPath && (
-                    <span
-                      className="project-badge"
-                      title="Dossier de config du projet — agents, doc IA, RAG (v2)"
-                    >
-                      ⚙ .iaction
-                    </span>
-                  )}
-                  {projectBadges.claudeMdPath && (
-                    <button
-                      type="button"
-                      className="project-badge project-badge--link"
-                      title="Instructions projet — lues automatiquement par le moteur Claude"
-                      onClick={() => handleOpenFile(projectBadges.claudeMdPath as string, "CLAUDE.md")}
-                    >
-                      📄 CLAUDE.md
-                    </button>
-                  )}
-                  {projectBadges.claudeDirPath && (
-                    <span
-                      className="project-badge"
-                      title="Config Claude Code existante — agents, commandes, permissions"
-                    >
-                      🤖 .claude/
-                    </span>
-                  )}
-                </div>
-              )}
+            {selectedProject && <BadgesProjet badges={projectBadges} onOpenClaudeMd={(c) => handleOpenFile(c, "CLAUDE.md")} />}
           </SidebarSection>
 
           <SidebarSection id="files" title="Fichiers" defaultOpen={!isCompactViewport}>
@@ -2413,130 +2491,67 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
               />
             </div>
           </SidebarSection>
-        </SidebarRetractable>
+
+          {/* Les icônes du composeur vivent ICI depuis le 2026-09-05 : elles ne
+              prennent plus de largeur dans la fenêtre principale, et
+              `--extensible` étire la section jusqu'au bas de la colonne, où
+              l'arborescence ne laissait qu'un blanc. Grisées hors conversation
+              (onglet FICHIER : aucun composeur à alimenter) — sauf le réveil,
+              qui porte sur la conversation active, pas sur l'onglet affiché. */}
+          <SidebarSection id="outils" title="Outils" defaultOpen className="sidebar-section--extensible">
+            <div className="sidebar-outils">
+              <AttachmentPickerButton
+                onFiles={(files) => addFiles(files)}
+                disabled={streaming || !cwd || !attachmentsSupported || !isConvTab(activeTab)}
+                title={attachmentsSupported ? "Joindre des fichiers" : "Pièces jointes disponibles uniquement avec le moteur Claude (abonnement)"}
+              />
+              <VoiceButtons voice={voice} disabled={!cwd || !isConvTab(activeTab)} />
+              <BoutonArret streaming={streaming} onArreter={() => void handleAbort()} />
+              <ReveilControl
+                reveils={activeReveils}
+                historique={activeRuntime.reveilsHistorique}
+                brouillon={draft}
+                onEnregistrer={enregistrerReveil}
+                onSupprimer={supprimerReveil}
+              />
+            </div>
+          </SidebarSection>
+        </PanneauLateral>
 
         <div className="agent-main__content">
-          <div
-            className="agent-tabs"
-            role="tablist"
-            ref={tabsRoving.containerRef}
-            onKeyDown={tabsRoving.onKeyDown}
-            onFocus={tabsRoving.onFocus}
-          >
-            {openConversationIds.map((convId) => {
+          {/* Barre d'onglets — conversations, « + », fichiers ouverts. Le rendu,
+              le roving tabindex, le clic milieu et le menu contextuel de
+              fermeture en lot vivent dans BarreOnglets.tsx, partagé avec la
+              page Chat ; cette page ne garde que ce qu'elle seule sait faire :
+              fermer pour de bon (état de session, persistance). */}
+          <BarreOnglets
+            conversations={openConversationIds.flatMap((convId) => {
               const conv = sessions.find((s) => s.id === convId);
-              if (!conv) return null;
-              const tabId = convTabId(convId);
-              const isActive = activeTab === tabId;
-              const convStreaming = runtimes.consulter(convId)?.streaming === true;
-              return (
-                <div
-                  key={convId}
-                  className={`agent-tab agent-tab--conv${isActive ? " agent-tab--active" : ""}`}
-                  role="tab"
-                  aria-selected={isActive}
-                  tabIndex={isActive ? 0 : -1}
-                  title={conv.title}
-                  onClick={() => selectSession(convId)}
-                  onKeyDown={(e) => {
-                    // `target === currentTarget` : ne pas intercepter Entrée sur
-                    // le bouton « × » interne (fermeture native du bouton).
-                    if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-                      e.preventDefault();
-                      selectSession(convId);
-                    }
-                  }}
-                >
-                  <span className="agent-tab__name">{conv.title}</span>
-                  {convStreaming && (
-                    <span
-                      className="agent-tab__dot agent-tab__dot--streaming"
-                      aria-label="Tour en cours"
-                      title="Tour en cours"
-                    />
-                  )}
-                  <button
-                    type="button"
-                    className="agent-tab__close"
-                    aria-label={`Fermer l'onglet ${conv.title}`}
-                    title={convStreaming ? "Impossible de fermer : tour en cours" : "Fermer l'onglet"}
-                    disabled={convStreaming}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeConversationTab(convId);
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              );
+              if (!conv) return [];
+              return [{ id: convId, titre: conv.title, streaming: runtimes.consulter(convId)?.streaming === true }];
             })}
-            <button
-              type="button"
-              className="agent-tab agent-tab--new"
-              onClick={() => handleNewSession()}
-              aria-label="Nouvelle conversation"
-              title="Nouvelle conversation (Ctrl+N)"
-            >
-              +
-            </button>
-            {openFiles.map((f) => (
-              <div
-                key={f.path}
-                className={`agent-tab${activeTab === f.path ? " agent-tab--active" : ""}`}
-                role="tab"
-                aria-selected={activeTab === f.path}
-                tabIndex={activeTab === f.path ? 0 : -1}
-                title={f.path}
-                onClick={() => applyActiveTab(f.path)}
-                onKeyDown={(e) => {
-                  // `target === currentTarget` : ne pas intercepter Entrée sur
-                  // le bouton « × » interne (fermeture native du bouton).
-                  if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-                    e.preventDefault();
-                    applyActiveTab(f.path);
-                  }
-                }}
-              >
-                <span className="agent-tab__name">{f.name}</span>
-                {f.dirty && <span className="agent-tab__dot" aria-hidden="true" title="Modifié" />}
-                <button
-                  type="button"
-                  className="agent-tab__close"
-                  aria-label={`Fermer ${f.name}`}
-                  onClick={(e) => handleCloseTab(f.path, e)}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
+            fichiers={openFiles.map((f) => ({ chemin: f.path, nom: f.name, modifie: f.dirty }))}
+            conversationActive={isConvTab(activeTab) ? convIdOfTab(activeTab) : null}
+            fichierActif={isConvTab(activeTab) ? null : activeTab}
+            onActiverConversation={selectSession}
+            onActiverFichier={applyActiveTab}
+            onNouvelleConversation={() => handleNewSession()}
+            onFermerConversation={closeConversationTab}
+            onFermerFichier={closeFileTab}
+            onFermerLotConversations={closeConversationTabs}
+            onFermerLotFichiers={closeFileTabs}
+            onAvis={setOpenFilesNotice}
+          />
 
-          {openFilesNotice && <div className="agent-tabs__notice">{openFilesNotice}</div>}
-          {clearedNotice && (
-            <div className="agent-tabs__notice cleared-notice">
-              Conversation vidée.
-              <button type="button" className="btn btn--ghost cleared-notice__undo" onClick={undoClearConversation}>
-                Annuler
-              </button>
-              <button
-                type="button"
-                className="cleared-notice__dismiss"
-                onClick={() => setClearedNotice(false)}
-                aria-label="Masquer"
-                title="Masquer"
-              >
-                ×
-              </button>
-            </div>
-          )}
-          {/* R3 — bandeau de débord : posé au tour concerné, effacé dès que le
-              routage redevient normal (voir applyDebordNotice). */}
-          {debordNotice && (
-            <div className={`agent-tabs__notice debord-notice${debordNotice.blocked ? " debord-notice--blocked" : ""}`}>
-              {libelleDebordNotice(debordNotice)}
-            </div>
-          )}
+          <BandeauxOnglets
+            avis={openFilesNotice}
+            videe={clearedNotice}
+            onAnnulerVidage={undoClearConversation}
+            onMasquerVidage={() => setClearedNotice(false)}
+            debord={debordNotice}
+            debordInstant={debordNoticeAt}
+            reveil={reveilNotice}
+          />
 
           <div className="agent-tabs__body">
             {isConvTab(activeTab) ? (
@@ -2549,15 +2564,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                         : "Choisissez d'abord un projet ci-dessus."}
                     </p>
                   )}
-                  {turns.map((turn) => (
-                    <AgentTurnView
-                      key={turn.id}
-                      turn={turn}
-                      onFileRef={stableFileRef}
-                      cwd={cwd}
-                      onReleaseBackground={stableReleaseBackground}
-                    />
-                  ))}
+                  <AgentTranscript
+                    turns={turns}
+                    onFileRef={stableFileRef}
+                    cwd={cwd}
+                    onReleaseBackground={stableReleaseBackground}
+                  />
                 </div>
 
                 <div
@@ -2619,6 +2631,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                       </button>
                     </div>
                   ))}
+                  {/* T-120 — l'état armé seulement : rien quand rien n'est armé. */}
+                  <ReveilBanniere reveils={activeReveils} />
                   <AttachmentTray items={attachments} onRemove={removeAttachment} />
                   {attachmentsError && (
                     <div className="result-line result-line--error">
@@ -2637,22 +2651,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                       conversation et messages discrets — voir VoiceControls.tsx. */}
                   <VoiceStatus voice={voice} />
                   <div className="chat-composer__row">
-                    {/* Icônes d'action empilées EN COLONNE à gauche du textarea :
-                        la zone de saisie récupère ainsi toute la largeur. */}
-                    <div className="chat-composer__tools">
-                      <AttachmentPickerButton
-                        onFiles={(files) => addFiles(files)}
-                        disabled={streaming || !cwd || !attachmentsSupported}
-                        title={
-                          attachmentsSupported
-                            ? "Joindre des fichiers"
-                            : "Pièces jointes disponibles uniquement avec le moteur Claude (abonnement)"
-                        }
-                      />
-                      {/* Sans projet sélectionné, il n'y a personne à qui parler :
-                          la voix est désactivée comme l'est la zone de saisie. */}
-                      <VoiceButtons voice={voice} disabled={!cwd} />
-                    </div>
                     {/* Semi-non-contrôlé (defaultValue + ref) : la frappe
                         n'impose plus un re-rendu de page par caractère — voir
                         useComposerLiveDraft.ts, qui pousse aussi les écritures
@@ -2695,12 +2693,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                         // pour rien).
                         if (e.clipboardData.getData("text/plain")) return;
                         // Vignette « en chargement » AFFICHÉE TOUT DE SUITE, puis
-                        // remplie quand l'image arrive du presse-papier natif.
-                        const placeholderId = beginImage("capture-collée.png");
-                        if (!placeholderId) return; // plus de place
-                        void readClipboardImage()
-                          .then((bytes) => resolveImage(placeholderId, bytes))
-                          .catch(() => resolveImage(placeholderId, null));
+                        // remplie quand l'image arrive du presse-papier natif
+                        // (mécanisme + mesure T-048 : voir Attachments.tsx).
+                        collerImageDuPressePapierNatif(beginImage, resolveImage);
                       }}
                       disabled={!cwd}
                       placeholder={
@@ -2711,43 +2706,20 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                             : "Décrivez une tâche pour l'agent… (Entrée pour envoyer, Maj+Entrée pour un saut de ligne)"
                       }
                     />
-                    <div className="actions chat-composer__envoi">
-                      {streaming ? (
-                        <>
-                          <button type="button" className="btn btn--ghost" onClick={() => void handleAbort()}>
-                            Arrêter
-                          </button>
-                          {/* Un SEUL bouton d'envoi pendant un tour (choix
-                              utilisateur 2026-08-04) : handleSend glisse la
-                              demande dans le tour en cours quand c'est possible
-                              (claude.push) et la met en file sinon — le repli
-                              est automatique, pas besoin de deux boutons. */}
-                          <button
-                            type="button"
-                            className="btn"
-                            onClick={() => void handleSend()}
-                            disabled={brouillonVide || !cwd}
-                            title={
-                              canInject
-                                ? "Glisser la demande dans le tour en cours (prise en compte au prochain outil)"
-                                : "Mettre en file : envoyé automatiquement à la fin du tour en cours"
-                            }
-                          >
-                            Envoyer
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn"
-                          onClick={() => void handleSend()}
-                          disabled={(brouillonVide && attachments.length === 0) || attachmentsPending || !cwd}
-                          title={attachmentsPending ? "Image en cours de chargement…" : undefined}
-                        >
-                          Envoyer
-                        </button>
-                      )}
-                    </div>
+                    <ChatComposerEnvoi
+                      streaming={streaming}
+                      brouillonVide={brouillonVide}
+                      nbPiecesJointes={attachments.length}
+                      piecesEnChargement={attachmentsPending}
+                      destinationPrete={Boolean(cwd)}
+                      titreEnvoiStreaming={
+                        canInject
+                          ? "Glisser la demande dans le tour en cours (prise en compte au prochain outil)"
+                          : "Mettre en file : envoyé automatiquement à la fin du tour en cours"
+                      }
+                      onEnvoyer={() => void handleSend()}
+                      onAllerEnBas={descendreEnBas}
+                    />
                   </div>
                 </div>
               </div>
@@ -2798,7 +2770,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
           </div>
         </div>
 
-        <SidebarRetractable id="projets-droite" cote="right" libelle="des sessions">
+        <PanneauLateral cote="droit">
           <SessionsSection
             sessions={sessions}
             sortedSessions={sortedSessions}
@@ -2818,6 +2790,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
             selectSession={selectSession}
             handleNewSession={handleNewSession}
             sessionsRoving={sessionsRoving}
+            archives={archivage.archives}
+            restoreArchive={restoreArchive}
+            trashArchive={archivage.retirerUneArchive}
           />
 
           <LlmSection
@@ -2834,14 +2809,14 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
             setPermissionMode={setPermissionMode}
             model={model}
             setModel={setModel}
-            clearRoutedAffinity={clearRoutedAffinity}
-            clearAttachments={clearAttachments}
+            effort={effort}
+            setEffort={setEffort}
             neutralModelsState={neutralModelsState}
             neutralModels={neutralModels}
             neutralFeaturedIds={neutralFeaturedIds}
             basculerFavoriNeutre={basculerFavoriNeutre}
             neutralModelsError={neutralModelsError}
-            sessionId={sessionId}
+            vif={{ sessionId, turns }}
             isCompactViewport={isCompactViewport}
           />
 
@@ -2879,7 +2854,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
               onServerCount={setMcpServerCount}
             />
           </SidebarSection>
-        </SidebarRetractable>
+        </PanneauLateral>
       </div>
 
       {currentPermission && (

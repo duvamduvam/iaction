@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Avatar IAction — prototype</title>
+  <!-- three.js depuis le CDN : prototype hors application, rien à installer.
+       Version épinglée (le chemin du transcodeur KTX2 dans avatar.js aussi). -->
+  <script type="importmap">
+  { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  } }
+  </script>
+  <style>
+    body { margin: 0; display: grid; grid-template-columns: 1fr 340px; height: 100vh;
+           font: 14px system-ui, sans-serif; background: #0b0c10; color: #e6e6e6; }
+    #scene { position: relative;
+             background: radial-gradient(ellipse at 50% 35%, #4a3a5c 0%, #241c33 45%, #0e0b14 100%); }
+    #scene canvas { display: block; }
+    #emotion-courante { position: absolute; top: 12px; left: 12px; padding: 4px 10px;
+           background: #0008; border-radius: 12px; font-weight: 600; }
+    aside { padding: 14px; overflow-y: auto; border-left: 1px solid #222;
+            display: flex; flex-direction: column; gap: 12px; }
+    h2 { font-size: 13px; text-transform: uppercase; color: #8af; margin: 8px 0 0; }
+    textarea { width: 100%; height: 110px; box-sizing: border-box; background: #15171d;
+               color: inherit; border: 1px solid #333; border-radius: 6px; padding: 6px; }
+    button { background: #1d2230; color: inherit; border: 1px solid #334; border-radius: 6px;
+             padding: 6px 10px; cursor: pointer; margin: 2px; }
+    button.actif { background: #2c4a8a; border-color: #8af; }
+    small, #etat { color: #999; }
+  </style>
+</head>
+<body>
+  <div id="scene"><span id="emotion-courante"></span></div>
+  <aside>
+    <div id="etat">Chargement…</div>
+
+    <h2>Réponse balisée → parole</h2>
+    <textarea id="texte">[joie] Bonjour David ! Content de te voir. [reflexion] Alors, cette erreur de compilation… voyons ça. [surprise] Oh ! C'est un chemin codé en dur. [tristesse] Encore lui. [joie] Bon, je te propose la correction.</textarea>
+    <button id="parler">▶️ Faire parler (voix du navigateur)</button>
+    <small>Bouche <b>simulée</b> : la voix du navigateur ne donne pas accès au son.</small>
+
+    <h2>Bouche calée sur un vrai son</h2>
+    <label>Fichier audio (wav, mp3…) : <input type="file" id="fichier-audio" accept="audio/*"></label>
+    <button id="micro">🎙️ Miroir micro</button>
+    <small>La bouche suit le volume réel. C'est le chemin de la voix d'IAction.</small>
+
+    <h2>Émotion (à la main)</h2>
+    <div id="boutons-emotion"></div>
+    <label>Intensité : <input type="range" id="intensite" min="0.5" max="2" step="0.1" value="1.4"></label>
+    <small>Balises reconnues : neutre, joie, tristesse, colere, surprise, peur, degout, reflexion
+      (accents tolérés).</small>
+
+    <h2>Tête</h2>
+    <select id="choix-modele">
+      <option value="avaturn">Avaturn — d'après photos (non commercial)</option>
+      <option value="brunette">Brunette — Ready Player Me (CC BY-NC)</option>
+      <option value="mpfb">MPFB — MakeHuman (CC0)</option>
+      <option value="facecap">Face Cap — tête de test</option>
+    </select>
+    <label>Charger un GLB à 52 poses ARKit (MetaHuman…) :
+      <input type="file" id="fichier-glb" accept=".glb,.gltf"></label>
+    <small>Modèles d'exemple de TalkingHead, usage local d'essai (licences dans le README).</small>
+  </aside>
+  <script type="module" src="avatar.js"></script>
+</body>
+</html>

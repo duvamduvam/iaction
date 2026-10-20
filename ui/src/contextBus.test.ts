@@ -21,9 +21,42 @@ import {
 
 describe("contextWindowFor", () => {
   it("résout la fenêtre par sous-chaîne d'id, préfixe vendeur compris", () => {
-    expect(contextWindowFor("claude-sonnet-5")).toBe(200_000);
-    expect(contextWindowFor("anthropic/claude-sonnet-5")).toBe(200_000);
+    expect(contextWindowFor("claude-sonnet-5")).toBe(1_000_000);
+    expect(contextWindowFor("anthropic/claude-sonnet-5")).toBe(1_000_000);
     expect(contextWindowFor("gpt-4o-mini")).toBe(128_000);
+  });
+
+  /*
+   * T-141 — la fenêtre suit le MODÈLE, elle n'est plus un palier unique.
+   * L'erreur corrigée : les quatre modèles de l'abonnement étaient déclarés à
+   * 200 k, alors que seul Haiku l'est. Un fil Opus à 170 k affichait 85 % de
+   * sa fenêtre quand il en occupait 17.
+   */
+  it("chaque modèle de l'abonnement porte SA fenêtre, pas un palier commun", () => {
+    expect(contextWindowFor("claude-fable-5-1")).toBe(1_000_000);
+    expect(contextWindowFor("claude-opus-5-5")).toBe(1_000_000);
+    // T-143 — sorti du sélecteur, encore épinglé sur des fils : il garde SA fenêtre.
+    expect(contextWindowFor("claude-opus-5")).toBe(1_000_000);
+    expect(contextWindowFor("claude-sonnet-5-5")).toBe(1_000_000);
+    // Sorti du sélecteur le 2026-10-06, encore épinglé sur des fils : il garde SA fenêtre.
+    expect(contextWindowFor("claude-sonnet-5")).toBe(1_000_000);
+    // Le seul resté à 200 k — c'est lui qui rend le test non tautologique.
+    expect(contextWindowFor("claude-haiku-4-5")).toBe(200_000);
+  });
+
+  it("un id sorti du sélecteur mais encore épinglé garde la fenêtre de sa génération", () => {
+    expect(contextWindowFor("claude-fable-5")).toBe(1_000_000);
+    expect(contextWindowFor("claude-opus-4-8")).toBe(1_000_000);
+    expect(contextWindowFor("claude-sonnet-4-6")).toBe(1_000_000);
+    // Avant la génération 4.6, le palier était bien 200 k.
+    expect(contextWindowFor("claude-opus-4-1")).toBe(200_000);
+  });
+
+  it("« claude-fable-5-1 » l'emporte sur le préfixe « claude-fable » qu'il contient", () => {
+    // Les deux valent 1 M aujourd'hui : ce test garde l'ORDRE, pour que le
+    // jour où les paliers divergeront, c'est l'entrée exacte qui gagne.
+    const table = contextWindowFor("claude-fable-5-1");
+    expect(table).toBe(1_000_000);
   });
 
   it("les variantes spécifiques priment : « [1m] » avant le générique claude", () => {
@@ -35,7 +68,10 @@ describe("contextWindowFor", () => {
   });
 
   it("usage OBSERVÉ au-dessus de la table : recalage 1M pour Claude (cas du 2026-07-31)", () => {
-    expect(contextWindowFor("claude-opus-4-8", 313_000)).toBe(1_000_000);
+    // T-141 — `claude-opus-4-8` vaut désormais 1 M dans la table et ne
+    // déclencherait plus le recalage : le cas se rejoue donc sur un id d'avant
+    // la génération 4.6, seul endroit où la table peut encore sous-estimer.
+    expect(contextWindowFor("claude-opus-4-1", 313_000)).toBe(1_000_000);
   });
 
   it("même dépassement sur un modèle non-Claude : fenêtre inconnue, pas de recalage inventé", () => {
@@ -43,7 +79,8 @@ describe("contextWindowFor", () => {
   });
 
   it("usage sous la table : la table fait foi", () => {
-    expect(contextWindowFor("claude-opus-4-8", 150_000)).toBe(200_000);
+    expect(contextWindowFor("claude-opus-4-1", 150_000)).toBe(200_000);
+    expect(contextWindowFor("claude-opus-5", 150_000)).toBe(1_000_000);
   });
 });
 

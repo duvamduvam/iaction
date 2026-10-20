@@ -13,7 +13,7 @@
  * faute d'une source d'autorité on retombe sur une table de correspondances.
  */
 
-import { IDS_ABONNEMENT_CLAUDE } from "./modelesAbonnementClaude";
+import { MODELES_ABONNEMENT_CLAUDE } from "./modelesAbonnementClaude";
 
 export type ContextSource = "agent" | "chat";
 
@@ -85,11 +85,26 @@ export function readCompactHandler(source: ContextSource): CompactHandler | null
  */
 const CONTEXT_WINDOWS: { match: string; tokens: number }[] = [
   { match: "[1m]", tokens: 1_000_000 },
-  // Les modèles de l'abonnement partagent le même palier de départ : la
-  // fenêtre réelle dépend de l'abonnement, pas de l'id, et `usedTokens` la
-  // recale à 1M dès qu'un prompt plus grand est accepté (voir ci-dessous).
-  // Dérivé de la liste unique pour qu'un modèle ajouté là ne manque pas ici.
-  ...IDS_ABONNEMENT_CLAUDE.map((id) => ({ match: id, tokens: 200_000 })),
+  // T-141 — chaque modèle de l'abonnement porte SA fenêtre, déclarée avec lui
+  // dans la liste unique. Auparavant tous partageaient un palier de 200 k, ce
+  // qui faisait afficher 85 % à un fil qui en occupait 17.
+  ...MODELES_ABONNEMENT_CLAUDE.map((m) => ({ match: m.id, tokens: m.contexte })),
+  // Générations sorties du sélecteur mais encore épinglées sur des fils : le
+  // palier 1 M est arrivé avec la génération 4.6, avant c'est 200 k. Ces
+  // entrées se lisent APRÈS la liste, donc `claude-fable-5-1` l'emporte sur le
+  // préfixe `claude-fable` qu'il contient.
+  { match: "claude-fable", tokens: 1_000_000 },
+  { match: "claude-mythos", tokens: 1_000_000 },
+  { match: "claude-opus-4-6", tokens: 1_000_000 },
+  { match: "claude-opus-4-7", tokens: 1_000_000 },
+  { match: "claude-opus-4-8", tokens: 1_000_000 },
+  // T-143 — sorti de la liste le 2026-09-26 ; lu APRÈS elle, donc
+  // `claude-opus-5-5` n'est jamais capté par ce préfixe.
+  { match: "claude-opus-5", tokens: 1_000_000 },
+  // Sorti de la liste le 2026-10-06 ; lu APRÈS elle, donc `claude-sonnet-5-5`
+  // n'est jamais capté par ce préfixe.
+  { match: "claude-sonnet-5", tokens: 1_000_000 },
+  { match: "claude-sonnet-4-6", tokens: 1_000_000 },
   { match: "claude", tokens: 200_000 },
   { match: "gpt-5", tokens: 400_000 },
   { match: "gpt-4.1", tokens: 1_000_000 },
@@ -112,6 +127,11 @@ const CONTEXT_WINDOWS: { match: string; tokens: number }[] = [
  * CLI selon l'abonnement, invisible dans l'id — pas de « [1m] ») ⇒ jauge à
  * 137 %. Pour les modèles Claude on recale alors sur le palier connu 1M ;
  * pour les autres, fenêtre inconnue (tokens affichés sans %).
+ *
+ * T-141 — ce correctif reste le filet, mais il ne porte plus le gros du
+ * travail : la table déclare désormais la vraie fenêtre de chaque modèle
+ * courant. Il ne sert donc plus qu'aux générations anciennes et aux ids
+ * inconnus, et non plus à rattraper tous les jours ce que la table savait.
  */
 export function contextWindowFor(model: string, usedTokens?: number): number | null {
   const id = model.toLowerCase();

@@ -37,6 +37,9 @@ export const OrchestrationPage = lazy(() =>
 );
 export const ProvidersPage = lazy(() => import("./ProvidersPage").then((m) => ({ default: m.ProvidersPage })));
 export const SupervisionPage = lazy(() => import("./SupervisionPage").then((m) => ({ default: m.SupervisionPage })));
+export const SessionsClaudePage = lazy(() =>
+  import("./SessionsClaudePage").then((m) => ({ default: m.SessionsClaudePage })),
+);
 export const SystemPage = lazy(() => import("./SystemPage").then((m) => ({ default: m.SystemPage })));
 
 /** Classe du conteneur d'une page : visible, ou masquée sans être démontée. */

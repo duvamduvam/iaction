@@ -14,7 +14,8 @@ import os from "node:os";
 import path from "node:path";
 import { moduleCompile } from "./harness.mjs";
 
-const { APP_ID, LEGACY_APP_ID, globalConfigRoot, globalDataRoot, migrerDepuisAncienNom, projectDir } = await import(moduleCompile("appPaths.js"));
+const { APP_ID, LEGACY_APP_ID, claudeUserAgentsDir, globalConfigRoot, globalDataRoot, migrerDepuisAncienNom, projectDir } =
+  await import(moduleCompile("appPaths.js"));
 
 function tempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `iaction-${prefix}-`));
@@ -160,9 +161,42 @@ function testDossierProjet() {
   console.log("OK: dossier projet (neuf, non migré, migré)");
 }
 
+/*
+ * T-081 — dossier des agents Claude Code DU POSTE. Il n'appartient pas à
+ * l'application : ni APP_ID, ni XDG, ni migration d'ancien nom — c'est le
+ * dossier du CLI, lu tel qu'il est.
+ */
+function testAgentsDuPoste() {
+  const home = tempDir("home-claude");
+
+  // Cas ordinaire : ~/.claude/agents, sur les deux plateformes (le CLI ne
+  // suit pas XDG — d'où l'absence de branche ici, et ce test qui le fige).
+  assert.equal(claudeUserAgentsDir(env("linux", {}, home)), path.join(home, ".claude", "agents"));
+  assert.equal(claudeUserAgentsDir(env("win32", { APPDATA: "C:\\U\\Roaming" }, home)), path.join(home, ".claude", "agents"));
+
+  // XDG n'a rien à y faire : régler XDG_CONFIG_HOME ne déplace pas le dossier
+  // du CLI. C'est ce qui oblige le harness de test à passer par
+  // CLAUDE_CONFIG_DIR pour ne pas lire les agents réels de la machine.
+  assert.equal(
+    claudeUserAgentsDir(env("linux", { XDG_CONFIG_HOME: "/xdg/c" }, home)),
+    path.join(home, ".claude", "agents"),
+  );
+
+  // CLAUDE_CONFIG_DIR est la variable du CLI lui-même : si le poste a déplacé
+  // son dossier, lire ~/.claude serait lire un dossier vide.
+  assert.equal(claudeUserAgentsDir(env("linux", { CLAUDE_CONFIG_DIR: "/ailleurs" }, home)), path.join("/ailleurs", "agents"));
+
+  // Variable vide ou blanche = non définie : jamais un chemin relatif à la
+  // racine (`/agents`), qui pointerait hors du foyer de l'utilisateur.
+  assert.equal(claudeUserAgentsDir(env("linux", { CLAUDE_CONFIG_DIR: "   " }, home)), path.join(home, ".claude", "agents"));
+
+  console.log("OK: agents Claude Code du poste (défaut, XDG ignoré, CLAUDE_CONFIG_DIR)");
+}
+
 testEmplacementsParPlateforme();
 testMigrationDeplace();
 testMigrationNeCraseJamais();
 testMigrationIdempotente();
 testDossierProjet();
+testAgentsDuPoste();
 console.log("OK: tous les tests appPaths sont passés");

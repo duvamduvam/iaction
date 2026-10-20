@@ -14,9 +14,9 @@
      surfaces (retour utilisateur) : l'alpha reste assez haut pour que le
      texte se lise directement sur les lignes atténuées de la grille. */
   --bg-0: #0d0a1f; /* fond de page (violet-nuit) */
-  --bg-1: rgba(23, 16, 46, 0.8); /* panneaux */
-  --bg-2: rgba(34, 25, 70, 0.8); /* panneaux surélevés / zones techniques */
-  --bg-inset: rgba(10, 7, 24, 0.72); /* zones creuses : streams, logs, éditeur */
+  --bg-1: #150f2b; /* panneaux */
+  --bg-2: #1e163e; /* panneaux surélevés / zones techniques */
+  --bg-inset: #0b081a; /* zones creuses : streams, logs, éditeur */
 
   /* Accents néon */
   --neon-cyan: #00e5ff;
@@ -108,7 +108,7 @@ body {
   /* Lueur d'horizon en haut de page (violet-magenta assourdi) : cohérente
      avec la grille en perspective posée en bas de `.app-shell` (voir
      App.css) — la page « respire » entre deux lueurs, sans aplat franc. */
-  background: radial-gradient(ellipse at top, #241a45 0%, var(--bg-0) 55%);
+  background: var(--bg-0); /* MESURE T-088 */
   color: var(--text-0);
   font-family: var(--font-sans);
   font-size: 15px;

@@ -14,7 +14,7 @@ name: analyste-qualite
 description: Analyste qualité — agrège le journal applicatif et les événements d'usage locaux d'iaction, en rapport hebdomadaire avec propositions de tickets.
 engine: claude
 provider: null
-model: claude-sonnet-5
+model: claude-sonnet-5-5
 permissionMode: bypassPermissions
 tools:
   - Read

@@ -145,7 +145,10 @@ export function RunLaunchModal({
               <input
                 id={`run-input-${inp.name}`}
                 value={values[inp.name] ?? ""}
-                onChange={(e) => setValues((prev) => ({ ...prev, [inp.name]: e.currentTarget.value }))}
+                onChange={(e) => {
+                  const valeur = e.currentTarget.value;
+                  setValues((prev) => ({ ...prev, [inp.name]: valeur }));
+                }}
               />
             </div>
           ))}

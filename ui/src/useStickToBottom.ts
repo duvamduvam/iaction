@@ -39,13 +39,24 @@ export interface StickToBottom {
   };
   /** Recolle en bas (envoi d'un message, nouvelle bulle…) — effectif au prochain rendu. */
   collerEnBas: () => void;
+  /**
+   * Redescend TOUT DE SUITE au bas du fil et s'y recolle — geste explicite de
+   * l'utilisateur (bouton « Aller en bas »), à la différence de `collerEnBas`
+   * qui n'arme le recollage que pour le prochain rendu.
+   */
+  descendreEnBas: () => void;
 }
 
 /**
  * @param dep valeur qui change à chaque mise à jour du fil (la liste des tours,
  *            des entrées…) : c'est elle qui déclenche le recollage avant peinture.
+ * @param cle identité du fil affiché (id de conversation, de projet…). À son
+ *            changement on repart EN BAS, quoi qu'ait fait l'utilisateur sur le
+ *            fil précédent : ouvrir une conversation, c'est vouloir la voir là
+ *            où elle en est. Sans ça, un décollage sur un onglet suivait
+ *            l'utilisateur sur tous les autres, qui s'ouvraient alors en haut.
  */
-export function useStickToBottom(dep: unknown): StickToBottom {
+export function useStickToBottom(dep: unknown, cle?: unknown): StickToBottom {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   /** Dernier scrollTop connu (posé par nous ou observé) : sert à détecter un recul. */
@@ -66,6 +77,16 @@ export function useStickToBottom(dep: unknown): StickToBottom {
     // notre propre recollage passerait pour un geste de l'utilisateur.
     lastTopRef.current = el.scrollTop;
   }, [dep]);
+
+  // Déclaré APRÈS l'effet de recollage pour passer en dernier quand les deux
+  // se déclenchent au même rendu (changer de fil change aussi son contenu).
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    lastTopRef.current = el.scrollTop;
+  }, [cle]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -98,9 +119,20 @@ export function useStickToBottom(dep: unknown): StickToBottom {
     stickRef.current = true;
   }, []);
 
+  const descendreEnBas = useCallback(() => {
+    stickRef.current = true;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    // Même précaution que dans le recollage : mémorisé avant que l'événement
+    // `scroll` ne parte, sinon notre propre saut passerait pour un geste.
+    lastTopRef.current = el.scrollTop;
+  }, []);
+
   return {
     scrollRef,
     scrollProps: { onScroll: handleScroll, onWheel: handleWheel },
     collerEnBas,
+    descendreEnBas,
   };
 }

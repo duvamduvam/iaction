@@ -27,6 +27,24 @@ export default [
     linterOptions: { reportUnusedDisableDirectives: "off" },
     rules: {
       "react-hooks/rules-of-hooks": "error",
+      // Deuxième incident, deuxième règle (2026-08-17) : lire l'événement
+      // DANS l'updater fonctionnel d'un `setX` tuait l'interface entière.
+      // React remet `currentTarget` à null dès que le gestionnaire rend la
+      // main, alors que l'updater n'est évalué qu'au rendu suivant — d'où un
+      // « null is not an object (evaluating 'e.currentTarget.value') » qui ne
+      // se déclenche que lorsqu'une autre mise à jour est déjà en file (React
+      // évalue l'updater tout de suite quand la file est vide, ce qui rend le
+      // plantage intermittent et donc invisible au test manuel). Remède :
+      // lire la valeur avant l'appel, et ne passer que la valeur.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.name=/^set[A-Z]/] > :function MemberExpression[property.name='currentTarget']",
+          message:
+            "Lire e.currentTarget AVANT d'appeler setX : l'updater fonctionnel est évalué au rendu, quand currentTarget est déjà null.",
+        },
+      ],
     },
   },
 ];

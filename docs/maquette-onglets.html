@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Barre d'onglets IAction — maquette</title>
+<!--
+  Étude de la lisibilité de la barre d'onglets — voir docs/tickets.md T-122.
+  Fichier autonome : aucune ressource externe, s'ouvre directement dans un navigateur.
+  Les couleurs, tailles et espacements de la section « aujourd'hui » sont copiés
+  à l'identique de ui/src/App.css (.agent-tab*) et ui/src/theme.css.
+  Les titres d'exemple sont fictifs mais reproduisent le cas réel : plusieurs
+  conversations qui commencent par les mêmes mots.
+-->
+<style>
+  *,*::before,*::after { box-sizing:border-box; }
+  :root {
+    color-scheme: dark;
+    /* tokens copiés de ui/src/theme.css */
+    --bg-0:#0d0a1f; --bg-1:#150f2b; --bg-2:#1e163e; --bg-inset:#0b081a;
+    --neon-cyan:#00e5ff; --neon-cyan-dim:#00e5ff66;
+    --neon-magenta:#ff2e97; --neon-magenta-dim:#ff2e9766;
+    --text-0:#e6ecf5; --text-1:#9a93b8; --text-2:#6c6493;
+    --border-0:#2a2050; --border-1:#3a2d68; --border-cyan:#00e5ff40;
+    --radius-sm:4px; --radius-md:8px; --radius-lg:14px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px;
+  }
+  body {
+    margin:0; background:var(--bg-0); color:var(--text-0);
+    font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:15px; line-height:1.55;
+  }
+  .page { max-width:1120px; margin:0 auto; padding:28px 22px 90px; }
+  h1 { font-size:26px; margin:0 0 4px; letter-spacing:.01em; }
+  .sub { color:var(--text-1); margin:0 0 6px; }
+  .meta { color:var(--text-2); font-size:13px; margin:0 0 34px; }
+  h2 { font-size:12px; letter-spacing:.14em; text-transform:uppercase;
+       color:var(--text-2); margin:0 0 4px; font-weight:600; }
+  .q { font-size:20px; font-weight:600; margin:0 0 10px; }
+  section { margin:0 0 46px; }
+  p { margin:0 0 12px; }
+  .panel { background:var(--bg-1); border:1px solid var(--border-0);
+           border-radius:12px; padding:16px 18px; }
+  .stage { background:var(--bg-0); border:1px solid var(--border-0);
+           border-radius:10px; padding:10px 10px 0; }
+  .mono { font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:.85em; }
+  code { font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:.85em;
+         background:var(--bg-2); padding:1px 5px; border-radius:4px; color:var(--text-0); }
+  .note { color:var(--text-1); font-size:13.5px; }
+  ul { margin:0 0 12px; padding-left:20px; } li { margin:0 0 7px; }
+
+  /* ───────── AUJOURD'HUI : copie exacte de .agent-tab* (App.css) ───────── */
+  .agent-tabs { display:flex; align-items:center; gap:2px; flex-wrap:wrap;
+                border-bottom:1px solid var(--border-0); }
+  .agent-tab { display:flex; align-items:center; gap:6px;
+    padding:var(--space-2) var(--space-3); font-size:.82rem; color:var(--text-1);
+    border:1px solid transparent; border-bottom:none;
+    border-radius:var(--radius-md) var(--radius-md) 0 0; cursor:pointer;
+    background:transparent; max-width:200px; }
+  .agent-tab:hover { color:var(--text-0); background:var(--bg-2); }
+  .agent-tab--active { color:var(--text-0); background:var(--bg-1);
+    border-color:var(--border-cyan); box-shadow:0 -2px 8px -4px var(--neon-cyan-dim); }
+  .agent-tab--conv.agent-tab--active { border-color:var(--border-cyan);
+    box-shadow:inset 0 2px 0 var(--neon-cyan); }
+  .agent-tab__name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .agent-tab__dot { width:6px; height:6px; border-radius:50%; background:var(--neon-magenta);
+    box-shadow:0 0 4px 1px var(--neon-magenta-dim); flex:none; }
+  .agent-tab__dot--streaming { background:var(--neon-cyan);
+    box-shadow:0 0 4px 1px var(--neon-cyan-dim); animation:pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+  .agent-tab__close { appearance:none; border:none; background:transparent; color:var(--text-2);
+    cursor:pointer; font-size:.9rem; line-height:1; padding:4px 5px;
+    border-radius:var(--radius-sm); flex:none; }
+  .agent-tab--new { appearance:none; justify-content:center; min-width:30px; max-width:30px;
+    font-size:1rem; color:var(--text-2); }
+
+  /* ───────── PROPOSITION : ce que les leviers ajoutent ───────── */
+  /* B — état actif franc */
+  .lv-actif .agent-tab { color:var(--text-1); opacity:.82; }
+  .lv-actif .agent-tab--active { color:var(--text-0); opacity:1; font-weight:600;
+    background:var(--bg-2); border-color:var(--border-1); border-bottom:none;
+    box-shadow:inset 0 3px 0 var(--neon-cyan), 0 -6px 16px -8px var(--neon-cyan-dim); }
+  /* l'onglet actif a le droit de dire son nom en entier, les autres se serrent */
+  .lv-actif .agent-tab--conv { max-width:170px; }
+  .lv-actif .agent-tab--conv.agent-tab--active { max-width:300px; }
+  /* C — repère de position */
+  .tab-num { flex:none; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.72rem;
+    color:var(--text-2); min-width:11px; text-align:right; }
+  .agent-tab--active .tab-num { color:var(--neon-cyan); }
+  /* D — teinte stable par conversation */
+  .lv-teinte .agent-tab--conv { border-left:3px solid var(--teinte,transparent);
+    border-top-left-radius:3px; }
+  .lv-teinte .agent-tab--conv .tab-num { color:var(--teinte); }
+
+  .toggles { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; }
+  .tg { display:flex; align-items:center; gap:7px; padding:7px 12px; cursor:pointer;
+    background:var(--bg-1); border:1px solid var(--border-0); border-radius:999px;
+    font-size:13.5px; color:var(--text-1); user-select:none; }
+  .tg:hover { border-color:var(--border-1); color:var(--text-0); }
+  .tg input { accent-color:var(--neon-cyan); margin:0; }
+  .tg--on { color:var(--text-0); border-color:var(--border-cyan); background:var(--bg-2); }
+  .tg kbd { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--text-2);
+    border:1px solid var(--border-0); border-radius:3px; padding:0 4px; }
+
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--border-0);
+          vertical-align:top; }
+  th { color:var(--text-2); font-weight:600; font-size:12px; letter-spacing:.06em;
+       text-transform:uppercase; }
+  td.num { font-family:ui-monospace,Menlo,monospace; white-space:nowrap; }
+  .bad { color:#ff6b6b; } .good { color:#00f5d4; } .warn { color:#fbbf24; }
+  .lever { border-left:3px solid var(--neon-cyan); padding-left:14px; margin:0 0 26px; }
+  .lever h3 { margin:0 0 4px; font-size:16.5px; }
+  .lever--opt { border-left-color:var(--text-2); }
+  .verdict { display:inline-block; font-size:11.5px; letter-spacing:.08em;
+    text-transform:uppercase; padding:2px 8px; border-radius:999px; margin-left:8px;
+    vertical-align:2px; }
+  .verdict--oui { background:#00f5d420; color:#00f5d4; border:1px solid #00f5d440; }
+  .verdict--peut { background:#fbbf2418; color:#fbbf24; border:1px solid #fbbf2440; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>Barre d'onglets — retrouver une conversation d'un coup d'œil</h1>
+  <p class="sub">Onze onglets ouverts, deux rangées, et rien pour distinguer le troisième du septième.</p>
+  <p class="meta">Maquette du 5 septembre 2026 · ticket T-122 · code concerné :
+     <span class="mono">ui/src/BarreOnglets.tsx</span>, <span class="mono">ui/src/App.css</span> (.agent-tab*),
+     <span class="mono">ui/src/sessionStore.ts</span> (deriveTitleFromText)</p>
+
+  <!-- ════════════════ 1. LE CONSTAT ════════════════ -->
+  <section>
+    <h2>Aujourd'hui</h2>
+    <p class="q">La barre telle qu'elle s'affiche</p>
+    <p>Reproduction fidèle : mêmes couleurs, mêmes tailles, même largeur maximale de
+       200 px. Les titres sont fictifs mais reproduisent le cas réel — plusieurs
+       conversations qui commencent par les mêmes mots.</p>
+    <div class="stage"><div class="agent-tabs" id="barre-avant"></div></div>
+    <p class="note" style="margin-top:14px">Trois onglets affichent
+       « Regarde les… ». Ce qui les sépare — <em>tickets P1</em>, <em>tickets fermés</em>,
+       <em>logs du sidecar</em> — est exactement ce que la troncature emporte.</p>
+  </section>
+
+  <!-- ════════════════ 2. LE DIAGNOSTIC ════════════════ -->
+  <section>
+    <h2>Diagnostic</h2>
+    <p class="q">Trois défauts, indépendants, cumulés</p>
+
+    <div class="panel" style="margin-bottom:14px">
+      <p><strong>1. La troncature coupe du mauvais côté.</strong>
+      Le titre auto est le <em>début</em> du premier message
+      (<span class="mono">deriveTitleFromText</span>, 40 caractères), puis le CSS coupe
+      encore par la droite (<span class="mono">text-overflow:ellipsis</span>, 200 px).
+      Deux troncatures par la fin, alors que dans une barre l'information utile est
+      justement ce qui <em>diffère</em> des voisins — et le début, lui, est souvent commun.</p>
+
+      <p><strong>2. L'onglet actif ne se voit pas.</strong> Il passe de fond transparent
+      (<span class="mono">#0d0a1f</span>) à <span class="mono">--bg-1 #150f2b</span> :
+      un rapport de contraste de <span class="bad mono">1,05 : 1</span>. Autant dire rien.
+      Restent un liseré cyan de 2 px et un texte à peine plus clair.</p>
+
+      <p style="margin:0"><strong>3. Aucun repère de position.</strong> Onze onglets sur deux
+      rangées, tous de la même largeur, sans numéro ni couleur : l'œil doit
+      <em>lire</em> chaque onglet pour retrouver le bon, et il relit toute la barre à
+      chaque fois. Aucune mémoire spatiale ne s'installe.</p>
+    </div>
+
+    <table>
+      <tr><th>Ce qu'on mesure</th><th>Aujourd'hui</th><th>Après</th></tr>
+      <tr><td>Contraste actif / inactif (fond)</td>
+          <td class="num bad">1,05 : 1</td><td class="num good">1,15 : 1 + liseré 3 px</td></tr>
+      <tr><td>Contraste du titre actif (texte sur fond)</td>
+          <td class="num warn">6,7 : 1 (--text-1)</td><td class="num good">16,3 : 1 (--text-0, gras)</td></tr>
+      <tr><td>Onglets portant un titre indistinct</td>
+          <td class="num bad">3 sur 11</td><td class="num good">0</td></tr>
+      <tr><td>Accès direct au clavier</td>
+          <td class="num bad">Ctrl+Tab, de proche en proche</td><td class="num good">Alt+1 … Alt+9</td></tr>
+    </table>
+  </section>
+
+  <!-- ════════════════ 3. LES LEVIERS ════════════════ -->
+  <section>
+    <h2>Proposition</h2>
+    <p class="q">Quatre leviers — à allumer un par un sur la même barre</p>
+    <p>Chaque bouton ci-dessous applique un levier à la barre. Ils sont indépendants :
+       c'est l'intérêt de les juger séparément avant de choisir la combinaison.
+       Cliquer un onglet le rend actif.</p>
+
+    <div class="toggles">
+      <label class="tg" data-tg><input type="checkbox" id="lv-titre" checked> A — Titre discriminant</label>
+      <label class="tg" data-tg><input type="checkbox" id="lv-actif" checked> B — État actif franc</label>
+      <label class="tg" data-tg><input type="checkbox" id="lv-num" checked> C — Numéro d'onglet <kbd>Alt+n</kbd></label>
+      <label class="tg" data-tg><input type="checkbox" id="lv-teinte"> D — Teinte stable</label>
+    </div>
+
+    <div class="stage"><div class="agent-tabs" id="barre-apres"></div></div>
+
+    <div style="margin-top:30px">
+      <div class="lever">
+        <h3>A — Le titre dit ce qui le distingue<span class="verdict verdict--oui">retenu</span></h3>
+        <p>Avant d'afficher un titre, on le compare à <em>ses voisins ouverts</em>. Le plus long
+        préfixe qu'il partage avec un autre onglet est replié en « … » et la place gagnée sert
+        à montrer la suite. « Regarde les tickets P1 encore ouverts » devient
+        <span class="mono">…P1 encore ouverts</span> ; « Regarde les logs du sidecar de ce matin »
+        devient <span class="mono">…logs du sidecar de ce matin</span>.</p>
+        <p class="note">Le titre complet reste dans l'infobulle et dans la liste des sessions —
+        rien n'est perdu, seul l'affichage de la barre change. La fonction est pure et se teste
+        à côté (<span class="mono">titresOnglets.ts</span>), comme
+        <span class="mono">fermetureOnglets.ts</span> l'a fait pour le menu.</p>
+        <p class="note">Un onglet qui ne partage rien avec personne garde son titre intact :
+        le repli ne se déclenche que là où il y a collision.</p>
+      </div>
+
+      <div class="lever">
+        <h3>B — L'onglet actif se voit de l'autre bout de l'écran<span class="verdict verdict--oui">retenu</span></h3>
+        <p>Le signal ne vient pas d'un fond légèrement plus clair — il vient du <em>contraste
+        entre l'actif et les autres</em> : les inactifs reculent (opacité 0,82, texte
+        <span class="mono">--text-1</span>), l'actif avance (fond <span class="mono">--bg-2</span>,
+        texte <span class="mono">--text-0</span> en gras, coiffe cyan de 3 px).</p>
+        <p class="note">Et il gagne le droit de dire son nom en entier : 300 px pour l'actif,
+        170 px pour les autres. Bénéfice secondaire — les onglets serrés tiennent plus souvent
+        sur une seule rangée.</p>
+      </div>
+
+      <div class="lever">
+        <h3>C — Un numéro, et le raccourci qui va avec<span class="verdict verdict--oui">retenu</span></h3>
+        <p>Chaque onglet porte son rang, 1 à 9. Le numéro est un ancrage spatial gratuit
+        (« ma revue, c'est le 4 »), et surtout il rend visible un raccourci qui n'existe pas
+        encore : <span class="mono">Alt+1</span> … <span class="mono">Alt+9</span> pour sauter
+        directement, au lieu de marteler Ctrl+Tab.</p>
+        <p class="note"><strong>Alt et non Ctrl</strong> : Ctrl+1 à Ctrl+6 sont déjà pris par la
+        navigation entre les pages (<span class="mono">raccourcisClavier.ts</span>), et sur ce
+        poste GNOME s'est approprié Ctrl+Alt. À vérifier à l'implémentation : qu'Alt+chiffre
+        n'ouvre pas un menu de la webview.</p>
+      </div>
+
+      <div class="lever lever--opt">
+        <h3>D — Une teinte stable par conversation<span class="verdict verdict--peut">à juger à l'écran</span></h3>
+        <p>Un filet de 3 px à gauche, de teinte dérivée de l'identifiant de session : stable
+        d'une ouverture à l'autre, elle permet de retrouver « l'onglet orange » sans lire.</p>
+        <p class="note">Réserve sérieuse : la palette d'IAction porte déjà du sens — le cyan
+        est la conversation et le tour en cours, le magenta le fichier modifié. Ajouter huit
+        teintes arbitraires, c'est risquer de faire lire un sens là où il n'y en a pas, dans
+        une interface déjà très colorée. Levier proposé, pas recommandé par défaut : à allumer
+        ci-dessus pour trancher sur pièce.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════ 4. CE QUE ÇA COÛTE ════════════════ -->
+  <section>
+    <h2>Mise en œuvre</h2>
+    <p class="q">Où ça atterrit dans le code</p>
+    <table>
+      <tr><th>Levier</th><th>Fichier</th><th>Nature</th></tr>
+      <tr><td>A — titre discriminant</td>
+          <td class="mono">ui/src/titresOnglets.ts (neuf) + BarreOnglets.tsx</td>
+          <td>Fonction pure + tests ; la barre appelle, les pages ne bougent pas</td></tr>
+      <tr><td>B — état actif</td><td class="mono">ui/src/App.css</td><td>CSS seul</td></tr>
+      <tr><td>C — numéro</td><td class="mono">BarreOnglets.tsx + App.css</td>
+          <td>Un <span class="mono">&lt;span&gt;</span> ; le rang est déjà l'index de la boucle</td></tr>
+      <tr><td>C — raccourci Alt+n</td><td class="mono">raccourcisClavier.ts + les deux pages</td>
+          <td>Le seul point qui touche AgentPage et ChatPage</td></tr>
+      <tr><td>D — teinte <em>(optionnel)</em></td><td class="mono">BarreOnglets.tsx + App.css</td>
+          <td>Hachage de l'id → teinte, en variable CSS</td></tr>
+    </table>
+    <p class="note" style="margin-top:14px">Aucun levier ne touche à la persistance ni au
+    modèle de session : le titre stocké reste le titre complet, seul son <em>affichage dans la
+    barre</em> est recalculé au rendu, à partir des onglets ouverts à cet instant.</p>
+  </section>
+</div>
+
+<script>
+// ── Données d'exemple ────────────────────────────────────────────────────────
+// Titres fictifs, choisis pour reproduire la collision de préfixes constatée.
+const CONVS = [
+  { id:"a1", titre:"Réveil : reprendre à 3 h quand le quota rouvre", streaming:false },
+  { id:"b2", titre:"Regarde les tickets P1 encore ouverts",          streaming:false },
+  { id:"c3", titre:"Regarde les tickets fermés cette semaine",       streaming:false },
+  { id:"d4", titre:"Reprendre tout le routage LLM depuis le début",  streaming:false },
+  { id:"e5", titre:"Une recherche sérieuse sur les quotas",          streaming:false },
+  { id:"f6", titre:"Regarde les logs du sidecar de ce matin",        streaming:false },
+  { id:"g7", titre:"Refaire la page Supervision",                    streaming:false },
+  { id:"h8", titre:"Redonne le plan prévu pour l'empaquetage",       streaming:false },
+  { id:"i9", titre:"Étude sobriété : router avant de dépenser",      streaming:true  },
+  { id:"j10",titre:"Revoir la barre d'onglets",                      streaming:false },
+  { id:"k11",titre:"Passer par le serveur pour les tâches de nuit",  streaming:false },
+];
+let actif = "i9";
+
+// ── Levier A : replier le préfixe partagé avec un autre onglet ouvert ────────
+// Le repli se fait sur une frontière de MOT : « Regarde les tickets » et non
+// « Regarde les ti ». Un préfixe d'un seul mot est ignoré (trop peu de place
+// gagnée pour justifier une ellipse en tête).
+function motsCommuns(a, b) {
+  const ma = a.split(" "), mb = b.split(" ");
+  let n = 0;
+  while (n < ma.length && n < mb.length &&
+         ma[n].toLowerCase() === mb[n].toLowerCase()) n++;
+  return n;
+}
+function titresAffiches(convs) {
+  return convs.map((c, i) => {
+    let max = 0;
+    convs.forEach((autre, j) => {
+      if (i === j) return;
+      max = Math.max(max, motsCommuns(c.titre, autre.titre));
+    });
+    const mots = c.titre.split(" ");
+    // 2 mots minimum en commun, et il doit rester quelque chose à montrer.
+    if (max < 2 || max >= mots.length) return c.titre;
+    return "…" + mots.slice(max).join(" ");
+  });
+}
+
+// ── Levier D : teinte stable dérivée de l'identifiant ────────────────────────
+// Huit teintes espacées, évitant le cyan (190°, tour en cours) et le
+// magenta (330°, fichier modifié) qui portent déjà un sens dans l'application.
+const TEINTES = [15, 45, 90, 140, 165, 225, 265, 300];
+function teinte(id) {
+  let h = 0;
+  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `hsl(${TEINTES[h % TEINTES.length]} 62% 62%)`;
+}
+
+// ── Rendu ────────────────────────────────────────────────────────────────────
+function onglet(conv, opts, i, libelle) {
+  const el = document.createElement("div");
+  el.className = "agent-tab agent-tab--conv" + (conv.id === actif ? " agent-tab--active" : "");
+  el.title = conv.titre;
+  if (opts.teinte) el.style.setProperty("--teinte", teinte(conv.id));
+  if (opts.num && i < 9) {
+    const n = document.createElement("span");
+    n.className = "tab-num"; n.textContent = String(i + 1);
+    el.appendChild(n);
+  }
+  const nom = document.createElement("span");
+  nom.className = "agent-tab__name";
+  nom.textContent = libelle;
+  el.appendChild(nom);
+  if (conv.streaming) {
+    const d = document.createElement("span");
+    d.className = "agent-tab__dot agent-tab__dot--streaming";
+    d.title = "Tour en cours";
+    el.appendChild(d);
+  }
+  const x = document.createElement("button");
+  x.className = "agent-tab__close"; x.type = "button"; x.textContent = "×";
+  el.appendChild(x);
+  if (opts.interactif) el.addEventListener("click", () => { actif = conv.id; rendre(); });
+  return el;
+}
+
+function remplir(cible, opts) {
+  cible.innerHTML = "";
+  const libelles = opts.titre ? titresAffiches(CONVS) : CONVS.map(c => c.titre);
+  CONVS.forEach((c, i) => cible.appendChild(onglet(c, opts, i, libelles[i])));
+  const plus = document.createElement("button");
+  plus.className = "agent-tab agent-tab--new"; plus.type = "button"; plus.textContent = "+";
+  cible.appendChild(plus);
+}
+
+const cases = { titre:"lv-titre", actif:"lv-actif", num:"lv-num", teinte:"lv-teinte" };
+function rendre() {
+  // « Avant » : aucun levier, l'onglet actif suit tout de même la sélection.
+  remplir(document.getElementById("barre-avant"), { interactif:true });
+  const opts = { interactif:true };
+  for (const [cle, id] of Object.entries(cases)) opts[cle] = document.getElementById(id).checked;
+  const apres = document.getElementById("barre-apres");
+  apres.className = "agent-tabs" + (opts.actif ? " lv-actif" : "") + (opts.teinte ? " lv-teinte" : "");
+  remplir(apres, opts);
+  document.querySelectorAll("[data-tg]").forEach(l =>
+    l.classList.toggle("tg--on", l.querySelector("input").checked));
+}
+Object.values(cases).forEach(id =>
+  document.getElementById(id).addEventListener("change", rendre));
+
+// Alt+1..9 — le raccourci proposé par le levier C, démontré ici.
+window.addEventListener("keydown", (e) => {
+  if (!e.altKey || e.ctrlKey || e.metaKey) return;
+  const n = Number(e.key);
+  if (!Number.isInteger(n) || n < 1 || n > 9 || n > CONVS.length) return;
+  e.preventDefault();
+  actif = CONVS[n - 1].id;
+  rendre();
+});
+
+rendre();
+</script>
+</body>
+</html>
