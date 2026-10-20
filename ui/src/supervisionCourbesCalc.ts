@@ -52,15 +52,38 @@ export function segmenter<T>(points: Array<T | null>): T[][] {
  * conservé, mais deux étiquettes ne se superposent jamais. Le résultat reste
  * dans `[min, max]` — une étiquette poussée hors du cadre serait pire que
  * deux étiquettes serrées.
+ *
+ * DEUX passes, et c'est le sujet de T-069. La première pousse vers le bas, ce
+ * qui suffit tant qu'il reste de la place en bas. Quand les quatre séries
+ * convergent vers le bas de la fenêtre — le cas de CHAQUE début de période,
+ * où tout vaut zéro — la poussée vers le bas butait sur `max` et les
+ * étiquettes s'empilaient toutes sur la même ligne : bornées, donc « dans le
+ * cadre », et parfaitement illisibles. La seconde passe reflue vers le HAUT
+ * depuis le bas du cadre, là où la place existe.
+ *
+ * Si même le cadre entier ne suffit pas (plus d'étiquettes que de place), la
+ * seconde passe borne à `min` : on retombe alors sur un empilement, mais en
+ * haut du cadre et non en bas. C'est la limite de nature — à ce moment-là il
+ * n'y a plus de bonne réponse, seulement des moins mauvaises.
  */
 export function desempiler(ys: number[], min: number, max: number): number[] {
   const ordre = ys.map((y, i) => ({ i, y })).sort((a, b) => a.y - b.y);
-  const out: number[] = new Array(ys.length).fill(min);
+  const placees: number[] = [];
   let precedent = -Infinity;
   for (const p of ordre) {
     const y = Math.min(max, Math.max(min, Math.max(p.y, precedent + LABEL_GAP)));
-    out[p.i] = y;
+    placees.push(y);
     precedent = y;
   }
+  // Reflux : on remonte depuis la dernière (la plus basse) en garantissant
+  // l'écart avec celle du dessous. Ne touche à rien tant que la passe
+  // descendante n'a pas buté sur `max`.
+  for (let k = placees.length - 2; k >= 0; k--) {
+    placees[k] = Math.max(min, Math.min(placees[k], placees[k + 1] - LABEL_GAP));
+  }
+  const out: number[] = new Array(ys.length).fill(min);
+  ordre.forEach((p, k) => {
+    out[p.i] = placees[k];
+  });
   return out;
 }

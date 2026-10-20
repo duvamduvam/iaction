@@ -9,6 +9,18 @@
  * est propre à chaque onglet (état par chemin) et repart en aperçu quand on
  * rouvre le fichier. Le rendu suit le buffer courant : des modifications non
  * sauvegardées restent visibles en repassant en aperçu.
+ *
+ * Fichiers HTML : le source, et une barre qui dit que c'en est un + « Ouvrir
+ * dans le navigateur » (T-090). L'app n'a PAS d'aperçu rendu pour le HTML —
+ * un `srcdoc` casserait CSS, images et navigation entre pages, c'est-à-dire
+ * qu'il mentirait sur la page. Le vrai rendu passe donc par le navigateur du
+ * poste, via `open_external` (mêmes règles par extension que le menu de
+ * l'arborescence). L'ancien silence laissait croire qu'ouvrir l'onglet ouvrait
+ * la page.
+ *
+ * Fichiers binaires : même mécanique, avec « Ouvrir avec l'application
+ * système » (T-106) — un PDF du projet, sans aperçu ici, s'arrêtait sinon au
+ * message « Fichier binaire » sans aucune issue.
  */
 import { useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
@@ -21,10 +33,16 @@ import { python } from "@codemirror/lang-python";
 import { rust } from "@codemirror/lang-rust";
 import type { Extension } from "@codemirror/state";
 import type { FileKind } from "./fsClient";
+import { findAppForExtension, openExternal, readApps } from "./appsAdmin";
 import { Markdown } from "./Markdown";
 
 function isMarkdownFile(name: string): boolean {
   return name.toLowerCase().endsWith(".md");
+}
+
+function isHtmlFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith(".html") || lower.endsWith(".htm");
 }
 
 export interface OpenFileState {
@@ -106,7 +124,7 @@ export function FileEditorView({
     return <div className="file-editor__error">Erreur : {file.errorMessage}</div>;
   }
   if (file.kind === "binary") {
-    return <div className="file-editor__binary">Fichier binaire ({formatFileSize(file.size)})</div>;
+    return <BinaryFileView file={file} />;
   }
   if (file.kind === "image") {
     return (
@@ -118,6 +136,9 @@ export function FileEditorView({
 
   if (isMarkdownFile(file.name)) {
     return <MarkdownFileView file={file} onChangeContent={onChangeContent} />;
+  }
+  if (isHtmlFile(file.name)) {
+    return <HtmlFileView file={file} onChangeContent={onChangeContent} />;
   }
   return <SourceEditor file={file} onChangeContent={onChangeContent} />;
 }
@@ -136,6 +157,65 @@ function SourceEditor({
       editable={!file.truncated}
       onChange={(value) => onChangeContent(file.path, value)}
     />
+  );
+}
+
+/**
+ * Bouton d'ouverture externe partagé par les panneaux HTML et binaire : même
+ * mécanique (`readApps` + `findAppForExtension` + `openExternal`) que
+ * l'ouverture depuis l'arborescence. L'échec s'affiche à côté du bouton — un
+ * clic qui ne fait rien en silence serait exactement le mensonge que ce
+ * composant vient corriger (T-090, T-106).
+ */
+function OuvrirExterne({ file, label }: Readonly<{ file: OpenFileState; label: string }>) {
+  const [openError, setOpenError] = useState<string | null>(null);
+
+  function ouvrir() {
+    setOpenError(null);
+    readApps()
+      .then((apps) => openExternal(file.path, findAppForExtension(apps, file.name)?.command))
+      .catch((err: unknown) => {
+        setOpenError(err instanceof Error && err.message ? err.message : String(err));
+      });
+  }
+
+  return (
+    <>
+      <button type="button" className="btn btn--ghost" onClick={ouvrir}>
+        {label}
+      </button>
+      {openError && <span className="file-editor__error">Erreur : {openError}</span>}
+    </>
+  );
+}
+
+function BinaryFileView({ file }: Readonly<{ file: OpenFileState }>) {
+  // Sans aperçu possible ici, l'ouverture système est la seule issue — un PDF
+  // du projet s'arrêtait sinon net sur ce message, sans aucun bouton (T-106).
+  return (
+    <div className="file-editor__binary">
+      <div>Fichier binaire ({formatFileSize(file.size)})</div>
+      <div style={{ marginTop: "var(--space-3)" }}>
+        <OuvrirExterne file={file} label="Ouvrir avec l'application système" />
+      </div>
+    </div>
+  );
+}
+
+function HtmlFileView({
+  file,
+  onChangeContent,
+}: Readonly<{ file: OpenFileState; onChangeContent: (path: string, content: string) => void }>) {
+  return (
+    <div className="file-editor__md">
+      <div className="file-editor__md-bar">
+        <span className="file-editor__hint">Fichier HTML — l'app n'a pas d'aperçu rendu, le vrai rendu passe par le navigateur.</span>
+        <OuvrirExterne file={file} label="Ouvrir dans le navigateur" />
+      </div>
+      <div className="file-editor__md-body">
+        <SourceEditor file={file} onChangeContent={onChangeContent} />
+      </div>
+    </div>
   );
 }
 

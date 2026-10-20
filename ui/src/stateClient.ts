@@ -20,6 +20,16 @@ export async function stateWrite(name: string, value: unknown): Promise<void> {
   await invoke("state_write", { name, value });
 }
 
+/** Noms d'état existants commençant par `prefix`, triés (T-061 — état éclaté). */
+export async function stateList(prefix: string): Promise<string[]> {
+  return invoke<string[]>("state_list", { prefix });
+}
+
+/** Renomme un état — refuse d'écraser la cible (T-061 : rien ne détruit un historique). */
+export async function stateRename(name: string, newName: string): Promise<void> {
+  await invoke("state_rename", { name, newName });
+}
+
 /** Création récursive d'un répertoire. */
 export async function fsMkdir(path: string): Promise<void> {
   await invoke("fs_mkdir", { path });

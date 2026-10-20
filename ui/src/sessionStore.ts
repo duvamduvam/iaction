@@ -131,11 +131,13 @@ export function sortByRecent<T extends SessionMeta>(sessions: T[]): T[] {
 }
 
 /**
- * Plafonne le nombre de sessions conservées (hygiène du document persisté,
- * même esprit que la borne à 200 tours par conversation) : au-delà de `max`,
- * les plus anciennes (par `updatedAt`) sont abandonnées — la session ACTIVE
- * est toujours préservée, même si elle est ancienne (ex. reprise d'une
- * vieille session juste avant une sauvegarde).
+ * Désigne les sessions qui TIENNENT dans le plafond (hygiène du document
+ * persisté, même esprit que la borne à 200 tours par conversation) : les
+ * `max` plus récentes (par `updatedAt`), plus la session ACTIVE même si elle
+ * est ancienne (ex. reprise d'une vieille session juste avant une
+ * sauvegarde). Les autres NE SONT PAS détruites : l'appelant les archive
+ * (archivesSessions.ts, T-151) avant de les retirer du fichier. La page Chat
+ * l'utilise encore pour son propre plafond.
  */
 export function capSessions<T extends SessionMeta>(sessions: T[], activeId: string, max: number): T[] {
   if (sessions.length <= max) return sessions;

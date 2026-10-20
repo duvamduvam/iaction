@@ -21,6 +21,14 @@ export interface SystemStats {
   gpuMemTotalMb: number | null;
   /** Température GPU en °C — même source que les champs GPU ci-dessus. */
   gpuTempC: number | null;
+  /**
+   * Cause verbatim (stderr + code de sortie) du dernier échec de
+   * `nvidia-smi` quand le binaire EXISTE mais échoue (pilote qui recharge,
+   * carte occupée, mismatch NVML…). `null` en fonctionnement nominal ET
+   * quand `nvidia-smi` est simplement absent du poste — l'absence de carte
+   * n'est pas une panne (T-129).
+   */
+  gpuIndisponible: string | null;
   /** Température du processeur en °C — null si la machine n'a pas de capteur. */
   cpuTempC: number | null;
   /** Température de la mémoire en °C — null si aucun capteur (cas courant). */

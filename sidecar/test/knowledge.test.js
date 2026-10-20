@@ -13,7 +13,8 @@ import { lancer, assert, moduleCompile } from "./harness.mjs";
 
 async function testKnowledgePure() {
   const knowledgeModuleUrl = moduleCompile("knowledge.js");
-  const { chunkText, cosineSimilarity, rankChunks, CHUNK_SIZE, CHUNK_OVERLAP } = await import(knowledgeModuleUrl);
+  const { chunkText, cosineSimilarity, rankChunks, formatSearchResults, CHUNK_SIZE, CHUNK_OVERLAP } =
+    await import(knowledgeModuleUrl);
 
   // 1. Chunking — texte court : un seul chunk, identique ; vide : aucun.
   assert(
@@ -98,6 +99,46 @@ async function testKnowledgePure() {
     `rankChunks : scores décroissants attendus, reçu ${JSON.stringify(ranked.map((r) => r.score))}`,
   );
   assert(ranked[0].excerpt === "chunk a", `rankChunks : excerpt = texte du chunk, reçu ${JSON.stringify(ranked[0])}`);
+
+  // 4. formatSearchResults (T-115) : l'âge de l'index en tête, et l'avertissement
+  // de péremption quand `stale`. Un agent (comme l'utilisateur) ne peut pas
+  // juger la fraîcheur d'une réponse sans savoir QUAND l'index a été construit.
+  const hier = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const fraisRendu = formatSearchResults([{ file: "a.md", excerpt: "contenu a", score: 0.9 }], hier, false);
+  assert(
+    fraisRendu.startsWith("Index construit le") && fraisRendu.includes("(il y a 1 j)"),
+    `formatSearchResults : en-tête daté attendu en tête, reçu ${JSON.stringify(fraisRendu)}`,
+  );
+  assert(
+    !fraisRendu.includes("sources modifiées depuis"),
+    `formatSearchResults : pas d'avertissement de péremption quand stale:false, reçu ${JSON.stringify(fraisRendu)}`,
+  );
+  assert(
+    fraisRendu.includes("--- a.md (score 0.9) ---\ncontenu a"),
+    `formatSearchResults : fichier + score + extrait attendus, reçu ${JSON.stringify(fraisRendu)}`,
+  );
+
+  const perimeRendu = formatSearchResults([{ file: "a.md", excerpt: "contenu a", score: 0.9 }], hier, true);
+  assert(
+    perimeRendu.includes("sources modifiées depuis"),
+    `formatSearchResults : avertissement de péremption attendu quand stale:true, reçu ${JSON.stringify(perimeRendu)}`,
+  );
+
+  // builtAt absent/illisible (index forgé sans ce champ, spec §5.4) : la
+  // ligne d'âge est omise, jamais fausse — le reste du rendu est inchangé.
+  const sansAge = formatSearchResults([{ file: "a.md", excerpt: "contenu a", score: 0.9 }], "", false);
+  assert(
+    !sansAge.includes("Index construit le") && sansAge.startsWith("--- a.md"),
+    `formatSearchResults : sans builtAt, aucune ligne d'âge attendue, reçu ${JSON.stringify(sansAge)}`,
+  );
+
+  // Aucun résultat : le message existant survit, précédé de l'en-tête daté.
+  const videRendu = formatSearchResults([], hier, false);
+  assert(
+    videRendu.startsWith("Index construit le") &&
+      videRendu.endsWith("\n\nAucun résultat dans les connaissances indexées."),
+    `formatSearchResults : message vide inchangé, précédé de l'en-tête, reçu ${JSON.stringify(videRendu)}`,
+  );
 }
 
 await lancer(

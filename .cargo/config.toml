@@ -1,0 +1,42 @@
+# Réglages de compilation Rust du dépôt (T-029 — budget de démarrage).
+#
+# ── Pourquoi ici, et pas dans dev.sh ────────────────────────────────────
+# Un `RUSTFLAGS` posé par le lanceur de développement change l'empreinte de
+# compilation : `npm run verif` (qui appelle `cargo test` SANS ce réglage)
+# reconstruirait alors tout l'arbre à chaque alternance entre les deux, et
+# l'accélération se paierait plusieurs fois. Ce fichier, lui, s'applique à
+# TOUTE invocation de cargo dans le dépôt — dev, tests, CI — donc une seule
+# empreinte pour tout le monde.
+#
+# Cargo remonte l'arborescence depuis le répertoire courant : posé à la racine,
+# il est trouvé aussi bien depuis `src-tauri/` (`tauri dev`) que depuis la
+# racine (`cargo test --manifest-path src-tauri/Cargo.toml`).
+
+# Linux uniquement : sur Windows (MSVC) la répartition du debuginfo suit d'autres
+# règles (PDB), et nous n'y avons rien mesuré.
+[target.'cfg(target_os = "linux")']
+# Le debuginfo n'est plus recopié DANS le binaire à l'édition de liens : il reste
+# dans les objets, où le débogueur va le lire. C'est le poste dominant dès qu'un
+# `.rs` change — et c'est exactement le cas que T-029 cherchait à réduire.
+#
+# Mesuré le 2026-08-16 sur ce poste, `touch src/lib.rs` puis reconstruction,
+# caches chauds des deux côtés :
+#
+#   défaut                    9,9 s et 11,4 s     binaire 243 Mo
+#   split-debuginfo=unpacked  7,4 s (× 3)         binaire  80 Mo
+#
+# Soit ~30 % du temps de reconstruction, et un binaire trois fois plus léger à
+# écrire. Contrepartie à connaître : le binaire n'est plus autonome pour le
+# débogage — copié sur une autre machine sans son dossier `target/`, il n'a plus
+# ses symboles. Sans objet ici, où l'on débogue là où l'on compile.
+rustflags = ["-C", "split-debuginfo=unpacked"]
+
+# ── mold, non activé ────────────────────────────────────────────────────
+# T-029 citait aussi `mold` comme piste. Il n'est PAS installé sur ce poste
+# (`which mold` ne rend rien), donc rien n'a pu être mesuré — et poser un
+# linker absent casserait la compilation de quiconque ne l'a pas, CI comprise.
+# Le jour où il est installé (`apt install mold`), décommenter, MESURER dans les
+# mêmes conditions que ci-dessus, et écrire le chiffre ici :
+#
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "split-debuginfo=unpacked"]

@@ -1,6 +1,6 @@
 [package]
 name = "iaction"
-version = "0.5.0"
+version = "0.6.0"
 description = "IAction — desktop multi-fournisseur pour le développement assisté par IA"
 authors = ["Dadou"]
 edition = "2021"
@@ -29,6 +29,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 keyring = { version = "3", features = ["sync-secret-service", "apple-native", "windows-native"] }
 # Sélecteur de dossier natif (page Agent : choix du répertoire projet).
 tauri-plugin-dialog = "2"
+# Une seule instance : relancer IAction ouvre une fenêtre dans l'instance en
+# cours (voir `fenetres::ouvrir_fenetre`), jamais un second processus.
+tauri-plugin-single-instance = "2"
 
 # Lecture de l'image du presse-papier SYSTÈME, côté natif. Indispensable sous
 # WebKitGTK (moteur Tauri Linux) : une capture d'écran présente dans le

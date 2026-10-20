@@ -7,6 +7,7 @@
  *
  * `id` = slug stable dérivé du libellé, même schéma que projectAdmin.ts.
  */
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { readConfig, writeConfig } from "./appConfig";
 
@@ -189,4 +190,23 @@ export function findAppForExtension(apps: AppEntry[], filename: string): AppEntr
  */
 export async function openExternal(path: string, command?: string | null): Promise<void> {
   await invoke("open_external", { path, command: command?.trim() ? command.trim() : null });
+}
+
+/**
+ * Registre d'applications externes lu une seule fois au montage — best
+ * effort, tableau vide si la lecture échoue (repli sur l'ouvreur système
+ * partout où le registre est consulté). Édité depuis la page Configuration ;
+ * une modification n'est reprise ici qu'au redémarrage de l'app (câblage
+ * minimal, pas de synchronisation live entre les deux pages).
+ */
+export function useApps(): AppEntry[] {
+  const [apps, setApps] = useState<AppEntry[]>([]);
+  useEffect(() => {
+    readApps()
+      .then(setApps)
+      .catch(() => {
+        // best effort : sans registre, l'appelant retombe sur le repli système
+      });
+  }, []);
+  return apps;
 }

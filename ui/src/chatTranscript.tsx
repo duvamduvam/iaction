@@ -18,6 +18,7 @@
  */
 import { memo } from "react";
 import { SentAttachments } from "./Attachments";
+import { NoticeEnQueue } from "./heureDiscrete";
 import { closeDanglingFence, Markdown } from "./Markdown";
 import { SourcesWeb } from "./SourcesWeb";
 import { MESSAGE_ATTENTE_FOURNISSEUR, enAttenteDuPremierOctet, useAttenteFournisseur } from "./useAttenteFournisseur";
@@ -87,11 +88,14 @@ export const ChatBubble = memo(function ChatBubble({ entry }: Readonly<{ entry: 
 export const TranscriptionChat = memo(function TranscriptionChat({
   entries,
   messagesResumes,
+  compactionAt,
   onOuvrirResume,
 }: Readonly<{
   entries: ChatEntry[];
   /** Nombre de messages couverts par le résumé de compaction — `null` si aucun (R4). */
   messagesResumes: number | null;
+  /** T-101 — `ChatCompaction.at` (ISO), l'instant où CE résumé a été construit. */
+  compactionAt: string | null;
   onOuvrirResume: () => void;
 }>) {
   return (
@@ -102,13 +106,16 @@ export const TranscriptionChat = memo(function TranscriptionChat({
       {messagesResumes !== null && (
         <button
           type="button"
-          className="chat-compaction"
+          className="chat-compaction ligne-queue"
           onClick={onOuvrirResume}
           title="Les anciens tours sont envoyés sous forme de résumé — cliquez pour le consulter"
         >
           {/* `upToIndex` compte des ENTRÉES de transcription (messages
-              utilisateur + assistant), pas des tours complets. */}
-          historique compacté ({messagesResumes} messages résumés)
+              utilisateur + assistant), pas des tours complets. L'heure est
+              celle de la (re)compaction, pas du rendu de ce bouton. */}
+          <NoticeEnQueue instant={compactionAt}>
+            historique compacté ({messagesResumes} messages résumés)
+          </NoticeEnQueue>
         </button>
       )}
       {entries.length === 0 && <p className="empty-hint">Aucun message. Écrivez ci-dessous pour démarrer.</p>}

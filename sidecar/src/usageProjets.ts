@@ -36,8 +36,8 @@ function appConfigPath(): string {
  * conversation à son projet, ce qui permet d'attribuer RÉTROACTIVEMENT les
  * tours historisés avant S2 (ils ne portent qu'un `conversationId`).
  */
-function projectConversationsPath(): string {
-  return path.join(globalDataRoot(), "state", "project-conversations.json");
+function stateDir(): string {
+  return path.join(globalDataRoot(), "state");
 }
 
 // ---------------------------------------------------------------------------
@@ -76,33 +76,60 @@ export async function readDeclaredProjects(): Promise<ProjectEntry[]> {
   return out;
 }
 
+/** Ajoute à `out` les sessions d'une entrée de projet (`{sessions: [{id}]}`). */
+function collecterSessions(out: Map<string, string>, projectId: string, state: unknown): void {
+  if (!isPlainObject(state) || !Array.isArray(state.sessions)) {
+    return;
+  }
+  for (const session of state.sessions) {
+    if (isPlainObject(session) && isNonEmptyString(session.id)) {
+      out.set(session.id, projectId);
+    }
+  }
+}
+
 /**
- * Conversation → projet, depuis `project-conversations.json` (structure
- * `{[projectId]: {sessions: [{id}]}}`). Tolérant : fichier absent, JSON cassé
- * ou entrée mal formée → map vide, l'attribution retombe simplement sur
- * « (non attribué) ». Une conversation supprimée depuis disparaît de la map :
- * ses vieux tours redeviennent non attribués — on n'invente rien.
+ * Conversation → projet. T-061 : l'état vit ÉCLATÉ — un fichier
+ * `state/projet-<slug>.json` par projet, de forme `{id, entree: {sessions}}`
+ * (l'`id` du fichier fait foi, le nom est normalisé). Repli sur l'ancien
+ * monolithe `project-conversations.json` tant qu'il existe (poste pas encore
+ * migré : la migration appartient à l'interface, ce lecteur reste en LECTURE
+ * SEULE). Tolérant : fichier absent, JSON cassé ou entrée mal formée → map
+ * vide, l'attribution retombe sur « (non attribué) ».
  */
 export async function readConversationProjects(): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  let doc: unknown;
+  let noms: string[] = [];
   try {
-    doc = JSON.parse(await fsp.readFile(projectConversationsPath(), "utf8"));
+    noms = (await fsp.readdir(stateDir())).filter((f) => f.startsWith("projet-") && f.endsWith(".json"));
   } catch {
     return out;
   }
-  if (!isPlainObject(doc)) {
+  for (const nom of noms) {
+    try {
+      const brut: unknown = JSON.parse(await fsp.readFile(path.join(stateDir(), nom), "utf8"));
+      if (!isPlainObject(brut)) continue;
+      const id = isNonEmptyString(brut.id) ? brut.id : nom.slice("projet-".length, -".json".length);
+      collecterSessions(out, id, brut.entree);
+    } catch {
+      // Un fichier de projet illisible ne prive pas les autres d'attribution.
+    }
+  }
+  if (out.size > 0) {
     return out;
   }
-  for (const [projectId, state] of Object.entries(doc)) {
-    if (!isPlainObject(state) || !Array.isArray(state.sessions)) {
-      continue;
-    }
-    for (const session of state.sessions) {
-      if (isPlainObject(session) && isNonEmptyString(session.id)) {
-        out.set(session.id, projectId);
+  // Poste pas encore migré : le monolithe est encore la seule vérité.
+  try {
+    const doc: unknown = JSON.parse(
+      await fsp.readFile(path.join(stateDir(), "project-conversations.json"), "utf8"),
+    );
+    if (isPlainObject(doc)) {
+      for (const [projectId, state] of Object.entries(doc)) {
+        collecterSessions(out, projectId, state);
       }
     }
+  } catch {
+    // Ni éclaté ni monolithe : rien à attribuer.
   }
   return out;
 }

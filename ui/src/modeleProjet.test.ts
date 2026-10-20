@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentTurn } from "./agentTurns";
 import {
+  appliquerTitresIA,
   buildPersistedSession,
   dedupeTurnIds,
   deriveSessionTitle,
@@ -22,6 +23,7 @@ import {
   sanitizePersistedConversations,
   sessionStateFromPersisted,
   withRoutingRepair,
+  type ProjectSession,
 } from "./modeleProjet";
 
 const tour = (id: string, extra: Partial<AgentTurn> = {}): AgentTurn => ({
@@ -29,6 +31,15 @@ const tour = (id: string, extra: Partial<AgentTurn> = {}): AgentTurn => ({
   role: "user",
   content: `contenu ${id}`,
   status: "done",
+  ...extra,
+});
+
+/** Session minimale pour les tests de titres (T-063) : repli local distinctif par construction. */
+const session = (id: string, extra: Partial<ProjectSession> = {}): ProjectSession => ({
+  ...freshSession(),
+  id,
+  title: `repli local ${id}`,
+  sessionId: `srv-${id}`,
   ...extra,
 });
 
@@ -175,5 +186,73 @@ describe("deriveSessionTitle", () => {
 
   it("sans tour utilisateur : titre par défaut, jamais une chaîne vide", () => {
     expect(deriveSessionTitle([]).length).toBeGreaterThan(0);
+  });
+});
+
+describe("appliquerTitresIA — T-063, le panneau Sessions ne doit plus converger", () => {
+  it("cas nominal : titre IA distinct, il remplace le repli local", () => {
+    const { sessions, changed } = appliquerTitresIA(
+      [session("a")],
+      new Map([["srv-a", "Déployer n8n sur OVH"]]),
+    );
+    expect(changed).toBe(true);
+    expect(sessions[0].title).toBe("Déployer n8n sur OVH");
+  });
+
+  it("deux sessions convergent vers le même titre IA : la première le gagne, la seconde garde son repli", () => {
+    const { sessions, changed } = appliquerTitresIA(
+      [session("a"), session("b")],
+      new Map([
+        ["srv-a", "Déployer n8n sur OVH"],
+        ["srv-b", "Déployer n8n sur OVH"],
+      ]),
+    );
+    expect(changed).toBe(true);
+    expect(sessions[0].title).toBe("Déployer n8n sur OVH");
+    expect(sessions[1].title).toBe("repli local b"); // pas de doublon : repli gardé
+    expect(sessions[0].title).not.toBe(sessions[1].title);
+  });
+
+  it("reprise (resume) partageant son sessionId serveur : même mécanique, un seul gagnant", () => {
+    const { sessions, changed } = appliquerTitresIA(
+      [session("premiere", { sessionId: "srv-partage" }), session("reprise", { sessionId: "srv-partage" })],
+      new Map([["srv-partage", "Déployer n8n sur OVH"]]),
+    );
+    expect(changed).toBe(true);
+    expect(sessions[0].title).toBe("Déployer n8n sur OVH");
+    expect(sessions[1].title).toBe("repli local reprise");
+  });
+
+  it("le titre IA est déjà porté par une autre session (pas candidate) : repli gardé", () => {
+    const { sessions, changed } = appliquerTitresIA(
+      [session("a", { title: "Déployer n8n sur OVH", titleCustom: true }), session("b")],
+      new Map([["srv-b", "Déployer n8n sur OVH"]]),
+    );
+    expect(changed).toBe(false);
+    expect(sessions[1].title).toBe("repli local b");
+  });
+
+  it("titleCustom n'est jamais écrasé", () => {
+    const { sessions, changed } = appliquerTitresIA(
+      [session("a", { titleCustom: true, title: "Mon titre à moi" })],
+      new Map([["srv-a", "Déployer n8n sur OVH"]]),
+    );
+    expect(changed).toBe(false);
+    expect(sessions[0].title).toBe("Mon titre à moi");
+  });
+
+  it("sans sessionId (moteur neutre) : jamais concernée", () => {
+    const { sessions, changed } = appliquerTitresIA(
+      [session("a", { sessionId: null })],
+      new Map([["srv-a", "Déployer n8n sur OVH"]]),
+    );
+    expect(changed).toBe(false);
+    expect(sessions[0].title).toBe("repli local a");
+  });
+
+  it("référence stable quand rien ne change : pas de re-render inutile", () => {
+    const prev = [session("a")];
+    const { sessions } = appliquerTitresIA(prev, new Map());
+    expect(sessions).toBe(prev);
   });
 });

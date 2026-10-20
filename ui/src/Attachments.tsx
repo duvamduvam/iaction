@@ -31,6 +31,9 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent,
 } from "react";
+import { dimensionsPng, readClipboardImage } from "./clipboardClient";
+import { bornerImage, COTE_MAX_IMAGE, type ImageBornee } from "./imageBornee";
+import { journalCollageImage } from "./journalCollage";
 import { Modal } from "./Modal";
 import type { ChatAttachment, ImageAttachmentMediaType } from "./sidecar";
 
@@ -89,8 +92,20 @@ export interface DraftAttachment {
   mediaType?: ImageAttachmentMediaType;
   /** Image uniquement : `data:<mediaType>;base64,<b64>` (aperçu + source de l'envoi). */
   dataUrl?: string;
+  /**
+   * Image collée : URL d'objet (`blob:`) pour l'AFFICHAGE seul (T-048).
+   *
+   * Créée sans copie ni encodage, donc disponible à l'instant où les octets
+   * arrivent — là où la data URL demande de relire tout le PNG en base64
+   * (+33 % d'octets) avant de pouvoir peindre quoi que ce soit. L'envoi, lui,
+   * continue d'exiger `dataUrl` : c'est le contrat du sidecar, et la pièce
+   * reste `loading` tant qu'il n'est pas honoré.
+   */
+  apercuUrl?: string;
   /** Texte uniquement : contenu brut. */
   content?: string;
+  /** T-144 — image réduite à `COTE_MAX_IMAGE` : ses dimensions d'origine, signalées discrètement sur la vignette. */
+  reduiteDe?: { largeur: number; hauteur: number };
   /**
    * Image collée via le presse-papier NATIF (repli WebKitGTK) : la vignette
    * s'affiche aussitôt en « chargement », puis `dataUrl`/`size` sont remplis en
@@ -118,7 +133,7 @@ function nextDraftId(): string {
   return `att-${draftCounter}`;
 }
 
-function readAsDataUrl(file: File): Promise<string> {
+function readAsDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
@@ -136,15 +151,21 @@ function readAsText(file: File): Promise<string> {
   });
 }
 
+/** T-144 — dimensions d'origine d'une image réduite, `undefined` sinon. */
+function reduiteDe(bornee: ImageBornee): DraftAttachment["reduiteDe"] {
+  return bornee.reduite && bornee.origine ? bornee.origine : undefined;
+}
+
 /** Un fichier → `DraftAttachment`, ou une erreur française lisible (limite dépassée/type non pris en charge). */
 async function fileToDraft(file: File): Promise<{ draft: DraftAttachment | null; error: string | null }> {
   if (isImageMediaType(file.type)) {
     if (file.size > MAX_IMAGE_BYTES) {
       return { draft: null, error: `« ${file.name} » dépasse 8 Mo (image).` };
     }
-    const dataUrl = await readAsDataUrl(file);
+    const bornee = await bornerImage(file, file.type);
+    const dataUrl = await readAsDataUrl(bornee.blob);
     return {
-      draft: { id: nextDraftId(), kind: "image", name: file.name, size: file.size, mediaType: file.type as ImageAttachmentMediaType, dataUrl },
+      draft: { id: nextDraftId(), kind: "image", name: file.name, size: bornee.blob.size, mediaType: bornee.mediaType as ImageAttachmentMediaType, dataUrl, reduiteDe: reduiteDe(bornee) },
       error: null,
     };
   }
@@ -207,7 +228,17 @@ export function useAttachmentDraft() {
   );
 
   const removeAttachment = useCallback(
-    (id: string) => applyAttachments((prev) => prev.filter((a) => a.id !== id)),
+    (id: string) =>
+      applyAttachments((prev) => {
+        // L'URL d'objet d'une image collée (T-048) référence son tampon tant
+        // qu'elle n'est pas révoquée. Ici — retrait EXPLICITE — la pièce ne
+        // reviendra pas ; `clear()` n'en fait rien, lui, parce que `restore()`
+        // repose les mêmes objets après un envoi qui a échoué, vignettes
+        // comprises.
+        const partante = prev.find((a) => a.id === id);
+        if (partante?.apercuUrl) URL.revokeObjectURL(partante.apercuUrl);
+        return prev.filter((a) => a.id !== id);
+      }),
     [applyAttachments],
   );
 
@@ -264,35 +295,130 @@ export function useAttachmentDraft() {
    * finalement pas d'image (le placeholder est retiré sans bruit). Sinon on
    * encode le PNG en data URL en ARRIÈRE-PLAN (`FileReader`), puis on remplit
    * `dataUrl`/`size` et on lève `loading`.
+   *
+   * Renvoie `octets`/`base64Ms` (segment 4 du ticket T-048) une fois la data
+   * URL posée, ou `null` si l'appelant n'a rien à en tirer (pas d'image,
+   * limite dépassée, lecture en échec) — c'est ce que
+   * `collerImageDuPressePapierNatif` réunit avec les segments précédents en
+   * UNE ligne de journal, sans dupliquer la lecture du même tampon.
    */
   const resolveImage = useCallback(
-    (id: string, bytes: Uint8Array | null) => {
+    (id: string, bytes: Uint8Array | null): Promise<{ octets: number; base64Ms: number } | null> => {
       if (!bytes) {
         applyAttachments((prev) => prev.filter((a) => a.id !== id));
-        return;
+        return Promise.resolve(null);
       }
       if (bytes.byteLength > MAX_IMAGE_BYTES) {
         applyAttachments((prev) => prev.filter((a) => a.id !== id));
         setError("Image collée : dépasse 8 Mo.");
-        return;
+        return Promise.resolve(null);
       }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = String(reader.result);
-        applyAttachments((prev) =>
-          prev.map((a) => (a.id === id ? { ...a, dataUrl, size: bytes.byteLength, loading: false } : a)),
-        );
-      };
-      reader.onerror = () => {
+      // T-048 — l'aperçu D'ABORD, sans rien encoder : `createObjectURL` ne
+      // fait que publier une référence au tampon déjà en mémoire. La vignette
+      // peut donc être peinte au prochain rendu, sans attendre la base64.
+      const blob = new Blob([bytes], { type: "image/png" });
+      const apercuUrl = URL.createObjectURL(blob);
+      applyAttachments((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, apercuUrl, size: bytes.byteLength } : a)),
+      );
+
+      // `loading` ne retombe qu'avec la data URL, et c'est délibéré : elle est
+      // la SOURCE DE L'ENVOI (contrat du sidecar). Lever le drapeau plus tôt
+      // autoriserait à envoyer une image vide — une vignette visible ne prouve
+      // que l'affichage.
+      // T-144 — la capture est réduite à 2000 px AVANT l'encodage : c'est
+      // elle, et non l'aperçu, qui part au modèle. `base64Ms` couvre donc
+      // désormais réduction + encodage.
+      const debutBase64 = performance.now();
+      return bornerImage(blob, "image/png").then(
+        (bornee) =>
+          readAsDataUrl(bornee.blob).then((dataUrl) => {
+            const base64Ms = Math.round(performance.now() - debutBase64);
+            applyAttachments((prev) =>
+              prev.map((a) =>
+                a.id === id
+                  ? { ...a, dataUrl, size: bornee.blob.size, mediaType: bornee.mediaType as ImageAttachmentMediaType, reduiteDe: reduiteDe(bornee), loading: false }
+                  : a,
+              ),
+            );
+            return { octets: bytes.byteLength, base64Ms };
+          }),
+      ).catch(() => {
+        URL.revokeObjectURL(apercuUrl);
         applyAttachments((prev) => prev.filter((a) => a.id !== id));
         setError("Image collée : lecture impossible.");
-      };
-      reader.readAsDataURL(new Blob([bytes], { type: "image/png" }));
+        return null;
+      });
     },
     [applyAttachments],
   );
 
   return { attachments, addFiles, beginImage, resolveImage, removeAttachment, clear, restore, error, setError };
+}
+
+/**
+ * Repli natif du collage (T-048) : vignette immédiate (`beginImage`), lecture
+ * du presse-papier natif (`readClipboardImage`), puis remplissage
+ * (`resolveImage`) — INSTRUMENTÉ pour produire les quatre segments que le
+ * ticket demandait de mesurer avant tout correctif, réunis en UNE ligne de
+ * journal (`journalCollageImage`). Seul point d'entrée du repli, appelé
+ * IDENTIQUEMENT par AgentPage.tsx et ChatPage.tsx : le mécanisme de mesure
+ * n'a aucune raison de vivre dans les pages, déjà au ras de leur plafond de
+ * taille (`scripts/cliquet-taille.json`).
+ *
+ * Aucun changement de comportement : mêmes appels, dans le même ordre, avec
+ * les mêmes issues (vignette retirée si `bytes` est `null`) — seule la
+ * mesure est nouvelle. `beginImage`/`resolveImage` sont pris en paramètres
+ * (et non importés) pour rester ceux de l'instance React appelante.
+ */
+export function collerImageDuPressePapierNatif(
+  beginImage: (name: string) => string | null,
+  resolveImage: (id: string, bytes: Uint8Array | null) => Promise<{ octets: number; base64Ms: number } | null>,
+): void {
+  const debutCollage = performance.now();
+  const placeholderId = beginImage("capture-collée.png");
+  if (!placeholderId) return; // plus de place — rien à lire ni à mesurer
+
+  // Segment 1 — le seul des quatre qui mesure une PEINTURE et non un simple
+  // retour de fonction. Deux `requestAnimationFrame` imbriqués, posés juste
+  // après le rendu déclenché par `beginImage` : le premier callback tourne
+  // une fois la frame courante traitée par le navigateur, le second attend
+  // la frame SUIVANTE — empiriquement le moment où le tampon précédent a été
+  // peint. Limite assumée : ceci ne PROUVE pas que les pixels ont atteint
+  // l'écran physique (la latence du compositeur/pilote graphique reste hors
+  // de portée du DOM), mais c'est la meilleure approximation accessible
+  // depuis l'UI, et sans commune mesure avec un `setState` qui ne dit rien
+  // de l'affichage.
+  const peinture = new Promise<number>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve(Math.round(performance.now() - debutCollage)));
+    });
+  });
+
+  const debutInvoke = performance.now();
+  void readClipboardImage()
+    .then(async (bytes) => {
+      // Segment 2 — aller-retour complet de la commande (négociation du
+      // presse-papier + encodage PNG natif) ; le détail des deux parties
+      // n'est chronométrable QUE côté Rust et part séparément, même
+      // commande, scope `rust` (voir clipboard.rs).
+      const invokeMs = Math.round(performance.now() - debutInvoke);
+      const suite = await resolveImage(placeholderId, bytes);
+      if (!bytes || !suite) return; // pas d'image, ou lecture en échec : rien à récapituler
+      const dims = dimensionsPng(bytes); // segment 3
+      const peintureMs = await peinture;
+      journalCollageImage({
+        peintureMs,
+        invokeMs,
+        octets: suite.octets,
+        largeur: dims?.largeur ?? null,
+        hauteur: dims?.hauteur ?? null,
+        base64Ms: suite.base64Ms, // segment 4
+      });
+    })
+    .catch(() => {
+      void resolveImage(placeholderId, null);
+    });
 }
 
 /* ---------- Conversion vers le contrat sidecar / vers la transcription ---------- */
@@ -414,8 +540,8 @@ export function AttachmentPickerButton({
 function AttachmentChip({ item, onRemove }: Readonly<{ item: DraftAttachment; onRemove: () => void }>) {
   return (
     <div className="attachment-chip">
-      {item.kind === "image" && item.dataUrl ? (
-        <img className="attachment-chip__thumb" src={item.dataUrl} alt={item.name} />
+      {item.kind === "image" && (item.apercuUrl ?? item.dataUrl) ? (
+        <img className="attachment-chip__thumb" src={item.apercuUrl ?? item.dataUrl} alt={item.name} />
       ) : item.loading ? (
         <span
           className="attachment-chip__thumb attachment-chip__thumb--loading"
@@ -427,7 +553,17 @@ function AttachmentChip({ item, onRemove }: Readonly<{ item: DraftAttachment; on
       )}
       <span className="attachment-chip__meta">
         <span className="attachment-chip__name" title={item.name}>{item.name}</span>
-        <span className="attachment-chip__size">{item.loading ? "…" : formatSize(item.size)}</span>
+        <span className="attachment-chip__size">
+          {item.loading ? "…" : formatSize(item.size)}
+          {item.reduiteDe && (
+            <span
+              className="attachment-chip__note"
+              title={`Réduite de ${item.reduiteDe.largeur}×${item.reduiteDe.hauteur} à ${COTE_MAX_IMAGE} px de côté max : au-delà, l'API refuse l'image dès que la session en compte plus de 20.`}
+            >
+              {" "}· réduite
+            </span>
+          )}
+        </span>
       </span>
       <button type="button" className="attachment-chip__remove" aria-label={`Retirer ${item.name}`} onClick={onRemove}>
         ×

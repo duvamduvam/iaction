@@ -49,6 +49,25 @@ use crate::journal_coquille::journal_coquille;
 /// canal d'écriture libre sur le disque (ni un déversoir de bruit).
 const JALONS_UI: [&str; 2] = ["ui:script", "ui:premier-rendu"];
 
+/*
+ * T-029 — d'où vient la mesure.
+ *
+ * Les jalons des deux mondes tombent dans le MÊME fichier, et rien ne les
+ * distinguait : un relevé de session de développement et un relevé de version
+ * empaquetée se lisaient pareil. Or c'est précisément leur comparaison que le
+ * ticket attend — en développement, l'interface est servie module par module
+ * (7 Mo non bundlés) là où l'installeur livre 1,6 Mo bundlés, et les deux plus
+ * gros postes du budget sont probablement là.
+ *
+ * `debug_assertions` est le bon discriminant, et pas une approximation :
+ * `tauri dev` compile en debug, l'empaquetage en release. Aucune API à
+ * interroger, aucune variable d'environnement à espérer.
+ */
+#[cfg(debug_assertions)]
+const MODE: &str = "developpement";
+#[cfg(not(debug_assertions))]
+const MODE: &str = "empaquete";
+
 /// USER_HZ — l'unité des temps de `/proc/[pid]/stat`. Constante de l'ABI
 /// Linux, à 100 sur tous les noyaux courants ; la lire proprement
 /// (`sysconf(_SC_CLK_TCK)`) demanderait la crate `libc` pour ce seul appel.
@@ -125,6 +144,7 @@ fn jalon_avec_page(app: &AppHandle, etape: &str, page_ms: Option<u64>) {
             "depuisMainMs": depuis_main_ms,
             "totalMs": total_ms,
             "pageMs": page_ms,
+            "mode": MODE,
         }),
     );
 }

@@ -7,7 +7,7 @@
  * deux bords : ce qui DOIT être avalé, ce qui ne doit JAMAIS l'être.
  */
 import { describe, expect, it } from "vitest";
-import { isLikelyHallucination, normalizeForCompare } from "./transcriptFilter";
+import { isLikelyHallucination, normalizeForCompare, retirerHallucinations } from "./transcriptFilter";
 
 describe("normalizeForCompare", () => {
   it("aplanit casse, accents et ponctuation", () => {
@@ -58,5 +58,33 @@ describe("isLikelyHallucination — ce qui ne doit JAMAIS l'être", () => {
 
   it("une question brève légitime", () => {
     expect(isLikelyHallucination("Pourquoi ?")).toBe(false);
+  });
+});
+
+// Segments relevés tels quels dans le journal du 2026-10-05 (T-150).
+describe("segments composés — relevés du 2026-10-05", () => {
+  it("avale un assemblage fait uniquement de formules fantômes", () => {
+    expect(isLikelyHallucination("Merci.  Merci.")).toBe(true);
+    expect(isLikelyHallucination("Merci.  Merci.  Sous-titrage Société Radio-Canada")).toBe(true);
+    expect(isLikelyHallucination("*bruit de choc*")).toBe(true);
+    expect(isLikelyHallucination("Sous-titrage ST' 501")).toBe(true);
+    expect(isLikelyHallucination("Merci.  Merci.  Merci.  Merci.  Merci.")).toBe(true);
+  });
+
+  it("retire les formules d'un segment qui porte aussi une vraie phrase", () => {
+    expect(retirerHallucinations("Merci.  Merci. J'ai beaucoup aimé The Curse également.")).toBe(
+      "J'ai beaucoup aimé The Curse également.",
+    );
+    expect(isLikelyHallucination("Merci.  Merci. J'ai beaucoup aimé The Curse également.")).toBe(false);
+  });
+
+  it("ne touche pas à une phrase qui contient une formule sans s'y réduire", () => {
+    expect(retirerHallucinations("Merci à tous d'être venus ce soir.")).toBe("Merci à tous d'être venus ce soir.");
+    expect(retirerHallucinations("Le sous-titrage du film est décalé de deux secondes, tu peux regarder ?")).toBe(
+      "Le sous-titrage du film est décalé de deux secondes, tu peux regarder ?",
+    );
+    expect(retirerHallucinations("Sous-titrage et doublage sont à refaire pour toute la saison deux.")).toBe(
+      "Sous-titrage et doublage sont à refaire pour toute la saison deux.",
+    );
   });
 });

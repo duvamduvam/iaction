@@ -369,7 +369,13 @@ export function ModelPicker({
           autoFocus
           className="model-picker__recherche"
           value={filtre.recherche}
-          onChange={(e) => setFiltre((f) => ({ ...f, recherche: e.currentTarget.value }))}
+          onChange={(e) => {
+            // La valeur est lue AVANT d'appeler `setFiltre` : React remet
+            // `currentTarget` à null dès que le gestionnaire rend la main, et
+            // l'updater fonctionnel, lui, n'est évalué qu'au rendu suivant.
+            const recherche = e.currentTarget.value;
+            setFiltre((f) => ({ ...f, recherche }));
+          }}
           onKeyDown={clavierRecherche}
           placeholder="Rechercher (nom, id)…"
           aria-label="Rechercher un modèle"
@@ -379,7 +385,10 @@ export function ModelPicker({
         <select
           className="model-picker__tri"
           value={filtre.tri}
-          onChange={(e) => setFiltre((f) => ({ ...f, tri: e.currentTarget.value as ModelSortKey }))}
+          onChange={(e) => {
+            const tri = e.currentTarget.value as ModelSortKey;
+            setFiltre((f) => ({ ...f, tri }));
+          }}
           aria-label="Trier les modèles"
         >
           {MODEL_SORT_OPTIONS.map((o) => (

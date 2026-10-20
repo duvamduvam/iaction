@@ -9,22 +9,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatTokens } from "./fableUsage";
 import { readRoutingDebord } from "./routerAdmin";
+import {
+  ActivitePanel,
+  ConcentrationPanel,
+  DelegationPanel,
+  EscaladePanel,
+  FiabilitePanel,
+  PyramidePanel,
+} from "./SupervisionSobriete";
 import { SupervisionCourbes } from "./SupervisionCourbes";
 import {
+  avancementPeriode,
   formatPeriodLabel,
-  isoWeekKey,
+  formatVariation,
   parseLocalDate,
+  periodePrecedenteComparable,
   periodRange,
   shiftAnchor,
+  variationPct,
   todayLocalStr,
   trendRange,
   type Periode,
   libelleDepense,
 } from "./supervisionPeriode";
 import {
-  usageClaudeHistory,
   usageStats,
-  type ClaudeWindowSnapshot,
   type UsageBucket,
   type UsageBucketKind,
   type UsageProjet,
@@ -32,6 +41,13 @@ import {
   type UsageStats,
 } from "./usageStatsClient";
 import { useRovingFocus } from "./useRovingFocus";
+import {
+  ClaudeSubscriptionPanel,
+  RythmeQuotaPanel,
+  TroisDevisesPanel,
+  picFenetreSurPeriode,
+  useHistoriqueAbonnement,
+} from "./SupervisionAbonnement";
 
 
 /* ---------- Sélecteur de période ---------- */
@@ -67,6 +83,7 @@ function PeriodSelector({
   atToday: boolean;
 }>) {
   const noun = PERIOD_NOUN[bucket];
+  const avancement = avancementPeriode(periode);
   // Sélecteur aux flèches, activation manuelle (Entrée / Espace) — voir Nav dans App.tsx.
   const roving = useRovingFocus<HTMLElement>({
     selector: ".config-subnav__item:not(:disabled)",
@@ -98,7 +115,20 @@ function PeriodSelector({
         <button type="button" className="btn btn--ghost" onClick={onPrev} title={noun.prev} aria-label={noun.prev}>
           ◀
         </button>
-        <span className="supervision-range-label">{formatPeriodLabel(bucket, periode)}</span>
+        <span className="supervision-range-label">
+          {formatPeriodLabel(bucket, periode)}
+          {/* T-070 — une période EN COURS le dit. Sans ça, le lundi, Semaine
+              affiche les chiffres de Jour et l'égalité se lit comme une
+              panne : le calcul était juste, c'est le silence qui trompait. */}
+          {avancement !== null && (
+            <span
+              className="supervision-range-avancement"
+              title={`Période en cours : ${avancement.ecoules} jour(s) sur ${avancement.total}. Les chiffres ne couvrent que la partie écoulée.`}
+            >
+              {` · jour ${avancement.ecoules}/${avancement.total}`}
+            </span>
+          )}
+        </span>
         <button
           type="button"
           className="btn btn--ghost"
@@ -124,30 +154,106 @@ function orchPct(totals: UsageStats["totals"]): number | null {
   return (totals.orchTours / totals.tours) * 100;
 }
 
-function KpiCards({ totals }: Readonly<{ totals: UsageStats["totals"] }>) {
+/**
+ * Zone de la page : un intertitre, une teinte, et les encarts qu'elle groupe.
+ *
+ * La page est organisée par QUESTION plutôt que par source de données — trois
+ * zones, trois moments, trois budgets d'attention (docs/etude-supervision.md
+ * §8.2). Sans ce groupement, six encarts de poids égal obligent à savoir déjà
+ * ce qu'on cherche.
+ *
+ * La teinte est un repère de lecture, JAMAIS un porteur d'information : chaque
+ * zone garde son intertitre écrit. Les trois valeurs vivent dans App.css, où
+ * est aussi consigné leur passage au validateur de palette.
+ */
+function Zone({
+  ton,
+  titre,
+  quand,
+  children,
+}: Readonly<{
+  ton: "sobriete" | "historique" | "abonnement";
+  titre: string;
+  quand: string;
+  children: React.ReactNode;
+}>) {
+  return (
+    <section className={`supervision-zone supervision-zone--${ton}`}>
+      <div className="page__intro supervision-zone__titre">
+        <h2 className="page__title">{titre}</h2>
+        <p className="empty-hint">{quand}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * T-075 — delta par rapport à la période précédente comparable, ou rien.
+ *
+ * Le libellé porte TOUJOURS la nature de la référence (« vs 4 j précédents »
+ * quand elle est tronquée) : un « +12 % » sans dénominateur est la faute même
+ * que ce ticket corrige ailleurs.
+ */
+function Variation({
+  actuel,
+  precedent,
+  tronquee,
+}: Readonly<{ actuel: number; precedent: number | null; tronquee: boolean; jours?: number }>) {
+  if (precedent === null) return null;
+  const texte = formatVariation(variationPct(actuel, precedent));
+  if (texte === null) return null;
+  return (
+    <div
+      className="supervision-kpi-sub supervision-kpi-sub--variation"
+      title={
+        tronquee
+          ? "Comparé à la MÊME fraction de la période précédente : comparer une période entamée à une période complète ne dirait que le temps restant."
+          : "Comparé à la période précédente complète."
+      }
+    >
+      {`${texte} vs période précédente${tronquee ? " (à ce stade)" : ""}`}
+    </div>
+  );
+}
+
+function KpiCards({
+  totals,
+  precedent,
+  tronquee,
+}: Readonly<{ totals: UsageStats["totals"]; precedent: UsageStats["totals"] | null; tronquee: boolean }>) {
   const pct = orchPct(totals);
   return (
     <div className="supervision-kpi-grid">
       <div className="panel supervision-kpi-card">
         <div className="panel__title">Conversations</div>
         <div className="supervision-kpi-value">{totals.conversations}</div>
+        <Variation actuel={totals.conversations} precedent={precedent?.conversations ?? null} tronquee={tronquee} />
       </div>
       <div className="panel supervision-kpi-card">
         <div className="panel__title">Tours</div>
         <div className="supervision-kpi-value">{totals.tours}</div>
+        <Variation actuel={totals.tours} precedent={precedent?.tours ?? null} tronquee={tronquee} />
         <div className="supervision-kpi-sub">
           {pct !== null ? `dont orchestration : ${totals.orchTours} (${Math.round(pct)} %)` : "dont orchestration : —"}
         </div>
       </div>
       <div className="panel supervision-kpi-card">
-        <div className="panel__title">Contexte moyen</div>
+        {/* T-067 — MÉDIANE de l'occupation réelle du contexte, plus la moyenne
+            des `promptTokens` du SDK : ceux-ci excluent le cache, et le KPI
+            annonçait 6 tokens. Médiane et non moyenne : la distribution est
+            trop étalée pour qu'une moyenne décrive un tour réel. */}
+        <div className="panel__title" title="Médiane de l'occupation réelle de la fenêtre de contexte (cache compris)">
+          Contexte médian
+        </div>
         <div className="supervision-kpi-value">
-          {totals.avgPromptTokens !== null ? formatTokens(Math.round(totals.avgPromptTokens)) : "—"}
+          {totals.contexteMedian !== null ? formatTokens(totals.contexteMedian) : "—"}
         </div>
       </div>
       <div className="panel supervision-kpi-card">
         <div className="panel__title">Tokens totaux</div>
         <div className="supervision-kpi-value">{formatTokens(totals.totalTokens)}</div>
+        <Variation actuel={totals.totalTokens} precedent={precedent?.totalTokens ?? null} tronquee={tronquee} />
       </div>
     </div>
   );
@@ -280,7 +386,30 @@ function formatUsd(v: number): string {
   return `${v.toFixed(2)} $`;
 }
 
-function RoutagePanel({ routage, totalTours }: Readonly<{ routage: UsageRoutage | null; totalTours: number }>) {
+/**
+ * T-068 — les deux moitiés de la part hors facturation, nommées. « abonnement
+ * + modèles locaux » laissait croire à deux gratuités équivalentes : la
+ * première se paie en quota, la seconde ne se paie pas du tout.
+ */
+function libelleHorsFacturation(routage: UsageRoutage): string {
+  const abo = routage.partAbonnementPct;
+  const local = routage.partLocalPct;
+  // Sidecar antérieur : les deux moitiés sont absentes, on garde l'ancien
+  // libellé plutôt que d'afficher « 0 % » pour une donnée non servie.
+  if (abo === null && local === null) return "abonnement + modèles locaux";
+  return `abonnement ${Math.round(abo ?? 0)} % (quota) · local ${Math.round(local ?? 0)} %`;
+}
+
+/** Au-delà de 80 % de la fenêtre 5 h, la saturation cesse d'être théorique. */
+function quotaAlerte(pct: number | null): boolean {
+  return pct !== null && pct >= 80;
+}
+
+function RoutagePanel({
+  routage,
+  totalTours,
+  picCinqHeuresPct,
+}: Readonly<{ routage: UsageRoutage | null; totalTours: number; picCinqHeuresPct: number | null }>) {
   // Plafond configuré (config locale, best effort) : `undefined` = pas encore
   // lu, `null` = sans plafond.
   const [plafond, setPlafond] = useState<number | null | undefined>(undefined);
@@ -327,12 +456,32 @@ function RoutagePanel({ routage, totalTours }: Readonly<{ routage: UsageRoutage 
                 {autoPct !== null ? `${autoPct} % des ${totalTours} tours` : "aucun tour sur la période"}
               </div>
             </div>
+            {/* T-068 — l'indicateur s'appelait « Part à coût nul » et comptait des
+                DOLLARS : il affichait 98 % de gratuité pendant que la fenêtre 5 h
+                saturait à 104 %. Un tour d'abonnement est gratuit pour le
+                portefeuille et coûteux pour le quota — la seule ressource rare
+                ici. Le chiffre reste (il n'est pas faux, il est partiel), mais il
+                est nommé pour ce qu'il mesure, ventilé en ses deux moitiés, et
+                mis EN FACE de la saturation qu'il masquait. */}
             <div className="supervision-kpi-card">
-              <div className="panel__title">Part à coût nul</div>
+              <div
+                className="panel__title"
+                title="Tours sans facturation API : abonnement Claude et modèles locaux. Gratuit en dollars — l'abonnement, lui, se paie en quota."
+              >
+                Part hors facturation
+              </div>
               <div className="supervision-kpi-value">
                 {routage.partCoutNulPct !== null ? `${Math.round(routage.partCoutNulPct)} %` : "—"}
               </div>
-              <div className="supervision-kpi-sub">abonnement + modèles locaux</div>
+              <div className="supervision-kpi-sub">{libelleHorsFacturation(routage)}</div>
+              <div
+                className={`supervision-kpi-sub${quotaAlerte(picCinqHeuresPct) ? " supervision-kpi-sub--alerte" : ""}`}
+                title="Pic de la fenêtre 5 h sur la période affichée : c'est LUI qui déclenche les refus, pas la moyenne."
+              >
+                {picCinqHeuresPct !== null
+                  ? `pic quota 5 h : ${Math.round(picCinqHeuresPct)} %`
+                  : "pic quota 5 h : pas de relevé"}
+              </div>
             </div>
             {/* S3 — la dépense RÉELLE de la période. « Débord du mois » ne compte
                 que la fraction routée automatiquement : un tour OpenRouter choisi
@@ -356,7 +505,18 @@ function RoutagePanel({ routage, totalTours }: Readonly<{ routage: UsageRoutage 
 
           <div className="supervision-routage-lists">
             <div>
-              <div className="panel__title">Répartition par tier</div>
+              {/* T-075 — le dénominateur, faute de quoi cette liste se lit
+                  comme une description de TOUTE l'activité alors qu'elle ne
+                  décrit que la fraction routée automatiquement (4,3 % des
+                  tours au moment du constat). */}
+              <div className="panel__title">
+                Répartition par tier
+                <span className="supervision-routage-denominateur">
+                  {totalTours > 0
+                    ? ` — ${routage.toursAuto} tour${routage.toursAuto > 1 ? "s" : ""} routé${routage.toursAuto > 1 ? "s" : ""} sur ${totalTours}`
+                    : ""}
+                </span>
+              </div>
               {tiers.length === 0 ? (
                 <p className="empty-hint">Aucun tour routé sur la période.</p>
               ) : (
@@ -371,7 +531,14 @@ function RoutagePanel({ routage, totalTours }: Readonly<{ routage: UsageRoutage 
               )}
             </div>
             <div>
-              <div className="panel__title">Mix intra-abonnement</div>
+              <div className="panel__title">
+                Mix intra-abonnement
+                <span className="supervision-routage-denominateur">
+                  {routage.partAbonnementPct !== null && totalTours > 0
+                    ? ` — ${Math.round(routage.partAbonnementPct)} % des ${totalTours} tours`
+                    : ""}
+                </span>
+              </div>
               {routage.mixAbo.length === 0 ? (
                 <p className="empty-hint">Aucun tour abonnement sur la période.</p>
               ) : (
@@ -388,207 +555,6 @@ function RoutagePanel({ routage, totalTours }: Readonly<{ routage: UsageRoutage 
           </div>
 
           <p className="empty-hint">Estimations d'après le journal local — rien n'est envoyé à l'extérieur.</p>
-        </>
-      )}
-    </section>
-  );
-}
-
-/* ---------- Abonnement Claude — utilisation hebdomadaire ---------- */
-
-interface SevenDayPoint {
-  ts: string;
-  pct: number;
-}
-
-function extractSevenDayPct(snap: ClaudeWindowSnapshot): number | null {
-  // Le nommage de cette fenêtre n'est pas garanti à 100 % par l'API
-  // expérimentale (voir docs/protocol.md § usage.claude) — la clé attendue
-  // est `seven_day`, tolérance simple si absente.
-  const w = snap.windows.seven_day;
-  return w ? w.utilization : null;
-}
-
-interface WeekSummary {
-  key: string;
-  label: string;
-  max: number;
-  enCours: boolean;
-}
-
-/**
- * Échelle de couleur INVERSÉE par rapport à une jauge de risque : la cible est
- * 100 % — l'abonnement est payé, le sous-consommer est le gaspillage. Rouge =
- * semaine très en dessous de la cible, turquoise = cible atteinte.
- */
-function weekColor(pct: number): string {
-  if (pct >= 90) return "var(--status-ok)";
-  if (pct >= 70) return "var(--neon-cyan)";
-  if (pct >= 40) return "var(--status-warn)";
-  return "var(--status-error)";
-}
-
-/**
- * Utilisation d'une semaine = PIC atteint par la fenêtre glissante 7 jours
- * pendant cette semaine ISO. La fenêtre n'est pas calée sur le lundi : son pic
- * hebdomadaire reste le meilleur proxy de « ce que j'ai consommé cette
- * semaine-là », et c'est aussi lui qui déclenche la saturation.
- */
-function summarizeByIsoWeek(points: SevenDayPoint[]): WeekSummary[] {
-  const map = new Map<string, number>();
-  for (const p of points) {
-    const d = new Date(p.ts);
-    if (Number.isNaN(d.getTime())) continue;
-    const key = isoWeekKey(d);
-    map.set(key, Math.max(map.get(key) ?? 0, p.pct));
-  }
-  const courante = isoWeekKey(new Date());
-  return Array.from(map.entries())
-    .map(([key, max]) => ({
-      key,
-      label: key.slice(key.indexOf("-") + 1),
-      max,
-      enCours: key === courante,
-    }))
-    .sort((a, b) => (a.key < b.key ? -1 : 1));
-}
-
-const WEEK_H = 260;
-const WEEK_BAR_W = 44;
-const WEEK_GAP = 18;
-/** Marge au-dessus des barres : la valeur en % s'y écrit. */
-const WEEK_TOP = 26;
-/** Marge sous les barres : l'étiquette de semaine s'y écrit. */
-const WEEK_BOTTOM = 24;
-/** Colonne de droite réservée à la légende « 100 % » de la ligne repère. */
-const WEEK_AXIS_W = 52;
-/** Plafond d'affichage au-delà de 100 % : un peu de marge visuelle pour la ligne repère. */
-const WEEK_CEIL = 120;
-/**
- * Largeur totale visée : celle de la légende sous le graphe — au-delà, on
- * n'affiche que les semaines les plus récentes plutôt que d'étaler l'encart.
- */
-const WEEK_CHART_W = 620;
-const WEEKS_SHOWN = Math.floor((WEEK_CHART_W - WEEK_AXIS_W + WEEK_GAP) / (WEEK_BAR_W + WEEK_GAP));
-
-function ClaudeWeeklyChart({ weeks }: Readonly<{ weeks: WeekSummary[] }>) {
-  const barsW = weeks.length * (WEEK_BAR_W + WEEK_GAP) - WEEK_GAP;
-  const width = Math.max(barsW, 160) + WEEK_AXIS_W;
-  const yFor = (pct: number) =>
-    WEEK_TOP + WEEK_H - (Math.min(WEEK_CEIL, Math.max(0, pct)) / WEEK_CEIL) * WEEK_H;
-  const y100 = yFor(100);
-  return (
-    <div className="supervision-chart-wrap">
-      <svg
-        width={width}
-        height={WEEK_TOP + WEEK_H + WEEK_BOTTOM}
-        role="img"
-        aria-label="Utilisation hebdomadaire de l'abonnement Claude, en pourcentage de la fenêtre 7 jours"
-      >
-        <line x1={0} x2={width} y1={y100} y2={y100} className="supervision-line-ref" />
-        <text x={width} y={y100 - 6} textAnchor="end" className="supervision-week-axis">
-          cible 100 %
-        </text>
-        {weeks.map((w, i) => {
-          const y = yFor(w.max);
-          return (
-            <g key={w.key} transform={`translate(${i * (WEEK_BAR_W + WEEK_GAP)},0)`}>
-              <title>{`${w.key} — ${Math.round(w.max)} % de la fenêtre 7 jours${w.enCours ? " (semaine en cours)" : ""}`}</title>
-              <rect
-                x={0}
-                y={y}
-                width={WEEK_BAR_W}
-                height={WEEK_TOP + WEEK_H - y}
-                rx={3}
-                style={{ fill: weekColor(w.max), opacity: w.enCours ? 0.55 : 1 }}
-              />
-              <text
-                x={WEEK_BAR_W / 2}
-                y={Math.max(16, y - 8)}
-                textAnchor="middle"
-                className="supervision-week-value"
-                style={{ fill: weekColor(w.max) }}
-              >
-                {Math.round(w.max)} %
-              </text>
-              <text
-                x={WEEK_BAR_W / 2}
-                y={WEEK_TOP + WEEK_H + 17}
-                textAnchor="middle"
-                className="supervision-week-label"
-              >
-                {w.label}
-                {w.enCours ? " ·" : ""}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
-const CLAUDE_HISTORY_DAYS = 180;
-
-function ClaudeSubscriptionPanel() {
-  const [snapshots, setSnapshots] = useState<ClaudeWindowSnapshot[] | null>(null);
-  const [errored, setErrored] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    usageClaudeHistory(CLAUDE_HISTORY_DAYS)
-      .then((snaps) => {
-        if (!cancelled) setSnapshots(snaps);
-      })
-      .catch(() => {
-        if (!cancelled) setErrored(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const points = useMemo(() => {
-    if (!snapshots) return [];
-    const out: SevenDayPoint[] = [];
-    for (const s of snapshots) {
-      const pct = extractSevenDayPct(s);
-      if (pct !== null) out.push({ ts: s.ts, pct });
-    }
-    return out;
-  }, [snapshots]);
-
-  const weeks = useMemo(() => summarizeByIsoWeek(points), [points]);
-
-  return (
-    <section className="panel">
-      <div className="panel__title">Abonnement Claude — utilisation hebdomadaire</div>
-      {snapshots === null && !errored && <p className="empty-hint">Chargement…</p>}
-      {errored && <p className="empty-hint empty-hint--error">Historique indisponible (sidecar injoignable ?).</p>}
-      {snapshots !== null && !errored && weeks.length === 0 && (
-        <p className="empty-hint">Pas encore d'historique — il se construit au fil de l'usage.</p>
-      )}
-      {weeks.length > 0 && (
-        <>
-          <ClaudeWeeklyChart weeks={weeks.slice(-WEEKS_SHOWN)} />
-          <div className="supervision-hist-legend">
-            <span>
-              <i className="supervision-legend-dot supervision-legend-dot--ok" /> ≥ 90 %
-            </span>
-            <span>
-              <i className="supervision-legend-dot supervision-legend-dot--cyan" /> 70–89 %
-            </span>
-            <span>
-              <i className="supervision-legend-dot supervision-legend-dot--warn" /> 40–69 %
-            </span>
-            <span>
-              <i className="supervision-legend-dot supervision-legend-dot--error" /> &lt; 40 %
-            </span>
-          </div>
-          <p className="empty-hint">
-            Semaine = pic de la fenêtre glissante 7 jours ; cible 100 % (l'abonnement est payé, le rouge signale le
-            sous-usage). Semaine en cours (·) encore partielle, barre estompée.
-          </p>
         </>
       )}
     </section>
@@ -613,6 +579,10 @@ export function SupervisionPage() {
   const [anchor, setAnchor] = useState<string>(todayLocalStr());
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [trend, setTrend] = useState<UsageBucket[]>([]);
+  // T-075 — mêmes agrégats sur la période précédente COMPARABLE. `null` tant
+  // qu'ils ne sont pas là, ou si la requête échoue : une comparaison absente
+  // se tait, elle n'invente pas un « = ».
+  const [precedent, setPrecedent] = useState<UsageStats | null>(null);
   const [loadError, setLoadError] = useState(false);
 
   const periode = useMemo(() => periodRange(bucket, anchor), [bucket, anchor]);
@@ -621,11 +591,23 @@ export function SupervisionPage() {
   // période qui court jusqu'à aujourd'hui (ou au-delà : mois entamé) est la
   // dernière navigable.
   const atToday = periode.to >= todayLocalStr();
+  // Chargé UNE fois pour la page : l'encart Abonnement le dessine, l'encart
+  // Routage en tire son signal de rareté (T-068).
+  const histo = useHistoriqueAbonnement();
+  const picCinqHeures = useMemo(
+    () => picFenetreSurPeriode(histo.snapshots, "five_hour", periode),
+    [histo.snapshots, periode],
+  );
 
-  // Deux requêtes : la période sélectionnée porte TOUS les encarts (KPI,
+  // T-075 — la période précédente, tronquée à l'avancement de la courante :
+  // comparer trois jours à sept produirait un « −57 % » qui ne dit rien.
+  const comparable = useMemo(() => periodePrecedenteComparable(bucket, anchor), [bucket, anchor]);
+
+  // Trois requêtes : la période sélectionnée porte TOUS les encarts (KPI,
   // modèles, projets, routage), la fenêtre du cran au-dessus ne sert qu'aux
-  // courbes. Les buckets de cette seconde fenêtre ne suffiraient pas aux
-  // encarts : ils ne portent ni modèles, ni projets, ni routage.
+  // courbes, la troisième ne sert qu'aux comparaisons. Les buckets de la
+  // deuxième ne suffiraient pas aux encarts : ils ne portent ni modèles, ni
+  // projets, ni routage.
   useEffect(() => {
     let cancelled = false;
     setLoadError(false);
@@ -645,6 +627,23 @@ export function SupervisionPage() {
       cancelled = true;
     };
   }, [periode, tendance, bucket]);
+
+  // Requête SÉPARÉE, et c'est délibéré : l'échec d'une comparaison ne doit pas
+  // vider la page. Elle se tait, le reste s'affiche.
+  useEffect(() => {
+    let cancelled = false;
+    setPrecedent(null);
+    usageStats(comparable.periode.from, comparable.periode.to, bucket)
+      .then((p) => {
+        if (!cancelled) setPrecedent(p);
+      })
+      .catch(() => {
+        /* comparaison indisponible : les cartes s'affichent sans delta */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [comparable, bucket]);
 
   // L'ancre est CONSERVÉE en changeant de granularité : depuis le 3 juillet en
   // « Jour », « Semaine » montre la semaine du 3 juillet — pas un retour brutal
@@ -677,29 +676,66 @@ export function SupervisionPage() {
 
       {stats && (
         <>
-          <KpiCards totals={stats.totals} />
-          {/* Les quatre mêmes indicateurs, en courbes, sur le cran au-dessus. */}
-          <SupervisionCourbes
-            bucket={bucket}
-            buckets={trend}
-            highlight={periode.from}
-            titre={COURBES_TITRE[bucket](anchor)}
-          />
-          <div className="panels">
-            {/* S2 — répartition par projet (Chat compris), part autonome incluse. */}
-            <ProjetsPanel parProjet={stats.parProjet} totals={stats.totals} />
-            <ModelsPanel models={stats.models} />
-          </div>
-          <div className="panels">
-            {/* R3 — encart « Routage » : part auto, tiers, coût nul, mix abo, débord vs plafond. */}
-            <RoutagePanel routage={stats.routage} totalTours={stats.totals.tours} />
-            <ClaudeSubscriptionPanel />
-          </div>
+          {/* Neuf. Jamais un coût sans un signal de qualité en regard : la
+              délégation et la concentration voisinent avec la fiabilité et le
+              routage, pas avec des totaux. */}
+          <Zone ton="sobriete" titre="Sobriété" quand="Une fois par semaine">
+            <div className="panels">
+              <PyramidePanel sobriete={stats.sobriete} totalTours={stats.totals.tours} />
+              <DelegationPanel sobriete={stats.sobriete} />
+              <ConcentrationPanel sobriete={stats.sobriete} />
+            </div>
+            <div className="panels">
+              <FiabilitePanel sobriete={stats.sobriete} totalTours={stats.totals.tours} />
+              {/* R3 — part auto, tiers, coût nul, mix abo, débord vs plafond. */}
+              <RoutagePanel
+                routage={stats.routage}
+                totalTours={stats.totals.tours}
+                picCinqHeuresPct={picCinqHeures}
+              />
+              {/* T-074 — la seule preuve qu'un routage est BON, pas seulement bon marché. */}
+              <EscaladePanel escaladeTours={stats.escaladeTours} />
+            </div>
+          </Zone>
+
+          {/* L'existant, réordonné. Rien n'y change de calcul. */}
+          <Zone ton="historique" titre="Historique et répartitions" quand="À la demande">
+            <KpiCards
+              totals={stats.totals}
+              precedent={precedent?.totals ?? null}
+              tronquee={comparable.tronquee}
+            />
+            {/* Les quatre mêmes indicateurs, en courbes, sur le cran au-dessus. */}
+            <SupervisionCourbes
+              bucket={bucket}
+              buckets={trend}
+              highlight={periode.from}
+              titre={COURBES_TITRE[bucket](anchor)}
+            />
+            <div className="panels">
+              {/* S2 — répartition par projet (Chat compris), part autonome incluse. */}
+              <ProjetsPanel parProjet={stats.parProjet} totals={stats.totals} />
+              <ModelsPanel models={stats.models} />
+            </div>
+            <ActivitePanel sobriete={stats.sobriete} />
+          </Zone>
+
+          {/* L'abonnement ferme la page : c'est un état, pas une analyse — on y
+              descend pour vérifier, pas pour comprendre. */}
+          <Zone ton="abonnement" titre="Utilisation abonnement" quand="Pour vérifier">
+            <div className="panels">
+              {/* T-072 — les trois devises jamais additionnées, puis le rythme
+                  de combustion : « est-ce que je tape le mur avant ce soir ? » */}
+              <TroisDevisesPanel snapshots={histo.snapshots} routage={stats.routage} sobriete={stats.sobriete} />
+              <RythmeQuotaPanel snapshots={histo.snapshots} />
+            </div>
+            <ClaudeSubscriptionPanel snapshots={histo.snapshots} errored={histo.errored} />
+          </Zone>
         </>
       )}
 
       {/* Sans statistiques, l'encart abonnement reste seul : il ne dépend pas d'elles. */}
-      {!stats && <ClaudeSubscriptionPanel />}
+      {!stats && <ClaudeSubscriptionPanel snapshots={histo.snapshots} errored={histo.errored} />}
     </div>
   );
 }

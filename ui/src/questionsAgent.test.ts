@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  aDuContexte,
   composeAskMessage,
   effectiveAnswer,
   effectiveAnswers,
@@ -44,6 +45,17 @@ describe("parseAskQuestions — défensif : une modale qui plante bloque le tour
     expect(parseAskQuestions(null)).toEqual([]);
     expect(parseAskQuestions({ questions: "non" })).toEqual([]);
     expect(parseAskQuestions({ questions: [{ question: "" }, { pas: "une question" }, 42] })).toEqual([]);
+  });
+
+  it("le contexte joint est repris tel quel ; absent ou vide, la clé n'existe pas (T-089)", () => {
+    const [avec] = parseAskQuestions({
+      questions: [{ question: "C'est quoi ce dossier ?", context: "3F4A.mov  210 Mo\n8B2C.mov  188 Mo" }],
+    });
+    expect(avec.context).toBe("3F4A.mov  210 Mo\n8B2C.mov  188 Mo");
+    const [sans] = parseAskQuestions({ questions: [{ question: "Q ?", context: "" }] });
+    expect("context" in sans).toBe(false);
+    const [difforme] = parseAskQuestions({ questions: [{ question: "Q ?", context: { pas: "une chaîne" } }] });
+    expect("context" in difforme).toBe(false);
   });
 
   it("une option sans label disparaît, la question survit", () => {
@@ -134,5 +146,13 @@ describe("permissionTitle", () => {
 
   it("outil inconnu : question générique, jamais de plantage sur l'input", () => {
     expect(permissionTitle(item("OutilMystere", null))).toBe("Autoriser OutilMystere ?");
+  });
+});
+
+describe("aDuContexte (T-145)", () => {
+  it("vrai dès qu'une question porte un contexte, faux sinon", () => {
+    expect(aDuContexte([question("a"), question("b")])).toBe(false);
+    expect(aDuContexte([question("a"), question("b", { context: "| x |\n|---|\n| 1 |" })])).toBe(true);
+    expect(aDuContexte([])).toBe(false);
   });
 });

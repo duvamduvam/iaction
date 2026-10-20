@@ -25,9 +25,9 @@ import {
   handleOllamaPs,
   handleOllamaUnload,
   handleProvidersSet,
-  handleUsageCredits,
   type EngineEmitter,
 } from "./engine.js";
+import { handleUsageCredits } from "./creditsFournisseur.js";
 import {
   handleClaudeAbort,
   handleClaudeCommands,
@@ -40,6 +40,7 @@ import {
   handleClaudeUsageInit,
 } from "./claude.js";
 import { handleClaudeSessionTitles } from "./claudeSessionTitles.js";
+import { handleClaudeAgents, handleClaudeForkSession } from "./sessionsClaude.js";
 import { isNonEmptyString, isPlainObject } from "./base.js";
 import { migrerDepuisAncienNom } from "./appPaths.js";
 import { handleContextCompact } from "./context.js";
@@ -53,7 +54,8 @@ import { handleMcpSecretDelete, handleMcpSecretSet, handleMcpSecretsList } from 
 import { handleProjectEnsureDoc } from "./projectDoc.js";
 import { handleNeutralAbort, handleNeutralPermission, handleNeutralStart } from "./neutralAgent.js";
 import { handleRouterRoute, handleRouterSet } from "./router.js";
-import { handleUsageClaudeHistory, handleUsageStats } from "./usageStats.js";
+import { handleUsageStats } from "./usageStats.js";
+import { handleUsageClaudeHistory } from "./fenetresAbonnement.js";
 import {
   handleAgentsDelete,
   handleAgentsList,
@@ -281,6 +283,12 @@ async function dispatch(
         break;
       case "claude.sessionTitles":
         await handleClaudeSessionTitles(id, params, engineEmitter);
+        break;
+      case "claude.agents":
+        await handleClaudeAgents(id, params, engineEmitter);
+        break;
+      case "claude.forkSession":
+        await handleClaudeForkSession(id, params, engineEmitter);
         break;
       // T-023 — `usage.openrouter` reste accepté : renommer une méthode ne
       // doit pas casser une interface qui tourne. L'ancien nom part quand

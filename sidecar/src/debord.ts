@@ -12,7 +12,8 @@
  * elle est INJECTÉE ici à chaque décision, ce module ne garde aucun état.
  */
 
-import { autoDebordCostUsdThisMonth, isLocalProviderId, readLatestClaudeWindows } from "./usageStats.js";
+import { autoDebordCostUsdThisMonth, isLocalProviderId } from "./usageStats.js";
+import { readLatestClaudeWindows } from "./fenetresAbonnement.js";
 import { getProvider } from "./engine.js";
 import type { RouteTarget, RoutingTable } from "./router.js";
 

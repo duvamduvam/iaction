@@ -6,15 +6,16 @@
 //! (lecture /proc pour CPU/RAM, `nvidia-smi` optionnel pour le GPU).
 
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
+use tauri::AppHandle;
 
-use crate::open_external::{hide_console_window, prepare_detached};
+use crate::gpu_probe::{self, JournalGpu};
+use crate::open_external::prepare_detached;
+use crate::sidecar;
 
 /// Émulateurs de terminal essayés dans l'ordre. Le répertoire de travail est
 /// donné via `current_dir` (portable : aucun flag spécifique nécessaire).
@@ -76,6 +77,14 @@ pub struct SystemStats {
     /// Température du GPU en °C — même source que les autres champs GPU
     /// (`nvidia-smi`), donc `None` dès qu'il est absent ou muet.
     pub gpu_temp_c: Option<f64>,
+    /// Cause verbatim (stderr + code de sortie) du DERNIER échec de
+    /// `nvidia-smi` — uniquement quand le binaire EXISTE mais échoue (pilote
+    /// qui recharge, carte occupée, mismatch NVML…). `None` en cadence
+    /// nominale (mesures présentes) et quand `nvidia-smi` est simplement
+    /// absent du poste : l'absence de carte n'est pas une panne (T-129).
+    /// Permet à l'en-tête de dire POURQUOI le groupe GPU ne s'affiche plus,
+    /// au lieu de le faire disparaître sans laisser de trace.
+    pub gpu_indisponible: Option<String>,
     /// Température du paquet processeur en °C, lue dans /sys/class/hwmon —
     /// None si aucun capteur exploitable (autre OS, machine virtuelle…).
     pub cpu_temp_c: Option<f64>,
@@ -136,71 +145,10 @@ fn mem_mb() -> (u64, u64) {
     (total.saturating_sub(available), total)
 }
 
-/// `nvidia-smi` est-il introuvable sur ce poste ? Verrouillé au premier échec de
-/// SPAWN, et plus jamais relâché de la session.
-///
-/// Sans cette mémoire, une machine sans carte NVIDIA — le cas de la majorité des
-/// postes — tentait de lancer un binaire absent toutes les 5 secondes, pour le
-/// même verdict à chaque fois. C'est du bruit pur : le pilote n'apparaîtra pas en
-/// cours de session.
-///
-/// Ne verrouille QUE sur `NotFound`. Un `nvidia-smi` présent mais en échec (code
-/// de retour non nul, sortie muette) reste réinterrogé : ce peut être un pilote
-/// qui se recharge ou une carte momentanément occupée, et la sonde doit se
-/// rétablir toute seule.
-static NVIDIA_SMI_INTROUVABLE: AtomicBool = AtomicBool::new(false);
-
-fn gpu_stats() -> (Option<f64>, Option<u64>, Option<u64>, Option<f64>) {
-    if NVIDIA_SMI_INTROUVABLE.load(Ordering::Relaxed) {
-        return (None, None, None, None);
-    }
-    let mut cmd = Command::new("nvidia-smi");
-    cmd.args([
-        "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
-        "--format=csv,noheader,nounits",
-    ]);
-    // Pas de prepare_detached : on VEUT la sortie (process court, non interactif).
-    // Mais pas de fenêtre pour autant : `nvidia-smi.exe` est un programme console,
-    // et sans ce masquage Windows lui ouvrait un conhost à CHAQUE tick de la sonde
-    // — une fenêtre noire qui clignotait toutes les 5 secondes tant que l'app
-    // tournait (signalé le 2026-08-26). La sortie reste capturée par `output()`.
-    hide_console_window(&mut cmd);
-    let output = match cmd.output() {
-        Ok(output) => output,
-        Err(err) => {
-            if err.kind() == ErrorKind::NotFound {
-                NVIDIA_SMI_INTROUVABLE.store(true, Ordering::Relaxed);
-            }
-            return (None, None, None, None);
-        }
-    };
-    if !output.status.success() {
-        return (None, None, None, None);
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    // Première ligne = premier GPU (multi-GPU : hors périmètre v1).
-    let Some(line) = text.lines().next() else {
-        return (None, None, None, None);
-    };
-    let parts: Vec<&str> = line.split(',').map(str::trim).collect();
-    // Le garde reste à 3, PAS à 4 : la température est lue seulement si la
-    // colonne est là. Un pilote qui ne connaîtrait pas `temperature.gpu` ne
-    // doit pas faire perdre l'utilisation et la mémoire, qui, elles,
-    // marchaient déjà.
-    if parts.len() < 3 {
-        return (None, None, None, None);
-    }
-    let temp = parts
-        .get(3)
-        .and_then(|v| v.parse::<f64>().ok())
-        .and_then(temperature_plausible);
-    (
-        parts[0].parse().ok(),
-        parts[1].parse().ok(),
-        parts[2].parse().ok(),
-        temp,
-    )
-}
+// Sonde GPU : voir `gpu_probe.rs` (extrait de ce fichier, T-129 — repli
+// exponentiel plafonné en cas d'échec de `nvidia-smi`, journalisation une
+// seule fois par cause). Appelée directement via `gpu_probe::gpu_stats()`
+// depuis `system_stats` ci-dessous.
 
 /* ---------- Températures (lecture /sys/class/hwmon) ---------- */
 
@@ -225,7 +173,10 @@ const RAM_HWMON_NAMES: &[&str] = &["spd5118", "jc42"];
 /// Bornes de plausibilité en °C. Hors de ]0, 150[, la lecture est rejetée :
 /// un 0 pile trahit un capteur muet, et au-delà de 150 l'unité n'est pas
 /// celle qu'on croit — mieux vaut ne rien afficher qu'un chiffre faux.
-fn temperature_plausible(celsius: f64) -> Option<f64> {
+///
+/// `pub(crate)` : réutilisée par `gpu_probe` pour la température GPU, seule
+/// donnée de température qui ne transite pas par `/sys/class/hwmon`.
+pub(crate) fn temperature_plausible(celsius: f64) -> Option<f64> {
     (celsius > 0.0 && celsius < 150.0).then_some(celsius)
 }
 
@@ -332,18 +283,39 @@ fn ram_temp() -> Option<f64> {
 
 /// Commande Tauri : instantané CPU/RAM/GPU. Jamais d'erreur pour une sonde
 /// partielle (champ à None/0) — l'encart affiche ce qu'il peut.
+///
+/// `app` ne sert QU'à journaliser un échec ou un rétablissement du GPU (voir
+/// `JournalGpu`, T-129) : la décision elle-même (faut-il journaliser, faut-il
+/// rejouer `nvidia-smi` ce tick) est prise par `gpu_probe::gpu_stats`, pure
+/// et testable sans `AppHandle`.
 #[tauri::command]
-pub fn system_stats() -> SystemStats {
+pub fn system_stats(app: AppHandle) -> SystemStats {
     let (mem_used_mb, mem_total_mb) = mem_mb();
-    let (gpu_pct, gpu_mem_used_mb, gpu_mem_total_mb, gpu_temp_c) = gpu_stats();
+    let sonde = gpu_probe::gpu_stats();
+    match &sonde.journal {
+        JournalGpu::Echec(message) => sidecar::log_app(
+            &app,
+            "error",
+            "nvidia-smi en échec, GPU non mesuré".to_string(),
+            serde_json::json!({ "cause": message }),
+        ),
+        JournalGpu::Retablie => sidecar::log_app(
+            &app,
+            "info",
+            "sonde GPU rétablie après échec".to_string(),
+            serde_json::json!({}),
+        ),
+        JournalGpu::Rien => {}
+    }
     SystemStats {
         cpu_pct: cpu_pct(),
         mem_used_mb,
         mem_total_mb,
-        gpu_pct,
-        gpu_mem_used_mb,
-        gpu_mem_total_mb,
-        gpu_temp_c,
+        gpu_pct: sonde.pct,
+        gpu_mem_used_mb: sonde.mem_used_mb,
+        gpu_mem_total_mb: sonde.mem_total_mb,
+        gpu_temp_c: sonde.temp_c,
+        gpu_indisponible: sonde.indisponible,
         cpu_temp_c: cpu_temp(),
         ram_temp_c: ram_temp(),
     }
@@ -378,26 +350,32 @@ mod tests {
         assert!(used <= total, "used {used} > total {total}");
     }
 
-    /// La sonde GPU doit rendre le MÊME verdict de présence d'un appel à
-    /// l'autre : GPU là = toujours des mesures, GPU absent (runners de CI,
-    /// machines sans NVIDIA) = toujours None. On compare la présence et non les
-    /// valeurs, qui varient légitimement entre deux instants.
-    ///
-    /// C'est ce qui garde honnête le verrou `NVIDIA_SMI_INTROUVABLE` : s'il se
-    /// déclenchait à tort sur un poste équipé, le second appel deviendrait muet
-    /// alors que le premier avait mesuré.
-    #[test]
-    fn gpu_verdict_stable_entre_deux_appels() {
-        let (pct, mem_used, mem_total, _) = gpu_stats();
-        let (pct2, mem_used2, mem_total2, _) = gpu_stats();
-        assert_eq!(pct.is_some(), pct2.is_some());
-        assert_eq!(mem_used.is_some(), mem_used2.is_some());
-        assert_eq!(mem_total.is_some(), mem_total2.is_some());
-    }
+    // Le verdict de présence GPU stable d'un appel à l'autre, et la logique
+    // de repli (échecs consécutifs, journalisation une fois par cause,
+    // plafond du délai, retour à la cadence nominale après succès) sont
+    // testés dans `gpu_probe.rs`, module qui porte désormais cette logique
+    // (extrait de ce fichier pour respecter le cliquet de taille, T-129).
 
     #[test]
     fn stats_ne_paniquent_jamais() {
-        let stats = system_stats();
+        // `system_stats` est la commande Tauri (elle exige un `AppHandle`,
+        // qu'aucune infrastructure de test ne fournit ici) : on rejoue son
+        // corps avec les fonctions pures qui la composent, exactement comme
+        // elle le ferait, pour garder la même couverture (rien ne panique).
+        let (mem_used_mb, mem_total_mb) = mem_mb();
+        let sonde = gpu_probe::gpu_stats();
+        let stats = SystemStats {
+            cpu_pct: cpu_pct(),
+            mem_used_mb,
+            mem_total_mb,
+            gpu_pct: sonde.pct,
+            gpu_mem_used_mb: sonde.mem_used_mb,
+            gpu_mem_total_mb: sonde.mem_total_mb,
+            gpu_temp_c: sonde.temp_c,
+            gpu_indisponible: sonde.indisponible,
+            cpu_temp_c: cpu_temp(),
+            ram_temp_c: ram_temp(),
+        };
         assert!(stats.mem_total_mb >= stats.mem_used_mb);
         // Les températures sont facultatives (aucun capteur = None) : on
         // n'exige que leur plausibilité quand elles sont là.

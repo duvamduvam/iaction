@@ -15,6 +15,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { toMessage } from "./base";
+import { enregistrerTraitantConfigVoix, publierMicroCourant } from "./busMicro";
 import { subscribeReady } from "./sidecar";
 import {
   DEFAULT_SPEECH_CONFIG,
@@ -142,6 +143,19 @@ export function useSpeech(): UseSpeechResult {
     await deleteSpeechKey(kind);
     await pushWithState();
   }
+
+  // T-148 — le menu des périphériques audio du composeur n'a pas accès à ce hook :
+  // il lui demande un patch par le bus (`busMicro.ts`) et lit le micro courant
+  // qu'on y publie. La ref garde le traitant sur le `saveConfig` du DERNIER rendu
+  // (le sien referme sur `config`, qui change).
+  const saveConfigRef = useRef(saveConfig);
+  useEffect(() => {
+    saveConfigRef.current = saveConfig;
+  });
+  useEffect(() => enregistrerTraitantConfigVoix((patch) => saveConfigRef.current(patch)), []);
+  useEffect(() => {
+    publierMicroCourant(config.stt.inputDeviceId);
+  }, [config.stt.inputDeviceId]);
 
   return { config, keyStatus, keyOrigin, errorMessage, saveConfig, saveKey, clearKey };
 }
