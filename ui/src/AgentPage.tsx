@@ -187,6 +187,7 @@ import { useConnaissances } from "./useConnaissances";
 import { useArchivesSessions } from "./useArchivesSessions";
 import { isUnderPath, projectStateFromPersisted, renamedPath } from "./hydratationProjet";
 import { choisirProjetInitial, cleDernierProjet } from "./fenetreProjet";
+import type { RaisonReprise } from "./repriseSession";
 import { etiquetteFenetreCourante, listerProjetsOuverts, poidsProjetsRecents, revendiquerProjet } from "./fenetreClient";
 
 const MAX_OPEN_FILES = 6;
@@ -253,10 +254,9 @@ export interface AgentPageHandle {
    * T-159 — ouvre, dans le projet donné, une NOUVELLE conversation qui reprend
    * `sessionIdCopie` : l'identifiant d'une COPIE de session Claude (jamais de
    * l'originale, voir `claude.forkSession`). Sélectionne le projet au besoin.
-   * `false` si refusée (projet inconnu, tour en cours, projet tenu par une
-   * autre fenêtre) — rien n'est alors créé.
+   * Rend la raison du refus (T-162) ; rien n'est alors créé.
    */
-  reprendreSession: (projectId: string, sessionIdCopie: string, titre: string) => Promise<boolean>;
+  reprendreSession: (projectId: string, sessionIdCopie: string, titre: string) => Promise<RaisonReprise>;
 }
 
 export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function AgentPage(
@@ -2345,15 +2345,15 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     isStreaming: () => streaming,
     focusComposer: () => focusComposer(),
     reprendreSession: async (projectId, sessionIdCopie, titre) => {
-      if (!projects.some((p) => p.id === projectId)) return false;
+      if (!projects.some((p) => p.id === projectId)) return "projet-inconnu";
+      if (streaming) return "tour-en-cours";
       repriseEnAttenteRef.current = { projectId, sessionIdCopie, titre };
       if (!(await selectProject(projectId))) {
         repriseEnAttenteRef.current = null;
-        return false;
+        return "autre-fenetre"; // streaming exclu ci-dessus : seul le refus de revendication reste
       }
-      // Déjà sur ce projet : la sélection ne change rien, on déclenche l'effet à la main.
-      setRepriseTick((t) => t + 1);
-      return true;
+      setRepriseTick((t) => t + 1); // déjà sur ce projet : on déclenche l'effet à la main
+      return "ok";
     },
   }));
 
