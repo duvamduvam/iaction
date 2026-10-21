@@ -21,6 +21,7 @@ import { tachesList, tachesReports } from "./tachesClient";
 import { openTerminal, systemStats, type SystemStats } from "./systemClient";
 import { useProjects } from "./useProjects";
 import type { ProjectConfig } from "./projectAdmin";
+import { attendreDisponible, imageSuivanteNavigateur, type RaisonReprise } from "./repriseSession";
 import { useProviders } from "./useProviders";
 import { useSpeech } from "./useSpeech";
 import { Donut } from "./Donut";
@@ -344,10 +345,18 @@ function App() {
   }
 
   /** T-159 — ouvre dans « Projets » une conversation reprenant la COPIE d'une session Claude du poste. */
-  async function handleReprendreSession(projet: ProjectConfig, sessionIdCopie: string, titre: string): Promise<boolean> {
-    const ok = (await agentPageRef.current?.reprendreSession(projet.id, sessionIdCopie, titre)) ?? false;
-    if (ok) setPage("projects");
-    return ok;
+  async function handleReprendreSession(
+    projet: ProjectConfig,
+    sessionIdCopie: string,
+    titre: string,
+  ): Promise<RaisonReprise> {
+    // T-162 — « Projets » n'est montée qu'à sa première visite : on y bascule, puis on attend son `ref`.
+    if (!agentPageRef.current) setPage("projects");
+    const agent = await attendreDisponible(() => agentPageRef.current, imageSuivanteNavigateur);
+    if (!agent) return "page-indisponible";
+    const raison = await agent.reprendreSession(projet.id, sessionIdCopie, titre);
+    if (raison === "ok") setPage("projects");
+    return raison;
   }
 
   function handleOpenTerminal() {

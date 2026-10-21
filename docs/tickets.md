@@ -101,6 +101,26 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 | T-158 | bug  | P2   | fait   | Playwright MCP ferme le navigateur à chaque fin de réponse de l'agent : une démarche en cours (paiement en attente de carte) est coupée dès que l'agent rend la main |
 | T-159 | feat | P2   | en cours | Panneau « Sessions Claude » : lister les sessions Claude Code du poste, en reprendre une en copie dans IAction, ouvrir claude.ai/code pour les autres machines |
 | T-160 | bug  | P3   | fait   | Prototype avatar : le serveur statique renvoyait le message d'erreur brut au client (CodeQL) et son confinement par préfixe laissait passer un dossier voisin |
+| T-161 | bug  | P2   | ouvert | Ctrl+L sans effet sous Windows (constat utilisateur) — piste : version installée antérieure au repli des panneaux |
+| T-162 | bug  | P2   | fait   | « Reprendre dans IAction » (Sessions Claude) affiche « Reprise refusée » et ne fait rien tant que la page Projets n'a pas été visitée ; quatre causes fondues en un message |
+
+### T-162 — Reprise de session Claude refusée à tort
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21, utilisateur, v0.6.0 sous Windows) : « Reprendre dans IAction » affiche « Reprise refusée : un tour est en cours, ou le projet est ouvert dans une autre fenêtre. La copie existe, relancez la reprise. » et rien ne se passe.
+
+**Cause** : `AgentPage` est dans un `SlotPage` qui ne la monte qu'à la première visite de « Projets ». Fenêtre jamais passée par Projets : `agentPageRef.current` est nul, `handleReprendreSession` rendait `false` et le panneau affichait un message qui accusait un tour en cours ou une autre fenêtre. Au passage, `reprendreSession` fondait en un seul booléen quatre causes (page absente, projet inconnu, tour en cours, projet tenu par une autre fenêtre).
+
+**Fait** : `App.tsx` bascule sur « Projets » si le `ref` est nul et attend son montage (au plus 30 images, sans minuterie). Le booléen devient une raison typée (`RaisonReprise`, `ui/src/repriseSession.ts`) ; le panneau affiche un message propre à chaque cas et journalise chaque refus (`logUi`). Le cas « autre fenêtre » demande d'y faire la reprise. Tests : `ui/src/repriseSession.test.ts`.
+
+### T-161 — Ctrl+L sans effet sous Windows
+
+**Type** bug · **Prio** P2 · **Statut** ouvert · **Créé** 2026-10-20
+
+**Constat** (2026-10-20, utilisateur) : « le Ctrl+L ne fonctionne pas sur Windows ».
+
+**Piste principale** : la dernière version publiée, v0.5.0, ne connaît pas Ctrl+L = replier/déployer les panneaux latéraux. Ce comportement et les panneaux repliables (T-057) sont arrivés après. En v0.5.0, Ctrl+L place seulement le curseur dans la zone de saisie, et n'a aucun effet hors des pages Projets et Chat. Version installée confirmée par l'utilisateur : **v0.5.0**. Reste à vérifier, après installation de la v0.6.0, que Ctrl+L replie et déploie bien les panneaux sous Windows. Si le défaut persiste en v0.6.0, chercher du côté de WebView2 (raccourcis navigateur interceptés avant la page).
 
 ### T-160 — Prototype avatar : message d'erreur brut renvoyé au client
 

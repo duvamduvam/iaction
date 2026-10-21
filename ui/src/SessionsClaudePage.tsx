@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { logUi } from "./journal";
 import type { ProjectConfig } from "./projectAdmin";
 import { ouvrirLienExterne } from "./refFichier";
+import { messageReprise, type RaisonReprise } from "./repriseSession";
 import {
   commandeReprise,
   heureAbsolue,
@@ -30,8 +31,8 @@ import {
 import { claudeAgents, claudeForkSession } from "./sessionsClaudeClient";
 import "./SessionsClaudePage.css";
 
-/** Reprise acceptée = `true` (l'appelant a changé de page) ; refusée = `false` (le motif est affiché par l'appelant). */
-export type ReprendreSession = (projet: ProjectConfig, sessionIdCopie: string, titre: string) => Promise<boolean>;
+/** Reprise acceptée = `"ok"` (l'appelant a changé de page) ; sinon la raison du refus, que ce panneau affiche. */
+export type ReprendreSession = (projet: ProjectConfig, sessionIdCopie: string, titre: string) => Promise<RaisonReprise>;
 
 function messageErreur(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -84,10 +85,13 @@ export function SessionsClaudePage({
     try {
       const copie = await claudeForkSession(session.sessionId, projet.path);
       const titre = `Reprise — ${titreSession(session)}`;
-      if (!(await onReprendre(projet, copie, titre))) {
-        setErreur(
-          "Reprise refusée : un tour est en cours, ou le projet est ouvert dans une autre fenêtre. La copie existe, relancez la reprise.",
-        );
+      const raison = await onReprendre(projet, copie, titre);
+      const message = messageReprise(raison);
+      if (message) {
+        logUi("warn", "ui", "reprise d'une session Claude refusée", {
+          fields: { sessionId: session.sessionId, projet: projet.id, raison },
+        });
+        setErreur(message);
       }
     } catch (err) {
       logUi("error", "ui", "reprise d'une session Claude en échec", {
