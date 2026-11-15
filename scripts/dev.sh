@@ -53,6 +53,15 @@ fi
 
 cd "$(dirname "$0")/.."
 
+# Notification de bureau, quand il y en a une à afficher. Lancé par raccourci
+# clavier ou icône, la sortie standard part dans le journal : sans cela le script
+# est muet (T-060, T-196). Jamais fatale.
+notifier() {
+  if command -v notify-send >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    notify-send "IAction" "$1" || true
+  fi
+}
+
 # ── Une seule session à la fois (T-028) ────────────────────────────────────
 # Relancer ce script alors qu'une session tourne déjà produit une fenêtre
 # MORTE-NÉE, et qui n'en a pas l'air : `tauri dev` lance d'abord la fenêtre,
@@ -69,29 +78,64 @@ if (exec 3<>/dev/tcp/127.0.0.1/1420) 2>/dev/null; then
   exec 3<&- 3>&-
   # T-146 — l'app est en instance unique : relancer son binaire ne démarre pas
   # un second processus, il demande à l'instance en cours d'ouvrir une
-  # nouvelle fenêtre puis s'arrête. On ne refuse donc plus quand l'app tourne
-  # (le binaire de dev est construit) — seul le changement de rendu, qui exige
-  # un vrai redémarrage, garde le refus ci-dessous.
-  if [ "${IACTION_CPU:-0}" != "1" ] && [ -x src-tauri/target/debug/iaction ] \
-     && pgrep -f 'target/debug/iaction' >/dev/null 2>&1; then
-    echo "==> IAction tourne déjà : demande d'une nouvelle fenêtre à l'instance en cours (T-146)." >&2
-    exec src-tauri/target/debug/iaction
+  # nouvelle fenêtre puis s'arrête. On ne refuse donc plus quand l'app tourne —
+  # seul le changement de rendu, qui exige un vrai redémarrage, garde le refus
+  # ci-dessous.
+  #
+  # T-194 — cette demande passe par D-Bus, SANS dépendre du binaire sur disque :
+  # le 2026-11-05, un `rm -rf src-tauri/target` a supprimé le binaire d'une app
+  # vivante, et l'ancienne condition `[ -x binaire ]` faisait retomber sur un
+  # refus qui accusait le port à tort. Le plugin single-instance expose
+  # `ExecuteCallback(argv, cwd)` ; son rappel ignore les arguments et ouvre une
+  # fenêtre (src-tauri/src/lib.rs). Nom, chemin et interface découlent de
+  # l'identifiant `net.duvam.iaction` (tauri.conf.json).
+  if [ "${IACTION_CPU:-0}" != "1" ] && command -v gdbus >/dev/null 2>&1; then
+    dbus_nom="net.duvam.iaction.SingleInstance"
+    if gdbus call --session --dest org.freedesktop.DBus \
+         --object-path /org/freedesktop/DBus \
+         --method org.freedesktop.DBus.NameHasOwner "$dbus_nom" 2>/dev/null | grep -q true; then
+      echo "==> IAction tourne déjà : demande d'une nouvelle fenêtre par D-Bus (T-146, T-194)." >&2
+      if timeout 5 gdbus call --session --dest "$dbus_nom" \
+           --object-path /net/duvam/iaction/SingleInstance \
+           --method org.SingleInstance.DBus.ExecuteCallback '[]' "$PWD" >/dev/null 2>&1; then
+        exit 0
+      fi
+      echo "==> L'instance répond sur D-Bus mais n'a pas ouvert de fenêtre (appel ExecuteCallback en échec)." >&2
+      notifier "L'instance d'IAction ne répond pas à la demande de fenêtre (voir la sortie du script)."
+      exit 1
+    fi
+  fi
+  # Pas d'instance joignable par D-Bus. Si `tauri dev` tourne, on est pendant la
+  # COMPILATION (Vite est déjà levé, le binaire pas encore lancé) : aucune
+  # fenêtre n'existe, et le dire serait faux (T-196, constaté le 2026-11-06).
+  if [ "${IACTION_CPU:-0}" != "1" ] && pgrep -f 'tauri dev' >/dev/null 2>&1 \
+     && ! pgrep -f 'target/debug/iaction' >/dev/null 2>&1; then
+    echo "==> Un lancement est déjà en cours : \`tauri dev\` tourne mais l'application n'a pas encore démarré." >&2
+    if [ ! -e src-tauri/target/debug/iaction ]; then
+      echo "    Le binaire de dev n'existe pas encore : compilation Rust en cours (1 à 2 minutes à froid)." >&2
+    fi
+    echo "    La fenêtre s'ouvrira d'elle-même ; ne relance pas." >&2
+    notifier "Démarrage déjà en cours (compilation, 1 à 2 minutes) : la fenêtre s'ouvrira toute seule."
+    exit 1
+  fi
+  # Application vivante mais injoignable, binaire disparu du disque : c'est le
+  # fait réel derrière T-194, on le nomme au lieu d'accuser le port.
+  if pgrep -f 'target/debug/iaction' >/dev/null 2>&1 && [ ! -e src-tauri/target/debug/iaction ]; then
+    echo "==> Le binaire de dev a disparu du disque (src-tauri/target supprimé ?) alors que l'application tourne," >&2
+    echo "    et elle ne répond pas sur D-Bus : impossible de lui demander une fenêtre. Il faut l'arrêter" >&2
+    echo "    (commande ci-dessous) puis relancer ; le prochain démarrage recompilera tout l'arbre Rust." >&2
   fi
   # Lancé par l'icône du bureau, stderr part dans un fichier que personne ne
   # lit : le refus était un échec muet DE FAIT (T-060). Une notification rend
   # le garde-fou visible là où on clique ; le détail reste sur stderr.
-  if command -v notify-send >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    notify-send "IAction" "Une session de développement tourne déjà — bascule sur la fenêtre ouverte." || true
-  fi
+  notifier "Une session de développement tourne déjà (port 1420) — bascule sur la fenêtre ouverte, ou arrête-la."
   # T-095 — un lancement demandé et refusé se lit comme un lancement FAIT :
   # constaté le 2026-08-28, où le rendu GPU a été « essayé » sans que la fenêtre
   # change, puis conclu sans effet — deux fois. Un refus doit donc nommer ce qui
   # n'a PAS eu lieu, et pas seulement ce qu'il faut faire.
   if [ "${IACTION_CPU:-0}" = "1" ]; then
     echo "==> Le changement de rendu N'A PAS EU LIEU : la fenêtre ouverte garde le sien (voir ci-dessous)." >&2
-    if command -v notify-send >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-      notify-send "IAction" "Changement de rendu non effectué : une session tourne déjà, il faut l'arrêter d'abord." || true
-    fi
+    notifier "Changement de rendu non effectué : une session tourne déjà, il faut l'arrêter d'abord."
   fi
   cat >&2 <<'FIN'
 ==> Une session de développement écoute déjà sur le port 1420.
@@ -118,6 +162,14 @@ fi
 # En développement, on veut voir le backlog VERSIONNÉ du dépôt : on le désigne
 # explicitement, plutôt que de le faire deviner à l'application (c'est
 # exactement la confusion qu'on vient de retirer du produit).
+# T-196 — à froid, cargo recompile tout l'arbre Rust (~84 s mesurées le
+# 2026-11-06) sans aucun signe à l'écran : on le dit dès le départ.
+if [ -e src-tauri/target/debug/iaction ]; then
+  notifier "IAction démarre…"
+else
+  notifier "IAction : compilation en cours, 1 à 2 minutes avant l'ouverture de la fenêtre."
+fi
+
 export IACTION_TICKETS_MD="$PWD/docs/tickets.md"
 
 # ── Le sidecar exécuté doit être celui du dépôt (T-020) ────────────────────

@@ -12,7 +12,7 @@
 
 import { assert, lancer, moduleCompile } from "./harness.mjs";
 
-const { ASK_USER_TOOL_NAME, ANNONCE_QUESTION_INTERACTIVE, composerInstructionSysteme, resumerPalette } =
+const { ASK_USER_TOOL_NAME, ANNONCE_QUESTION_INTERACTIVE, ANNONCE_CHANGER_MODELE, ANNONCE_COMPACTER, composerInstructionSysteme, resumerPalette } =
   await import(moduleCompile("paletteTour.js"));
 
 function serveur(name, tools, status = "connected") {
@@ -90,4 +90,23 @@ await lancer("tour de projet : l'instruction de l'agent S'AJOUTE au preset", asy
   assert(r.type === "preset", "le preset ne doit jamais être remplacé par l'instruction de l'agent");
   assert(r.append.startsWith(agent), `l'agent d'abord : ${r.append}`);
   assert(r.append.includes(ASK_USER_TOOL_NAME), "puis l'annonce de l'outil de question");
+});
+
+/*
+ * T-210 — l'agent écrivait « Opus suffit » ou « lance /compact » au lieu
+ * d'appeler l'outil : chaque outil d'action exposé est annoncé, et SEULEMENT
+ * s'il est exposé (annoncer un outil absent serait le mensonge de T-019).
+ */
+await lancer("outils studio : annoncés quand ils sont exposés, jamais sinon", async () => {
+  const deux = composerInstructionSysteme(null, true, true, { changerModele: true, compacter: true });
+  assert(deux.append.includes(ANNONCE_CHANGER_MODELE) && deux.append.includes(ANNONCE_COMPACTER), `les deux annonces : ${deux.append}`);
+  assert(deux.append.includes("mcp__studio__changer_modele") && deux.append.includes("mcp__studio__compacter"), "noms complets des outils");
+  const verrou = composerInstructionSysteme(null, false, true, { changerModele: false, compacter: true });
+  assert(verrou.append === ANNONCE_COMPACTER, `modèle verrouillé ⇒ compacter seul : ${JSON.stringify(verrou)}`);
+  const sans = composerInstructionSysteme(null, false, true, null);
+  assert(!("append" in sans), `aucun serveur studio ⇒ aucune annonce : ${JSON.stringify(sans)}`);
+  assert(
+    composerInstructionSysteme(null, false, true).append === undefined,
+    "appel historique à trois arguments : inchangé",
+  );
 });

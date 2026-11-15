@@ -36,6 +36,11 @@
  * Clic droit (T-108) : ouvre le même menu contextuel que l'arbre de fichiers
  * (voir menuReference.tsx) — le clic gauche garde sa politique par défaut,
  * le menu propose les autres voies (registre, système, éditeur, copier).
+ *
+ * Copie d'un bloc de code (T-199) : chaque bloc porte un bouton « Copier »,
+ * toujours visible. Le texte vient du DOM (`textContent`), pas de `children` :
+ * le `code` enfant est un élément React, parfois surchargé, et le DOM est
+ * exactement ce que l'utilisateur voit.
  */
 import {
   createContext,
@@ -52,6 +57,7 @@ import {
 } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { copierTexte } from "./copierTexte";
 import { useDossierPersonnel } from "./dossierPersonnel";
 import { ouvrirMenuReference } from "./menuReference";
 import { estReferenceCliquable, ouvrirLienExterne, type ForcageOuverture } from "./refFichier";
@@ -80,6 +86,44 @@ function MarkdownTable({ children }: Readonly<ComponentProps<"table"> & ExtraPro
   return (
     <div className="md__table-wrap">
       <table>{children}</table>
+    </div>
+  );
+}
+
+/** Texte à copier d'un bloc : tel qu'affiché, sans le saut de ligne final que la fence ajoute toujours. */
+export function texteDuBloc(brut: string | null | undefined): string {
+  return (brut ?? "").replace(/\r?\n$/, "");
+}
+
+/** Bloc de code avec bouton « Copier » (T-199). */
+function MarkdownPre({ children }: Readonly<ComponentProps<"pre"> & ExtraProps>) {
+  const bloc = useRef<HTMLPreElement>(null);
+  const minuteur = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [etat, setEtat] = useState<"repos" | "copie" | "echec">("repos");
+
+  useEffect(
+    () => () => {
+      if (minuteur.current !== null) clearTimeout(minuteur.current);
+    },
+    [],
+  );
+
+  async function copier() {
+    if (minuteur.current !== null) clearTimeout(minuteur.current);
+    // T-214 : replis et journal dans copierTexte ; « Échec » seulement si tous ont échoué.
+    setEtat((await copierTexte(texteDuBloc(bloc.current?.textContent))) ? "copie" : "echec");
+    minuteur.current = setTimeout(() => {
+      minuteur.current = null;
+      setEtat("repos");
+    }, 1500);
+  }
+
+  return (
+    <div className="md__code">
+      <pre ref={bloc}>{children}</pre>
+      <button type="button" className="md__copier" aria-label="Copier ce bloc" onClick={() => void copier()}>
+        {etat === "copie" ? "Copié ✓" : etat === "echec" ? "Échec" : "Copier"}
+      </button>
     </div>
   );
 }
@@ -209,7 +253,7 @@ export function closeDanglingFence(content: string): string {
   return content + (content.endsWith("\n") ? "" : "\n") + open.char.repeat(open.len);
 }
 
-const baseComponents: Components = { a: MarkdownLink, table: MarkdownTable };
+const baseComponents: Components = { a: MarkdownLink, table: MarkdownTable, pre: MarkdownPre };
 const componentsWithFileRef: Components = { ...baseComponents, code: MarkdownInlineCode };
 
 /**

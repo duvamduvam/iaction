@@ -32,6 +32,10 @@ import {
 } from "./engine.js";
 import { isNonEmptyString, isPlainObject, readBoundedBody } from "./base.js";
 import { formatChatSearchResults, sanitizeLimit, searchChatHistory } from "./chatHistory.js";
+import { creerOutilsSessionsDistantes } from "./outilsSessionsDistantes.js";
+import { creerOutilUsage } from "./outilUsage.js";
+import type { CompteId } from "./compteClaude.js";
+import type { AskUserBridge } from "./askUser.js";
 import * as journal from "./journal.js";
 import { getEmbeddingsConfig } from "./router.js";
 import { projectDir } from "./appPaths.js";
@@ -443,20 +447,27 @@ export { formatSearchResults };
 // ---------------------------------------------------------------------------
 
 /**
- * Construit le serveur MCP `iaction` d'un projet. Deux outils, indépendants :
+ * Construit le serveur MCP `iaction` d'un projet. Outils :
  *
  * - `search_knowledge` — recherche dans l'index d'embeddings du projet, donc
  *   présent SEULEMENT si cet index existe (spec R5 §3) ;
  * - `search_chat` — recherche dans l'historique de l'onglet « Chat », toujours
  *   présent : il ne dépend d'aucun index, et c'est le seul pont vers des
- *   conversations qui vivent hors du projet (voir chatHistory.ts).
+ *   conversations qui vivent hors du projet (voir chatHistory.ts) ;
+ * - `sessions_distantes_lister` / `session_distante_demander` — toujours
+ *   présents (T-178, outilsSessionsDistantes.ts) ;
+ * - `lire_usage` — toujours présent (T-202, outilUsage.ts) : consommation de
+ *   l'abonnement Claude du compte du tour, lue à la demande de l'agent.
  *
  * `null` en mode faux SDK (tests : le SDK réel ne doit jamais être importé,
  * voir claude.ts::resolveQueryFn) ou si le SDK est indisponible (best effort,
  * journal). Import dynamique : le SDK n'est chargé qu'au besoin, comme dans
  * claude.ts.
  */
-export async function buildKnowledgeMcpServer(cwd: string): Promise<unknown | null> {
+export async function buildKnowledgeMcpServer(
+  cwd: string,
+  options: { demanderUtilisateur?: AskUserBridge; compte?: CompteId; conversationId?: string } = {},
+): Promise<unknown | null> {
   if (process.env.IACTION_FAKE_CLAUDE === "1") {
     return null;
   }
@@ -479,8 +490,13 @@ export async function buildKnowledgeMcpServer(cwd: string): Promise<unknown | nu
         return { content: [{ type: "text" as const, text: formatChatSearchResults(outcome) }] };
       },
     );
+    // T-178 — outils « sessions distantes » : toujours présents (tout tour local, sous-agents compris).
+    // T-185 — `demanderUtilisateur` (tours interactifs seulement) : fenêtres de question sur branchement et permissions distantes.
+    const distants = creerOutilsSessionsDistantes(sdk, z, { demanderUtilisateur: options.demanderUtilisateur, conversationId: options.conversationId }) as typeof chatTool[];
+    // T-202 — consommation de l'abonnement, à la demande : rien n'est injecté dans le prompt.
+    const usageTool = creerOutilUsage(sdk, z, { compte: options.compte }) as typeof chatTool;
     if (!withKnowledge) {
-      return sdk.createSdkMcpServer({ name: "iaction", tools: [chatTool] });
+      return sdk.createSdkMcpServer({ name: "iaction", tools: [chatTool, usageTool, ...distants] });
     }
     const searchTool = sdk.tool(
       "search_knowledge",
@@ -499,7 +515,7 @@ export async function buildKnowledgeMcpServer(cwd: string): Promise<unknown | nu
         };
       },
     );
-    return sdk.createSdkMcpServer({ name: "iaction", tools: [chatTool, searchTool] });
+    return sdk.createSdkMcpServer({ name: "iaction", tools: [chatTool, usageTool, ...distants, searchTool] });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // `warn` : l'agent tourne sans les outils de recherche (connaissances, Chat).

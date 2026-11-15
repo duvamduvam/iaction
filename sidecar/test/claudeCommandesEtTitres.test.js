@@ -1,11 +1,10 @@
 /*
- * claude.commands / claude.sessionTitles
+ * claude.commands
  *
- * T-058 — ces deux méthodes dispatchées par sidecar/src/index.ts n'avaient
- * aucun test de bout en bout par le vrai protocole (sous-processus + JSON
- * Lines) : `claude.commands` n'était exercée qu'EN-PROCESS via
- * `executerClaudeCommands` (claudePur.test.js), et `claude.sessionTitles`
- * n'avait strictement aucun test.
+ * T-058 — cette méthode dispatchée par sidecar/src/index.ts n'avait aucun test
+ * de bout en bout par le vrai protocole (sous-processus + JSON Lines) : elle
+ * n'était exercée qu'EN-PROCESS via `executerClaudeCommands` (claudePur.test.js).
+ * (`claude.sessionTitles` a été retirée avec T-197.)
  *
  * Lancement isolé : node sidecar/test/claudeCommandesEtTitres.test.js
  */
@@ -68,7 +67,7 @@ async function spawnSidecar(extraEnv) {
     try {
       parsed = JSON.parse(line);
     } catch {
-      fail(`stdout du sidecar (claude.commands/sessionTitles) a émis une ligne non-JSON: ${line}`);
+      fail(`stdout du sidecar (claude.commands) a émis une ligne non-JSON: ${line}`);
       return;
     }
     received.push(parsed);
@@ -144,77 +143,7 @@ async function testClaudeCommands() {
   }
 }
 
-/**
- * claude.sessionTitles — best effort, ne lève JAMAIS (docs/protocol.md §
- * claude.sessionTitles). N'a pas de point d'injection (elle importe le SDK
- * réel STATIQUEMENT — voir l'en-tête de sidecar/src/claudeSessionTitles.ts) :
- * IACTION_FAKE_CLAUDE ne s'y applique pas, un vrai sidecar suffit puisque
- * `listSessions` ne fait qu'une lecture disque locale, sans réseau ni tour.
- */
-async function testClaudeSessionTitles() {
-  const { child, send, waitFor, stderrChunks } = await spawnSidecar({});
-  let tmpProject = null;
-  try {
-    tmpProject = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-sessiontitres-project-"));
-
-    // 1. Nominal (chemin court-circuité) : cwd manquant -> {titles:[]} immédiat,
-    // sans jamais appeler le SDK.
-    send({ id: "st1", method: "claude.sessionTitles", params: {} });
-    const doneSt1 = await waitFor(
-      (e) => e.id === "st1" && (e.event === "done" || e.event === "error"),
-      3000,
-      "claude.sessionTitles st1 (cwd manquant)",
-    );
-    assert(
-      doneSt1.event === "done" && JSON.stringify(doneSt1.data.titles) === "[]",
-      `st1 : sans cwd, titles:[] attendu immédiatement, reçu '${doneSt1.event}' ${JSON.stringify(doneSt1.data)}`,
-    );
-
-    // 2. Comportement documenté « ne lève jamais » : cwd valide mais SANS
-    // AUCUNE session Claude connue pour ce dossier -> {titles:[]}, jamais
-    // 'error' (c'est le chemin qui absorbe toute panne de listSessions —
-    // SDK indisponible, cwd inconnu du CLI, aucune session).
-    send({ id: "st2", method: "claude.sessionTitles", params: { cwd: tmpProject } });
-    const doneSt2 = await waitFor(
-      (e) => e.id === "st2" && (e.event === "done" || e.event === "error"),
-      15000,
-      "claude.sessionTitles st2 (cwd sans session connue)",
-    );
-    assert(
-      doneSt2.event === "done" && JSON.stringify(doneSt2.data.titles) === "[]",
-      `st2 : un cwd sans session connue doit renvoyer 'done' {titles:[]}, jamais 'error', reçu '${doneSt2.event}' ${JSON.stringify(doneSt2.data)}`,
-    );
-
-    // 3. Même trajet avec un filtre sessionIds explicite : toujours {titles:[]},
-    // jamais d'erreur (aucune session ne peut correspondre).
-    send({
-      id: "st3",
-      method: "claude.sessionTitles",
-      params: { cwd: tmpProject, sessionIds: ["session-inexistante"] },
-    });
-    const doneSt3 = await waitFor(
-      (e) => e.id === "st3" && (e.event === "done" || e.event === "error"),
-      15000,
-      "claude.sessionTitles st3 (sessionIds filtrant tout)",
-    );
-    assert(
-      doneSt3.event === "done" && JSON.stringify(doneSt3.data.titles) === "[]",
-      `st3 : reçu '${doneSt3.event}' ${JSON.stringify(doneSt3.data)}`,
-    );
-  } catch (err) {
-    if (stderrChunks.length > 0) {
-      console.error("--- stderr (claude.sessionTitles) ---");
-      console.error(stderrChunks.join(""));
-    }
-    throw err;
-  } finally {
-    if (child.exitCode === null) child.kill();
-    if (tmpProject) await fsp.rm(tmpProject, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
 await lancer(
-  "claude.commands / claude.sessionTitles",
+  "claude.commands",
   testClaudeCommands,
-  testClaudeSessionTitles,
 );

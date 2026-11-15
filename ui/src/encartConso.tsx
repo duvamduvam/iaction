@@ -34,7 +34,7 @@
  * après T-087 : ce qui compte comme un relevé, et sous quel nom une fenêtre
  * s'affiche.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { subscribeReady, subscribeStatus } from "./sidecar";
 import {
   releveIndisponible,
@@ -47,7 +47,8 @@ import {
 } from "./consoClient";
 import { stateRead, stateWrite } from "./stateClient";
 import { providersDejaPousses, subscribeProvidersPushed } from "./providersBus";
-import { subscribeUsageChanged } from "./usageBus";
+import { compteActifConso, subscribeCompteActifConso, subscribeUsageChanged } from "./usageBus";
+import { comptesASonder, libelleCompte, useComptesClaude, type CompteClaude } from "./comptesClaude";
 import { Donut } from "./Donut";
 import { armerSilence, libererSilence } from "./cadenceUsage";
 import { memoriserReouverture } from "./reouvertureQuota";
@@ -324,16 +325,44 @@ function OpenrouterUsageBlock({
  */
 interface UsageCache {
   claude: ClaudeUsageSnapshot | null;
+  /** Relevé du second compte (docs/spec-deux-comptes.md) : un cache PAR compte, absent = jamais mesuré. */
+  claudeTeams?: ClaudeUsageSnapshot | null;
   openrouter: OpenrouterUsage | null;
   openrouterRef?: OpenrouterRef | null;
 }
 
+/** Clé du cache disque d'un compte : `claude` reste celle de `perso` (caches d'avant intacts). */
+const cleCache = (compte: CompteClaude): "claude" | "claudeTeams" => (compte === "teams" ? "claudeTeams" : "claude");
+
+type ParCompte<T> = Record<CompteClaude, T>;
+
 export function UsageWidget() {
-  const [claudeSnapshot, setClaudeSnapshot] = useState<ClaudeUsageSnapshot | null>(null);
+  // Les jauges suivent le compte de la session active (usageBus) ; un relevé et
+  // un refus de saturation PAR compte, pour qu'un compte n'écrase jamais l'autre.
+  const [compte, setCompte] = useState<CompteClaude>(compteActifConso);
+  const compteRef = useRef<CompteClaude>(compte);
+  // Chaque compte disponible est sondé à sa cadence, affiché ou non (débord frais, compte peu utilisé qui ne se déconnecte pas).
+  const comptes = useComptesClaude();
+  const aSonderRef = useRef<CompteClaude[]>(comptesASonder(comptes));
+  const sonderTout = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const avant = aSonderRef.current.join();
+    aSonderRef.current = comptesASonder(comptes);
+    if (aSonderRef.current.join() !== avant) sonderTout.current?.();
+  }, [comptes]);
+  // Cache disque : UN objet pour tout le composant — la réponse d'un bouton ↻ et celle d'une sonde y écrivent toutes deux,
+  // sinon la prochaine écriture de l'une rétablirait l'ancien relevé de l'autre.
+  const cacheComp = useRef<UsageCache>({ claude: null, claudeTeams: null, openrouter: null, openrouterRef: null });
+  const [snapshots, setSnapshots] = useState<ParCompte<ClaudeUsageSnapshot | null>>({ perso: null, teams: null });
   // T-059 — dernier refus de saturation connu : distinct du relevé chiffré,
   // il force l'affichage de la fenêtre visée tant qu'il n'a pas été remplacé
   // par un relevé chiffré plus frais (voir `traiterReponseInit`).
-  const [claudeSaturation, setClaudeSaturation] = useState<RefusSaturationClaude | null>(null);
+  const [saturations, setSaturations] = useState<ParCompte<RefusSaturationClaude | null>>({ perso: null, teams: null });
+  const claudeSnapshot = snapshots[compte];
+  const claudeSaturation = saturations[compte];
+  const majSnapshot = (c: CompteClaude, f: (prev: ClaudeUsageSnapshot | null) => ClaudeUsageSnapshot | null) =>
+    setSnapshots((m) => ({ ...m, [c]: f(m[c]) }));
+  const majSaturation = (c: CompteClaude, v: RefusSaturationClaude | null) => setSaturations((m) => ({ ...m, [c]: v }));
   const [openrouterUsage, setOpenrouterUsage] = useState<OpenrouterUsage | null>(null);
   const [openrouterRef, setOpenrouterRef] = useState<OpenrouterRef | null>(null);
   const [openrouterError, setOpenrouterError] = useState(false);
@@ -353,20 +382,22 @@ export function UsageWidget() {
    * suite ; un relevé chiffré normal EFFACE un refus qui serait resté affiché
    * (l'abonnement a repris avant même l'échéance du silence).
    */
-  function traiterReponseInit(snap: ClaudeUsageSnapshot): void {
+  function traiterReponseInit(snap: ClaudeUsageSnapshot, c: CompteClaude): void {
+    // Le silence partagé (lu par le réveil) est celui du compte principal : un refus de l'autre compte ne le touche pas.
     if (snap.saturation) {
-      setClaudeSaturation(snap.saturation);
-      armerSilence(snap.saturation.resetsAt, Date.now());
+      majSaturation(c, snap.saturation);
+      if (c === "perso") armerSilence(snap.saturation.resetsAt, Date.now());
       return;
     }
     if (!releveUtilisable(snap)) return;
-    setClaudeSnapshot(snap);
-    setClaudeSaturation(null);
-    libererSilence();
+    majSnapshot(c, () => snap);
+    majSaturation(c, null);
+    if (c === "perso") libererSilence();
+    cacheComp.current[cleCache(c)] = snap;
     // Persistance : fusion avec le cache existant (l'OpenRouter éventuel y reste).
     stateRead<Partial<UsageCache>>("usage-cache")
       .catch(() => ({}) as Partial<UsageCache>)
-      .then((cache) => stateWrite("usage-cache", { ...cache, claude: snap }))
+      .then((cache) => stateWrite("usage-cache", { ...cache, [cleCache(c)]: snap }))
       .catch(() => {
         /* best effort */
       });
@@ -386,15 +417,20 @@ export function UsageWidget() {
    * chiffré (T-059). `memoriserReouverture` ignore d'elle-même une valeur
    * absente, donc aucune garde ici.
    */
+  // Réveil : la réouverture est mémorisée PAR compte — le réveil lit celle du compte de sa session (reouvertureQuota.ts).
   useEffect(() => {
-    memoriserReouverture(claudeSaturation?.resetsAt ?? claudeSnapshot?.fiveHour?.resetsAt);
-  }, [claudeSaturation?.resetsAt, claudeSnapshot?.fiveHour?.resetsAt]);
+    memoriserReouverture(saturations.perso?.resetsAt ?? snapshots.perso?.fiveHour?.resetsAt, "perso");
+  }, [saturations.perso?.resetsAt, snapshots.perso?.fiveHour?.resetsAt]);
+  useEffect(() => {
+    memoriserReouverture(saturations.teams?.resetsAt ?? snapshots.teams?.fiveHour?.resetsAt, "teams");
+  }, [saturations.teams?.resetsAt, snapshots.teams?.fiveHour?.resetsAt]);
 
   function handleClaudeInit() {
     if (claudeInitializing) return;
     setClaudeInitializing(true);
-    usageClaudeInit()
-      .then(traiterReponseInit)
+    const c = compteRef.current;
+    usageClaudeInit({}, c)
+      .then((snap) => traiterReponseInit(snap, c))
       .catch(() => {
         /* micro-tour en échec (hors ligne, non connecté…) : l'encart reste à « — » */
       })
@@ -407,7 +443,7 @@ export function UsageWidget() {
     // avec succès (l'autre moitié garde sa dernière valeur connue). Utile au
     // démarrage suivant de l'application, plus pour dédoublonner entre
     // fenêtres (T-086) — chacune écrit désormais ce qu'elle reçoit.
-    const cacheRef: UsageCache = { claude: null, openrouter: null, openrouterRef: null };
+    const cacheRef = cacheComp.current;
 
     function persistCache() {
       stateWrite("usage-cache", cacheRef).catch(() => {
@@ -415,10 +451,10 @@ export function UsageWidget() {
       });
     }
 
-    function refresh() {
+    function refreshClaude(c: CompteClaude) {
       // `usage.claude` relit l'instantané que le sidecar tient déjà : aucun
       // réseau, aucun quota. Toutes les fenêtres le demandent sans se gêner.
-      usageClaude()
+      usageClaude(c)
         .then((snap) => {
           if (cancelled) return;
           // Un instantané qui n'est pas un relevé — indisponible (aucun tour
@@ -426,9 +462,9 @@ export function UsageWidget() {
           // sans une seule fenêtre (T-087) — ne doit pas écraser le dernier
           // relevé réel, frais ou restauré du cache disque.
           const utilisable = releveUtilisable(snap);
-          setClaudeSnapshot((prev) => {
+          majSnapshot(c, (prev) => {
             if (!utilisable) return prev;
-            cacheRef.claude = snap;
+            cacheRef[cleCache(c)] = snap;
             persistCache();
             return snap;
           });
@@ -436,6 +472,10 @@ export function UsageWidget() {
         .catch(() => {
           /* le prochain battement retentera */
         });
+    }
+
+    function refresh() {
+      for (const c of aSonderRef.current) refreshClaude(c);
       // T-008 — ne RIEN demander au sujet d'un fournisseur tant que la table
       // n'a pas atteint le sidecar : sinon il répond « fournisseur inconnu »,
       // ligne d'erreur à chaque démarrage pour une simple course. L'abonnement
@@ -492,25 +532,29 @@ export function UsageWidget() {
      * sans jamais déclencher plus d'un vrai micro-tour par cycle.
      */
     function autoInit() {
+      for (const c of aSonderRef.current) autoInitCompte(c);
+    }
+
+    function autoInitCompte(c: CompteClaude) {
       if (cancelled) return;
       // T-057 — sonde : « limite de session atteinte » ou « non connecté » est
       // une réponse attendue d'une jauge périodique, pas une panne.
-      usageClaudeInit({ sonde: true })
+      usageClaudeInit({ sonde: true }, c)
         .then((snap) => {
           if (cancelled) return;
           // T-059 — le refus PORTE la donnée : jauge forcée + silence armé
           // dans `localStorage` (lu par le réveil, `reouvertureQuota.ts`), au
           // lieu d'un échec générique jeté (voir claudeUsage.ts, sidecar).
           if (snap.saturation) {
-            setClaudeSaturation(snap.saturation);
-            armerSilence(snap.saturation.resetsAt, Date.now());
+            majSaturation(c, snap.saturation);
+            if (c === "perso") armerSilence(snap.saturation.resetsAt, Date.now());
             return;
           }
           if (!releveUtilisable(snap)) return;
-          setClaudeSnapshot(snap);
-          setClaudeSaturation(null);
-          libererSilence();
-          cacheRef.claude = snap;
+          majSnapshot(c, () => snap);
+          majSaturation(c, null);
+          if (c === "perso") libererSilence();
+          cacheRef[cleCache(c)] = snap;
           persistCache();
         })
         .catch(() => {
@@ -522,9 +566,11 @@ export function UsageWidget() {
     stateRead<Partial<UsageCache>>("usage-cache")
       .then((cache) => {
         if (cancelled || !cache) return;
-        if (releveUtilisable(cache.claude ?? null) && cache.claude) {
-          cacheRef.claude = cache.claude;
-          setClaudeSnapshot((prev) => prev ?? cache.claude ?? null);
+        for (const c of ["perso", "teams"] as const) {
+          const memo = cache[cleCache(c)];
+          if (!memo || !releveUtilisable(memo)) continue;
+          cacheRef[cleCache(c)] = memo;
+          majSnapshot(c, (prev) => prev ?? memo);
         }
         if (cache.openrouter && typeof cache.openrouter.remaining === "number") {
           cacheRef.openrouter = cache.openrouter;
@@ -556,6 +602,19 @@ export function UsageWidget() {
       forcerRerendu((n) => n + 1);
     }, USAGE_TICK_MS);
     const offUsageChanged = subscribeUsageChanged(refresh);
+    // Un second compte apparaît (ou se connecte) : sondé sans attendre le prochain battement.
+    sonderTout.current = () => {
+      refresh();
+      autoInit();
+    };
+    // Changement de compte actif (autre onglet, autre moteur) : les jauges suivent
+    // tout de suite, sans attendre le prochain battement.
+    const offCompte = subscribeCompteActifConso(() => {
+      compteRef.current = compteActifConso();
+      setCompte(compteRef.current);
+      refresh();
+      autoInit();
+    });
     const offProviders = subscribeProvidersPushed(refresh);
     // Le premier essai part souvent avant que le sidecar ne soit joignable :
     // on relance dès qu'il annonce « ready » (ou repasse « running »), avec la
@@ -573,8 +632,10 @@ export function UsageWidget() {
 
     return () => {
       cancelled = true;
+      sonderTout.current = null;
       clearInterval(tick);
       offUsageChanged();
+      offCompte();
       offProviders();
       offReady();
       offStatus();
@@ -583,6 +644,11 @@ export function UsageWidget() {
 
   return (
     <div className="usage-widget" title="Consommation">
+      {compte !== "perso" && (
+        <span className="usage-widget__compte" title="Compte Claude suivi par les jauges (celui de la session active)">
+          {libelleCompte(compte)}
+        </span>
+      )}
       <ClaudeUsageBlock
         snapshot={claudeSnapshot}
         saturation={claudeSaturation}

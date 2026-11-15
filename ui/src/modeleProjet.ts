@@ -21,23 +21,57 @@
  * de composants est un import de TYPE, effacé à la compilation.
  */
 
-import { nextId, type AgentTurn } from "./agentTurns";
+import { nextId, spokenTextOfTurn, type AgentTurn } from "./agentTurns";
 import { toAttachmentRefs } from "./Attachments";
 import type { OpenFileState } from "./FileEditor";
 import type { AgentInfo, AgentScope } from "./orchestrationClient";
 import { isRouteTier, toRouteTarget } from "./protocole";
-import { deriveTitleFromText, newSessionMeta } from "./sessionStore";
+import { newSessionMeta, titreAffiche } from "./sessionStore";
+import type { CandidatTitre, LigneTitrable } from "./titresDiscussions";
 import type { DebordNotice } from "./debordNotice";
 import { toReveils, toReveilsHistorique, withReveilsDefault, type Reveil, type ReveilHistorise } from "./reveil";
 import type { RouteTarget, RouteTier } from "./sidecar";
+import type { CompteClaude } from "./comptesClaude";
 
 export interface EngineConfig {
   providerId: string | null;
   model: string;
+  /**
+   * Compte Claude CHOISI pour la session (docs/spec-deux-comptes.md). Absent =
+   * pas de choix explicite : la session suit le défaut de son projet, sinon
+   * `perso` — c'est aussi le cas de toute session persistée avant ce champ.
+   * Sans objet quand `providerId` n'est pas `null`.
+   */
+  compte?: CompteClaude;
 }
 
 export function claudeEngine(): EngineConfig {
   return { providerId: null, model: "" };
+}
+
+/**
+ * Config moteur de la session ACTIVE recopiée à la sauvegarde : fournisseur et
+ * modèle seulement. Le compte Claude n'est JAMAIS recopié d'un état d'affichage
+ * (docs/spec-deux-comptes.md) : il vit dans la session, posé par le geste de
+ * l'utilisateur (`avecCompteMoteur`). Une sauvegarde de fin de tour qui s'exécute
+ * après un changement d'onglet ne peut donc pas l'attribuer à la mauvaise session.
+ */
+export function fusionnerMoteur(engine: EngineConfig, providerId: string | null, model: string): EngineConfig {
+  return { ...engine, providerId, model };
+}
+
+/** Pose (ou retire, `null`) le choix de compte d'UNE session ; les autres sont rendues telles quelles. */
+export function avecCompteMoteur(sessions: ProjectSession[], id: string, compte: CompteClaude | null): ProjectSession[] {
+  return sessions.map((s) => {
+    if (s.id !== id) return s;
+    const { compte: _ancien, ...reste } = s.engine;
+    return { ...s, engine: compte ? { ...reste, compte } : reste };
+  });
+}
+
+/** Moteur d'une session NEUVE : repart du défaut de son projet, sans hériter du compte choisi pour la précédente. */
+export function moteurNouvelleSession(providerId: string | null, model: string): EngineConfig {
+  return { providerId, model };
 }
 
 /** Référence (nom + portée) vers un agent déclaré — voir orchestrationClient.ts. `null` = mode manuel. */
@@ -62,6 +96,8 @@ export interface ProjectSession {
   id: string;
   title: string;
   titleCustom: boolean;
+  /** Titre généré par le modèle (T-197) — voir `SessionMeta.titreIA`. Seul `titreAffiche` décide de ce qui s'affiche. */
+  titreIA?: string;
   createdAt: string;
   updatedAt: string;
   turns: AgentTurn[];
@@ -144,6 +180,8 @@ export interface PersistedSession {
   id: string;
   title: string;
   titleCustom: boolean;
+  /** T-197 — absent des sessions antérieures ; jamais exigé par les validateurs. */
+  titreIA?: string;
   createdAt: string;
   updatedAt: string;
   turns: AgentTurn[];
@@ -328,60 +366,79 @@ export function isLegacyPersistedProjectState(value: unknown): value is LegacyPe
   );
 }
 
-/** Titre auto d'une session depuis ses tours (premier message utilisateur, voir sessionStore.ts). */
-export function deriveSessionTitle(turns: AgentTurn[]): string {
+/** Texte du premier message utilisateur tel que l'utilisateur l'a vu (jamais le bloc de connaissances injecté). */
+function premierMessageDe(turns: readonly AgentTurn[]): string {
   const firstUser = turns.find((t) => t.role === "user");
-  return deriveTitleFromText(firstUser?.displayContent ?? firstUser?.content ?? "");
+  return firstUser?.displayContent ?? firstUser?.content ?? "";
 }
 
 /**
- * T-063 — applique les titres IA (`claude.sessionTitles`) aux sessions,
- * SAUF quand le titre IA ne distingue plus.
- *
- * Deux mécaniques produisaient des doublons dans le panneau Sessions : des
- * sessions successives sur la MÊME tâche reçoivent des titres IA qui
- * convergent vers la même formule, et une conversation REPRISE (resume)
- * partage son `sessionId` serveur avec sa devancière — deux entrées
- * calculent alors le même titre depuis le même id. Dans les deux cas, le
- * titre IA est pire qu'un repli qu'il remplace : il ne distingue plus rien.
- *
- * Règle : un titre IA n'est posé que s'il n'est pas déjà PORTÉ par une autre
- * session du projet (multi-ensemble des titres courants, mis à jour au fil du
- * parcours — la première session à revendiquer un titre IA le gagne, les
- * suivantes gardent leur repli local, distinctif par construction). Les
- * sessions personnalisées (`titleCustom`) ou sans id serveur ne sont jamais
- * concernées.
+ * Titre affiché d'une session Projets : renommage à la main, sinon titre du
+ * modèle, sinon repli tiré du premier message (règle unique : `titreAffiche`).
+ * Tous les recalculs de titre passent par ici — jamais `deriveTitleFromText`
+ * en direct, qui ramènerait le repli sur un titre IA (T-197).
  */
-export function appliquerTitresIA(
-  sessions: readonly ProjectSession[],
-  titles: ReadonlyMap<string, string>,
-): { sessions: ProjectSession[]; changed: boolean } {
-  const compte = new Map<string, number>();
-  for (const s of sessions) compte.set(s.title, (compte.get(s.title) ?? 0) + 1);
+export function titreSession(
+  session: { title: string; titleCustom: boolean; titreIA?: string },
+  turns: readonly AgentTurn[],
+): string {
+  return titreAffiche(session, premierMessageDe(turns));
+}
 
-  let changed = false;
-  const next = sessions.map((s) => {
-    if (s.titleCustom || !s.sessionId) return s;
-    const aiTitle = titles.get(s.sessionId);
-    if (!aiTitle || aiTitle === s.title) return s;
-    if ((compte.get(aiTitle) ?? 0) > 0) return s; // déjà porté ailleurs : repli gardé
+/** Les tours d'une session sous la forme dont `premierEchange` a besoin (texte VU, réponse terminée). */
+export function lignesTitrables(turns: readonly AgentTurn[]): LigneTitrable[] {
+  return turns.map((t) =>
+    t.role === "user"
+      ? { role: "user", texte: t.displayContent ?? t.content ?? "", terminee: t.status === "done" }
+      : { role: "assistant", texte: spokenTextOfTurn(t), terminee: t.status === "done" },
+  );
+}
 
-    const ancien = compte.get(s.title) ?? 1;
-    if (ancien <= 1) compte.delete(s.title);
-    else compte.set(s.title, ancien - 1);
-    compte.set(aiTitle, (compte.get(aiTitle) ?? 0) + 1);
+/** Texte des tours pour la recherche : ce que l'utilisateur a vu (messages et réponses), pas les appels d'outils. */
+export function texteRecherchable(turns: readonly AgentTurn[]): string {
+  return lignesTitrables(turns)
+    .map((l) => l.texte)
+    .join("\n");
+}
 
-    changed = true;
-    return { ...s, title: aiTitle };
-  });
-  return changed ? { sessions: next, changed } : { sessions: sessions as ProjectSession[], changed };
+/**
+ * Ce que `doitTitrer` regarde d'une session Projets (vive ou archivée) — hors
+ * ensemble des tentatives. Appelée à CHAQUE rendu pour le compteur du
+ * rattrapage : le premier échange est cherché en s'arrêtant dès qu'il est
+ * trouvé, sans transformer tous les tours.
+ */
+export function candidatTitre(s: PersistedSession | ProjectSession): CandidatTitre {
+  const base = { id: s.id, titleCustom: s.titleCustom, titreIA: s.titreIA, moteurClaude: surMoteurClaude(s) };
+  // Pas de recherche d'échange pour ce qui est de toute façon écarté.
+  if (s.titleCustom || s.titreIA || !base.moteurClaude) return { ...base, echange: null };
+  const rangMessage = s.turns.findIndex((t) => t.role === "user" && (t.displayContent ?? t.content ?? "").trim() !== "");
+  if (rangMessage < 0) return { ...base, echange: null };
+  for (let i = rangMessage + 1; i < s.turns.length; i++) {
+    const t = s.turns[i];
+    if (t.role !== "assistant" || t.status !== "done") continue;
+    const reponse = spokenTextOfTurn(t);
+    if (reponse !== "") {
+      const m = s.turns[rangMessage];
+      return { ...base, echange: { message: m.displayContent ?? m.content ?? "", reponse } };
+    }
+  }
+  return { ...base, echange: null };
+}
+
+/**
+ * La session tourne-t-elle sur le moteur Claude ? Moteur neutre choisi, ou
+ * dernière cible de routage Auto neutre : non — le texte n'a pas à partir chez
+ * Anthropic pour un titre (T-197).
+ */
+export function surMoteurClaude(s: { engine?: EngineConfig; routedTarget?: RouteTarget | null }): boolean {
+  return (s.engine?.providerId ?? null) === null && s.routedTarget?.engine !== "neutral";
 }
 
 /** Migre une conversation « ancienne forme » (pré-Lot Sessions) en une session unique, ouverte en onglet — rien n'est perdu. */
 export function migrateLegacyProjectState(legacy: LegacyPersistedProjectState): PersistedProjectEntry {
   const session: PersistedSession = {
     id: crypto.randomUUID(),
-    title: deriveSessionTitle(legacy.turns),
+    title: titreSession({ title: "", titleCustom: false }, legacy.turns),
     titleCustom: false,
     createdAt: legacy.updatedAt,
     updatedAt: legacy.updatedAt,
@@ -541,8 +598,11 @@ export function buildPersistedSession(session: ProjectSession): PersistedSession
     .map((t) => (t.attachments ? { ...t, attachments: toAttachmentRefs(t.attachments) } : t));
   return {
     id: session.id,
-    title: session.titleCustom ? session.title : deriveSessionTitle(persistableTurns),
+    // Le titre du modèle (`titreIA`) est CONSERVÉ et prime sur le repli : sans
+    // cette copie explicite, la sauvegarde le perdait (T-197).
+    title: titreSession(session, persistableTurns),
     titleCustom: session.titleCustom,
+    ...(session.titreIA ? { titreIA: session.titreIA } : {}),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     turns: persistableTurns,
@@ -586,6 +646,8 @@ export function sessionStateFromPersisted(entry: PersistedSession): ProjectSessi
     id: entry.id,
     title: entry.title,
     titleCustom: entry.titleCustom,
+    // Assaini : un champ illisible ne doit pas invalider la session, il est simplement ignoré.
+    ...(typeof entry.titreIA === "string" && entry.titreIA.trim() ? { titreIA: entry.titreIA } : {}),
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
     turns: entry.turns,

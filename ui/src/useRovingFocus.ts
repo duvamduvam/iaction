@@ -64,13 +64,7 @@ export function useRovingFocus<T extends HTMLElement = HTMLElement>({
       // voisine, voir App.tsx), jamais à la navigation interne.
       if (hasModifier(e)) return;
       // Ne jamais voler les touches d'un champ de saisie (renommage inline…).
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement
-      ) {
-        return;
-      }
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
       const [prevKey, nextKey] = orientation === "horizontal" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
       const items = getItems();
       if (items.length === 0) return;

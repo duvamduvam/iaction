@@ -4,6 +4,7 @@ mod config_store;
 pub mod demarrage;
 mod fenetres;
 mod fs_browse;
+mod garde_navigation;
 mod gpu_probe;
 mod journal_coquille;
 mod open_external;
@@ -148,6 +149,9 @@ pub fn run() {
             let _ = fenetres::ouvrir_fenetre(app);
         }))
         .plugin(tauri_plugin_dialog::init())
+        // T-184 — aucune fenêtre ne navigue hors de l'application : un lien web
+        // (y compris « Ouvrir le lien » du menu natif) part dans le navigateur système.
+        .plugin(garde_navigation::init())
         .manage(sidecar::managed_state())
         .manage(fenetres::managed_state())
         .setup(|app| {

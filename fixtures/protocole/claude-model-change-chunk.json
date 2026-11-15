@@ -1,0 +1,23 @@
+{
+  "quoi": "chunk model_change (T-207) : l'agent a changé lui-même de modèle et d'effort pendant le tour (outil mcp__studio__changer_modele). Déjà appliqué côté moteur quand il arrive ; l'UI aligne ses sélecteurs et affiche le bandeau « Annuler ».",
+  "parseur": "parseModelChange",
+  "evenement": {
+    "id": "temoin-modele-1",
+    "event": "chunk",
+    "data": {
+      "kind": "model_change",
+      "from": "claude-fable-5-1",
+      "to": "claude-opus-5-5",
+      "effortFrom": "high",
+      "effortTo": "medium",
+      "raison": "Travail courant : la spec est fermée"
+    }
+  },
+  "attendu": {
+    "from": "claude-fable-5-1",
+    "to": "claude-opus-5-5",
+    "effortFrom": "high",
+    "effortTo": "medium",
+    "raison": "Travail courant : la spec est fermée"
+  }
+}

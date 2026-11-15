@@ -42,6 +42,8 @@ import {
   orchWrite,
 } from "./orchestrationClient";
 import { useEffect, useMemo, useState } from "react";
+import { Deroulant } from "./Deroulant";
+import { confirmer } from "./confirmer";
 
 export interface OrchestrationsSectionProps {
   cwd: string | null;
@@ -341,15 +343,15 @@ export function OrchestrationEditor({
             </div>
             <div className="field">
               <label htmlFor="or-scope">Portée</label>
-              <select
+              <Deroulant
                 id="or-scope"
                 value={scope}
                 disabled={mode === "edit"}
-                onChange={(e) => setScope(e.currentTarget.value as OrchestrationScope)}
+                onChange={(v) => setScope(v as OrchestrationScope)}
               >
                 {hasProject && <option value="project">Projet</option>}
                 <option value="global">Global</option>
-              </select>
+              </Deroulant>
             </div>
 
             <div className="field">
@@ -400,14 +402,14 @@ export function OrchestrationEditor({
                         onChange={(e) => updateStep(i, { id: e.currentTarget.value })}
                         placeholder="id (ex. relecture-rust)"
                       />
-                      <select value={step.agent} onChange={(e) => updateStep(i, { agent: e.currentTarget.value })}>
+                      <Deroulant value={step.agent} onChange={(v) => updateStep(i, { agent: v })}>
                         <option value="">— agent —</option>
                         {validAgents.map((a) => (
                           <option key={a.name} value={a.name}>
                             {a.name}
                           </option>
                         ))}
-                      </select>
+                      </Deroulant>
                       <button
                         type="button"
                         className="btn btn--ghost"
@@ -569,7 +571,7 @@ export function OrchestrationsSection({
   }
 
   async function handleDelete(orch: OrchestrationInfo) {
-    if (!window.confirm(`Supprimer l'orchestration « ${orch.name} » ?`)) return;
+    if (!(await confirmer(`Supprimer l'orchestration « ${orch.name} » ?`))) return;
     setActionError("");
     try {
       await orchDelete(cwd, orch.path);

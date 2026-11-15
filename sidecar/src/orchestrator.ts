@@ -22,6 +22,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { errMessage, isNonEmptyString, isPlainObject } from "./base.js";
+import { classifyStepOutcome } from "./issueEtape.js";
 import type { EngineEmitter } from "./engine.js";
 import { handleClaudeAbort, handleClaudePermission, handleClaudeStart } from "./claude.js";
 import { handleNeutralAbort, handleNeutralPermission, handleNeutralStart } from "./neutralAgent.js";
@@ -1237,26 +1238,6 @@ function buildStepStartParams(
   return params;
 }
 
-/** Classe le `done` d'une étape moteur (subtype claude/neutral) en issue d'étape. */
-function classifyStepOutcome(doneData: Record<string, unknown>): {
-  status: "success" | "failed" | "aborted";
-  message?: string;
-} {
-  const subtype = typeof doneData.subtype === "string" ? doneData.subtype : "unknown";
-  if (subtype === "aborted") {
-    // T-076 — "failed" pose toujours un message, "aborted" n'en posait
-    // aucun : la même étape interrompue restait muette dans le rapport final
-    // (orch.run done, `steps[id].message`) alors que sa jumelle en échec disait
-    // pourquoi. Le tour lui-même sait la vraie raison (arrêt, refus…) — voir
-    // claudeFinDeTour.ts — mais ce niveau-ci n'en reçoit que le subtype.
-    return { status: "aborted", message: `étape interrompue (subtype: ${subtype})` };
-  }
-  if (subtype === "success" || subtype === "max_turns") {
-    return { status: "success" };
-  }
-  return { status: "failed", message: `échec du moteur (subtype: ${subtype})` };
-}
-
 /**
  * Texte final d'une étape (docs/etude-orchestration.md §6) : pour claude,
  * `result` du `done` moteur ; pour neutral, la concaténation des deltas
@@ -1560,8 +1541,8 @@ export function createOrchestratorRuntime(deps: { stepRunner?: StepRunner } = {}
         },
         done(_internalId, data) {
           const doneData = isPlainObject(data) ? data : {};
-          const outcome = classifyStepOutcome(doneData);
           const fullOutput = extractStepOutput(agent.engine, doneData, textAcc);
+          const outcome = classifyStepOutcome(doneData, fullOutput);
           finalizeStep(step.id, outcome.status, fullOutput, outcome.message, doneData.usage ?? null);
         },
         error(_internalId, message) {

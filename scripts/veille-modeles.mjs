@@ -23,7 +23,7 @@
  *
  * ── Usage ───────────────────────────────────────────────────────────────
  *   node scripts/veille-modeles.mjs               vérifie et notifie
- *   node scripts/veille-modeles.mjs --sans-notif   vérifie sans notify-send
+ *   node scripts/veille-modeles.mjs --sans-notif   vérifie sans notification système
  *
  * Fait du réseau (npm view, npm pack) : volontairement absent de `verif`, qui
  * doit rester jouable hors ligne. Prévu pour un minuteur périodique.
@@ -158,11 +158,54 @@ async function idsDuSdkInstalle() {
   return extraireIdsBinaire(buffer);
 }
 
-function notifier(texte) {
+const TITRE_NOTIFICATION = "IAction — nouveau modèle Claude";
+
+/**
+ * T-153 — environnement de `notify-send`. Lancée par un minuteur ou une tâche de
+ * fond, la veille n'hérite pas de l'adresse du bus de session : sans elle,
+ * `notify-send` échoue et la notification ne parvient jamais (constat du
+ * 2026-10-06). On la reconstruit depuis le dossier d'exécution de l'utilisateur
+ * quand il manque, sans jamais écraser une valeur déjà posée.
+ */
+function environnementNotification(env, uid) {
+  if (env.DBUS_SESSION_BUS_ADDRESS) return env;
+  const dossier = env.XDG_RUNTIME_DIR || (uid === null ? null : `/run/user/${uid}`);
+  return dossier ? { ...env, DBUS_SESSION_BUS_ADDRESS: `unix:path=${dossier}/bus` } : env;
+}
+
+/**
+ * Notification système d'un nouveau modèle (DÉCISION du 2026-11-08 : notification
+ * système, pas de pastille dans l'application). `notify-send` sous Linux — même
+ * esprit que `notifier()` de scripts/dev.sh : JAMAIS fatale, une panne de
+ * notification ne change ni le code de sortie ni la ligne « NOUVEAU » déjà
+ * écrite. Ailleurs que sous Linux, ou si `notify-send` échoue, le repli est une
+ * ligne sur la sortie d'erreur (captée par le journal de la tâche) qui porte le
+ * texte complet : la détection ne se perd jamais.
+ *
+ * `deps` est injectable pour les tests : { plateforme, env, uid, executer, journaliser }.
+ * Retourne true si une notification système est partie.
+ */
+export function notifier(texte, deps = {}) {
+  const plateforme = deps.plateforme ?? process.platform;
+  const env = deps.env ?? process.env;
+  const uid = deps.uid ?? (typeof process.getuid === "function" ? process.getuid() : null);
+  const executer = deps.executer ?? ((cmd, args, opts) => execFileSync(cmd, args, opts));
+  const journaliser = deps.journaliser ?? ((ligne) => console.error(ligne));
+
+  if (plateforme !== "linux") {
+    journaliser(`veille-modeles: pas de notification système sous ${plateforme} — NOUVEAU : ${texte}`);
+    return false;
+  }
   try {
-    execFileSync("notify-send", ["IAction — nouveau modèle Claude", texte]);
+    executer("notify-send", [TITRE_NOTIFICATION, texte], {
+      env: environnementNotification(env, uid),
+      stdio: "ignore",
+      timeout: 10_000,
+    });
+    return true;
   } catch (err) {
-    console.error(`veille-modeles: notify-send indisponible — ${err.message}`);
+    journaliser(`veille-modeles: notification système impossible (${err.message}) — NOUVEAU : ${texte}`);
+    return false;
   }
 }
 

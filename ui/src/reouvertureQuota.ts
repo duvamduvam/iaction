@@ -32,22 +32,30 @@ import { silenceActifJusqua } from "./cadenceUsage";
 
 const CLE_REOUVERTURE = "iaction:quota:reouverture";
 
-/** Repli quand `localStorage` est indisponible (navigation privée, sandbox). */
-let memoireReouverture: string | null = null;
+/**
+ * Un repère PAR compte Claude (docs/spec-deux-comptes.md) : le réveil d'une
+ * session « au reset » doit viser la réouverture du compte de CETTE session.
+ * `perso` garde la clé historique (repères déjà mémorisés intacts).
+ */
+const cle = (compte: CompteReveil): string => (compte === "teams" ? `${CLE_REOUVERTURE}:teams` : CLE_REOUVERTURE);
+export type CompteReveil = "perso" | "teams";
 
-function lireBrut(): string | null {
+/** Repli quand `localStorage` est indisponible (navigation privée, sandbox). */
+const memoireReouverture: Record<CompteReveil, string | null> = { perso: null, teams: null };
+
+function lireBrut(compte: CompteReveil): string | null {
   try {
-    return window.localStorage.getItem(CLE_REOUVERTURE);
+    return window.localStorage.getItem(cle(compte));
   } catch {
-    return memoireReouverture;
+    return memoireReouverture[compte];
   }
 }
 
-function ecrireBrut(valeur: string): void {
+function ecrireBrut(compte: CompteReveil, valeur: string): void {
   try {
-    window.localStorage.setItem(CLE_REOUVERTURE, valeur);
+    window.localStorage.setItem(cle(compte), valeur);
   } catch {
-    memoireReouverture = valeur;
+    memoireReouverture[compte] = valeur;
   }
 }
 
@@ -57,11 +65,11 @@ function ecrireBrut(valeur: string): void {
  * que la précédente est fausse, et l'oublier priverait le réveil de la seule
  * information qu'il avait.
  */
-export function memoriserReouverture(resetsAt: string | null | undefined): void {
+export function memoriserReouverture(resetsAt: string | null | undefined, compte: CompteReveil = "perso"): void {
   if (!resetsAt) return;
   const ms = new Date(resetsAt).getTime();
   if (!Number.isFinite(ms)) return;
-  ecrireBrut(String(ms));
+  ecrireBrut(compte, String(ms));
 }
 
 /**
@@ -80,19 +88,22 @@ export function memoriserReouverture(resetsAt: string | null | undefined): void 
  * de réouverture à attendre. C'est ce qui empêche un réveil « au reset » de
  * se croire éternellement en retard sur un repère périmé.
  */
-export function instantReouvertureQuota(maintenant: number): number | null {
-  const brut = lireBrut();
+export function instantReouvertureQuota(maintenant: number, compte: CompteReveil = "perso"): number | null {
+  const brut = lireBrut(compte);
   const memorise = brut === null ? NaN : Number(brut);
   if (Number.isFinite(memorise) && memorise > maintenant) return memorise;
-  return silenceActifJusqua(maintenant);
+  // Le silence armé par un refus est celui du compte principal : il ne répond jamais pour un autre.
+  return compte === "perso" ? silenceActifJusqua(maintenant) : null;
 }
 
 /** Oublie le repère mémorisé — réservé aux tests et à une remise à zéro explicite. */
 export function oublierReouverture(): void {
-  try {
-    window.localStorage.removeItem(CLE_REOUVERTURE);
-  } catch {
-    memoireReouverture = null;
+  for (const compte of ["perso", "teams"] as const) {
+    try {
+      window.localStorage.removeItem(cle(compte));
+    } catch {
+      /* repli mémoire ci-dessous */
+    }
+    memoireReouverture[compte] = null;
   }
-  memoireReouverture = null;
 }

@@ -11,6 +11,7 @@
  * Feuille : la lecture de fichier est INJECTÉE dans buildKnowledgeBlock (même
  * règle que debordNotice.ts) — le module ne touche ni Tauri ni le sidecar.
  */
+import type { DirEntry } from "./fsClient";
 
 export const KNOWLEDGE_STATE_KEY = "project-knowledge";
 export const KNOWLEDGE_DOC_MAX_CHARS = 30_000;
@@ -136,3 +137,26 @@ export async function buildKnowledgeBlock(
   return `Documents de connaissances du projet :\n\n${sections.join("\n")}\n\n---\n\n`;
 }
 
+
+/**
+ * R5 — instructions système effectives du tour : celles de l'agent
+ * sélectionné, plus la ligne RAG quand le mode `rag` est actif ET que l'index
+ * existe réellement (sans index, promettre `search_knowledge` au modèle ne
+ * mènerait qu'à des appels d'outil vides). `undefined` = aucune instruction.
+ */
+export function instructionsSysteme(instructionsAgent: string | null | undefined, ragDisponible: boolean): string | undefined {
+  const parts = [instructionsAgent, ragDisponible ? RAG_SYSTEM_LINE : undefined].filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+/** Fichiers (pas les dossiers) de `.iaction/connaissances/` : sans récursion, tous rejoignent les connaissances injectées. */
+export function fichiersConnaissanceAuto(entries: DirEntry[]): DirEntry[] {
+  return entries.filter((e) => !e.isDir);
+}
+
+/** Notes `.md` de la mémoire Claude Code (`.claude/memory/`) : informatives, jamais injectées d'office. */
+export function fichiersMemoireClaude(entries: DirEntry[]): DirEntry[] {
+  return entries.filter((e) => !e.isDir && e.name.endsWith(".md"));
+}

@@ -23,6 +23,8 @@ export interface PermissionRequestItem {
   engine: "claude" | "neutral";
   /** Projet propriétaire du tour (clé du « ne plus demander ») — absent en orchestration. */
   projectId?: string | null;
+  /** Conversation propriétaire du tour (T-181) — pour rouvrir la demande au bon endroit. */
+  convId?: string | null;
 }
 
 export function permissionTitle(item: PermissionRequestItem): string {

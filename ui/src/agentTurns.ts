@@ -16,6 +16,8 @@
 
 import { asRecord } from "./base";
 import type { SentAttachment } from "./Attachments";
+import type { ChangementModele } from "./changementModele";
+import type { CompactionDemandee } from "./compactionDemandee";
 import type { ChatMessage, ClaudeUsage, RouteTier } from "./sidecar";
 
 /**
@@ -70,7 +72,16 @@ export interface AgentTurn {
   blocks?: AgentBlock[];
   status: TurnStatus;
   errorMessage?: string;
-  doneInfo?: { subtype: string; usage: ClaudeUsage | null; contextTokens?: number | null; totalCostUsd: number | null };
+  doneInfo?: {
+    subtype: string;
+    usage: ClaudeUsage | null;
+    contextTokens?: number | null;
+    totalCostUsd: number | null;
+    /** T-187 — `errors` du SDK quand le tour a échoué (libellés techniques). */
+    erreurs?: string[];
+  };
+  /** T-187 — ce tour a été relancé sur une NOUVELLE session (l'ancienne avait disparu) : avis sous la réponse. Persisté. */
+  sessionReprise?: boolean;
   /**
    * Tâches de fond lancées par le modèle pendant ce tour (sous-agents en
    * arrière-plan…). `waiting` passe à true quand le tour du modèle est fini
@@ -91,6 +102,18 @@ export interface AgentTurn {
    * `preTokens` = taille du contexte avant compaction, si connue.
    */
   compacted?: { trigger: string; preTokens: number | null };
+  /**
+   * T-207 — l'agent a changé lui-même de modèle pendant ce tour (chunk
+   * `model_change`) : sert le bandeau « L'agent est passé à … · Annuler ».
+   * Persisté avec le tour : la trace de qui a décidé du modèle reste lisible.
+   */
+  changementModele?: ChangementModele;
+  /**
+   * T-216 — l'agent a programmé le compactage pendant ce tour (chunk
+   * `compaction_demandee`) : sert l'avis « … il partira à la fin du tour ·
+   * Annuler ». Persisté avec le tour, comme `changementModele`.
+   */
+  compactionDemandee?: CompactionDemandee;
   /**
    * S3 — bulle assistant close parce que le flux a été redirigé vers une bulle
    * plus récente (message glissé dans le tour en cours) : la réponse CONTINUE
@@ -251,6 +274,8 @@ export interface TurnDoneInfo {
   totalCostUsd: number | null;
   /** Texte final du SDK (`result`). Parfois seul porteur de la réponse : voir `withTurnDone`. */
   result?: string;
+  /** T-187 — `errors` du `result` SDK. Absent côté neutre. */
+  erreurs?: string[];
 }
 
 /** Vrai si le tour a produit du contenu visible (texte ou outil). */
@@ -270,6 +295,17 @@ export function spokenTextOfTurn(turn: AgentTurn): string {
     .map((b) => b.content)
     .join("\n\n")
     .trim();
+}
+
+/**
+ * Texte à lire du DERNIER tour s'il est assistant et dans l'état `statut`
+ * (`done` : réponse finie ; `streaming` : tour en cours d'écriture), sinon
+ * `null`. Même règle que `spokenTextOfTurn` : seuls les blocs de texte.
+ */
+export function texteLuDuDernierTour(turns: AgentTurn[], statut: "done" | "streaming"): string | null {
+  const last = turns[turns.length - 1];
+  if (!last || last.role !== "assistant" || last.status !== statut) return null;
+  return spokenTextOfTurn(last) || null;
 }
 
 /**
@@ -315,7 +351,13 @@ export function withTurnDone(turns: AgentTurn[], id: string, info: TurnDoneInfo)
       ...t,
       blocks,
       status: "done",
-      doneInfo: { subtype: info.subtype, usage: info.usage, contextTokens: info.contextTokens, totalCostUsd: info.totalCostUsd },
+      doneInfo: {
+        subtype: info.subtype,
+        usage: info.usage,
+        contextTokens: info.contextTokens,
+        totalCostUsd: info.totalCostUsd,
+        ...(info.erreurs && info.erreurs.length > 0 ? { erreurs: info.erreurs } : {}),
+      },
     };
   });
 }
@@ -366,6 +408,40 @@ export function retirerPushCorrespondant<A>(
   const index = enCours.findIndex((p) => p.contenu === contenu);
   if (index === -1) return { trouve: undefined, reste: enCours };
   return { trouve: enCours[index], reste: [...enCours.slice(0, index), ...enCours.slice(index + 1)] };
+}
+
+/**
+ * T-183 — pièces d'un push PERDU, rangées en attendant le renvoi automatique de
+ * fin de tour : le message repart par la file (texte seul), mais ses pièces
+ * doivent repartir AVEC lui, pas rester dans le tiroir. Même forme que la copie
+ * locale des pushes en cours ; `contenu` est le texte mis en file.
+ */
+export function rangerPiecesARenvoyer<A>(
+  file: PushEnCoursDeTour<A>[],
+  contenu: string,
+  attachments: A[],
+): PushEnCoursDeTour<A>[] {
+  return [...file, { contenu, attachments }];
+}
+
+/**
+ * Pièces ORPHELINES : les messages `contenus` quittent la file sans partir
+ * (pastille retirée, file vidée par « Arrêter »). Rend les pièces rangées pour
+ * eux, dans l'ordre, à reposer dans le tiroir — jamais perdues en silence —
+ * et ce qui reste rangé pour les autres messages.
+ */
+export function piecesOrphelines<A>(
+  file: PushEnCoursDeTour<A>[],
+  contenus: string[],
+): { pieces: A[]; reste: PushEnCoursDeTour<A>[] } {
+  let reste = file;
+  const pieces: A[] = [];
+  for (const contenu of contenus) {
+    const { trouve, reste: suite } = retirerPushCorrespondant(reste, contenu);
+    reste = suite;
+    if (trouve) pieces.push(...trouve.attachments);
+  }
+  return { pieces, reste };
 }
 
 /* ---------- Aperçus / rendu JSON ---------- */
@@ -439,6 +515,12 @@ export interface SousAgentVu {
    * correctif Opus tournait encore — on ne voyait pas lequel travaillait.
    */
   arrierePlan: boolean;
+  /**
+   * T-203 — `model` passé à l'appel `Agent` (override). Il prime sur le modèle
+   * déclaré dans le manifeste : c'est lui qui tourne. `null` si l'appel n'en
+   * porte pas (le modèle déclaré ou celui du fil s'applique alors).
+   */
+  modele: string | null;
 }
 
 export function sousAgentsDuTour(turn: AgentTurn | undefined): SousAgentVu[] {
@@ -452,6 +534,7 @@ export function sousAgentsDuTour(turn: AgentTurn | undefined): SousAgentVu[] {
     const type = typeof input.subagent_type === "string" ? input.subagent_type.trim() : "";
     const description = typeof input.description === "string" ? input.description.trim() : "";
     const arrierePlan = input.run_in_background === true;
+    const modele = typeof input.model === "string" ? input.model.trim() : "";
     const lancementEchoue = bloc.result?.isError === true;
     vus.push({
       // Un lancement sans `subagent_type` reste « sous-agent » : mieux vaut un
@@ -464,6 +547,7 @@ export function sousAgentsDuTour(turn: AgentTurn | undefined): SousAgentVu[] {
           : bloc.result !== undefined,
       erreur: lancementEchoue,
       arrierePlan,
+      modele: modele || null,
     });
   }
   return vus;
@@ -479,6 +563,35 @@ export function sousAgentsVifs(turns: AgentTurn[]): SousAgentVu[] {
   for (let i = turns.length - 1; i >= 0; i--) {
     const turn = turns[i];
     if (turn.role === "assistant") return sousAgentsDuTour(turn);
+  }
+  return [];
+}
+
+/**
+ * T-206 — tâches de fond du DERNIER tour assistant qui ne sont PAS des
+ * sous-agents (un `Bash` détaché, typiquement). Constat du 2026-11-07 :
+ * « en attente des rapports de 1 tâche(s) de fond » dans la transcription,
+ * mais rien dans la barre de droite, qui ne listait que `Task`/`Agent`.
+ * Les sous-agents en arrière-plan figurent déjà dans leur encart : on les
+ * retire par leur description, pour ne pas compter deux fois le même travail.
+ * Descriptions aplaties sur une ligne (même règle que T-093).
+ */
+export function tachesDeFondHorsSousAgents(turns: AgentTurn[]): string[] {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (turn.role !== "assistant") continue;
+    const sousAgents = new Set(
+      (turn.blocks ?? [])
+        .filter((b) => b.type === "tool" && OUTILS_DELEGATION.has(b.toolName))
+        .map((b) => {
+          const desc = b.type === "tool" ? asRecord(b.toolInput).description : undefined;
+          return typeof desc === "string" ? desc.trim() : "";
+        }),
+    );
+    return (turn.backgroundTasks?.descriptions ?? [])
+      .map((d) => d.trim())
+      .filter((d) => d !== "" && !sousAgents.has(d))
+      .map((d) => d.replace(/\s+/g, " "));
   }
   return [];
 }

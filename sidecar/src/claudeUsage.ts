@@ -17,7 +17,8 @@
 
 import os from "node:os";
 import { isPlainObject } from "./base.js";
-import { recordClaudeWindowsSnapshot } from "./fenetresAbonnement.js";
+import { memeReset, recordClaudeWindowsSnapshot } from "./fenetresAbonnement.js";
+import { COMPTE_PAR_DEFAUT, compteDemande, resoudreCompte, type CompteId } from "./compteClaude.js";
 import type { EngineEmitter } from "./engine.js";
 import type { ClaudeQuery, ClaudeQueryFn } from "./claude.js";
 import { parseRefusSaturation, type RefusSaturation } from "./claudeSaturation.js";
@@ -31,10 +32,59 @@ import {
   type EtatCadenceInit,
 } from "./cadenceSondesConso.js";
 
-/** Accès à l'instantané partagé avec handleClaudeStart — voir l'en-tête. */
+/**
+ * Accès à l'instantané partagé avec handleClaudeStart — voir l'en-tête.
+ * Un relevé PAR COMPTE (docs/spec-deux-comptes.md) : celui d'un compte n'écrase
+ * jamais celui de l'autre. `compte` absent = `perso`.
+ */
 export interface DepotUsageClaude {
-  lire(): ClaudeUsageSnapshot | null;
-  ecrire(snapshot: ClaudeUsageSnapshot): void;
+  lire(compte?: CompteId): ClaudeUsageSnapshot | null;
+  ecrire(snapshot: ClaudeUsageSnapshot, compte?: CompteId): void;
+}
+
+function memeFenetre(a: ClaudeUsageWindow, b: ClaudeUsageWindow): boolean {
+  return memeReset(a.resetsAt, b.resetsAt);
+}
+
+/**
+ * T-192 — la conso d'une fenêtre ne redescend pas avant sa réinitialisation. Or le
+ * point d'usage rend parfois une valeur en retard (constaté le 2026-11-05 : 23 %
+ * puis 11 % dans la même fenêtre, la jauge semblait n'avoir jamais bougé). On garde
+ * donc la valeur la plus haute de chaque fenêtre. Seul le relevé servi est corrigé :
+ * `claude-windows.jsonl` garde le brut (le débord y dérive son propre plancher,
+ * voir `pctAvecPlancher` dans fenetresAbonnement.ts — il survit ainsi au redémarrage).
+ */
+export function appliquerPlancher(
+  precedent: ClaudeUsageSnapshot | null,
+  nouveau: ClaudeUsageSnapshot,
+): ClaudeUsageSnapshot {
+  if (!precedent) return nouveau;
+  const windows: Record<string, ClaudeUsageWindow> = {};
+  for (const [cle, fenetre] of Object.entries(nouveau.windows)) {
+    const avant = precedent.windows[cle];
+    const enRetard =
+      avant !== undefined &&
+      memeFenetre(avant, fenetre) &&
+      (avant.utilization ?? 0) > (fenetre.utilization ?? 0);
+    windows[cle] = enRetard ? avant : fenetre;
+  }
+  return {
+    ...nouveau,
+    windows,
+    fiveHour: windows.five_hour ?? null,
+    sevenDay: windows.seven_day ?? null,
+  };
+}
+
+/** Dépôt en mémoire de processus, un relevé par compte. */
+export function creerDepotUsage(): DepotUsageClaude {
+  const releves = new Map<CompteId, ClaudeUsageSnapshot>();
+  return {
+    lire: (compte = COMPTE_PAR_DEFAUT) => releves.get(compte) ?? null,
+    ecrire: (snapshot, compte = COMPTE_PAR_DEFAUT) => {
+      releves.set(compte, appliquerPlancher(releves.get(compte) ?? null, snapshot));
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -182,10 +232,17 @@ export async function captureUsageSnapshot(query: ClaudeQuery): Promise<ClaudeUs
 export function executerClaudeUsage(
   depot: DepotUsageClaude,
   id: string,
-  _params: Record<string, unknown>,
+  params: Record<string, unknown>,
   emitter: EngineEmitter,
 ): void {
-  const lastUsageSnapshot = depot.lire();
+  // Lecture d'un relevé déjà en mémoire : un compte déconnecté n'a simplement
+  // pas de relevé (pas d'erreur), seul un id inconnu est refusé.
+  const compte = compteDemande(params.compte);
+  if (!compte) {
+    emitter.error(id, `params.compte inconnu : « ${String(params.compte)} »`);
+    return;
+  }
+  const lastUsageSnapshot = depot.lire(compte);
   if (!lastUsageSnapshot) {
     emitter.done(id, { available: false });
     return;
@@ -220,15 +277,30 @@ type ResultatInit =
   | { type: "saturation"; saturation: RefusSaturation }
   | { type: "erreur"; message: string };
 
-let etatCadenceInit: EtatCadenceInit = etatInitialInit();
-let dernierResultatInit: ResultatInit | null = null;
-let sondeInitEnVol: Promise<ResultatInit> | null = null;
+/**
+ * Cadence et coalescing PAR COMPTE (docs/spec-deux-comptes.md) : la saturation
+ * d'un compte ne doit pas faire taire la sonde de l'autre, et deux comptes ne
+ * partagent pas une même sonde en vol.
+ */
+interface CadenceCompte {
+  etat: EtatCadenceInit;
+  dernierResultat: ResultatInit | null;
+  sondeEnVol: Promise<ResultatInit> | null;
+}
+const cadences = new Map<CompteId, CadenceCompte>();
+
+function cadenceDe(compte: CompteId): CadenceCompte {
+  let c = cadences.get(compte);
+  if (!c) {
+    c = { etat: etatInitialInit(), dernierResultat: null, sondeEnVol: null };
+    cadences.set(compte, c);
+  }
+  return c;
+}
 
 /** Test only : oublie la cadence/coalescing du micro-tour d'initialisation. */
 export function reinitialiserCadenceUsageInit(): void {
-  etatCadenceInit = etatInitialInit();
-  dernierResultatInit = null;
-  sondeInitEnVol = null;
+  cadences.clear();
 }
 
 /**
@@ -241,7 +313,7 @@ export function reinitialiserCadenceUsageInit(): void {
  * (`ui/src/cadenceUsage.ts`, lu par le réveil T-120). Un message qui n'est
  * PAS un refus de saturation garde le traitement d'erreur générique existant.
  */
-function classerEchecMicroTour(err: unknown, maintenant: number): ResultatInit {
+function classerEchecMicroTour(err: unknown, maintenant: number, compte: CompteId): ResultatInit {
   const message = err instanceof Error ? err.message : String(err);
   const saturation = parseRefusSaturation(message);
   if (saturation) {
@@ -261,10 +333,10 @@ function classerEchecMicroTour(err: unknown, maintenant: number): ResultatInit {
         fields: { fenetre: saturation.fenetre, message },
       });
     }
-    etatCadenceInit = apresSaturationInit(saturation.resetsAt, maintenant);
+    cadenceDe(compte).etat = apresSaturationInit(saturation.resetsAt, maintenant);
     return { type: "saturation", saturation };
   }
-  etatCadenceInit = apresSondeInit(maintenant);
+  cadenceDe(compte).etat = apresSondeInit(maintenant);
   /*
    * T-118 — le message du CLI passait BRUT jusqu'ici. C'est ce chemin même qui
    * criait « API Error: Unable to connect to API (ConnectionRefused) » en
@@ -285,6 +357,8 @@ function classerEchecMicroTour(err: unknown, maintenant: number): ResultatInit {
 async function lancerMicroTour(
   deps: { queryFn: ClaudeQueryFn; depot: DepotUsageClaude },
   maintenant: number,
+  compte: CompteId,
+  envDuCompte: Record<string, string>,
 ): Promise<ResultatInit> {
   const { queryFn, depot } = deps;
   let query: ClaudeQuery;
@@ -293,13 +367,16 @@ async function lancerMicroTour(
       prompt: "ping",
       options: {
         cwd: os.homedir(),
-        model: "claude-haiku-4-5",
+        model: "claude-haiku-5-5",
         tools: [],
         permissionMode: "default",
+        // Le micro-tour sonde le compte demandé : sans env ajouté (perso), le
+        // SDK hérite de l'environnement du processus, comme avant.
+        ...(Object.keys(envDuCompte).length > 0 ? { env: { ...process.env, ...envDuCompte } } : {}),
       },
     });
   } catch (err) {
-    return classerEchecMicroTour(err, maintenant);
+    return classerEchecMicroTour(err, maintenant, compte);
   }
 
   try {
@@ -312,16 +389,16 @@ async function lancerMicroTour(
     // Filet pour les SDK/faux SDK qui ne passent pas par le transport
     // processus (la capture post-tour y fonctionne).
     captured ??= await captureUsageSnapshot(query);
-    etatCadenceInit = apresSondeInit(maintenant);
+    cadenceDe(compte).etat = apresSondeInit(maintenant);
     if (captured) {
-      depot.ecrire(captured);
-      recordClaudeWindowsSnapshot(captured.windows);
-      return { type: "snapshot", snapshot: captured };
+      depot.ecrire(captured, compte);
+      recordClaudeWindowsSnapshot(captured.windows, compte);
+      return { type: "snapshot", snapshot: depot.lire(compte) ?? captured };
     }
-    const connu = depot.lire();
+    const connu = depot.lire(compte);
     return connu ? { type: "snapshot", snapshot: connu } : { type: "indisponible" };
   } catch (err) {
-    return classerEchecMicroTour(err, maintenant);
+    return classerEchecMicroTour(err, maintenant, compte);
   }
 }
 
@@ -349,31 +426,38 @@ function repondreResultatInit(id: string, emitter: EngineEmitter, resultat: Resu
 export async function executerClaudeUsageInit(
   deps: { queryFn: ClaudeQueryFn; depot: DepotUsageClaude },
   id: string,
-  _params: Record<string, unknown>,
+  params: Record<string, unknown>,
   emitter: EngineEmitter,
   maintenant: () => number = Date.now,
 ): Promise<void> {
+  // Compte inconnu ou indisponible : refus net, avec la commande de connexion.
+  const resolu = resoudreCompte(params.compte);
+  if (!resolu.ok) {
+    emitter.error(id, resolu.message);
+    return;
+  }
+  const cadence = cadenceDe(resolu.compte);
   const now = maintenant();
-  if (sondeInitEnVol) {
+  if (cadence.sondeEnVol) {
     // T-086 — une sonde est DÉJÀ en vol (deux fenêtres ont appelé avant que
     // la première n'ait eu sa réponse) : on attend CETTE MÊME sonde plutôt
     // que d'en lancer une seconde. Un seul micro-tour, deux réponses.
-    const resultat = await sondeInitEnVol;
+    const resultat = await cadence.sondeEnVol;
     repondreResultatInit(id, emitter, resultat);
     return;
   }
-  if (!doitSonderInit(etatCadenceInit, now)) {
+  if (!doitSonderInit(cadence.etat, now)) {
     // Trop tôt depuis la dernière sonde, ou silence de saturation actif
     // (T-059) : le dernier résultat connu répond, sans réseau ni tour Claude.
-    repondreResultatInit(id, emitter, dernierResultatInit);
+    repondreResultatInit(id, emitter, cadence.dernierResultat);
     return;
   }
-  sondeInitEnVol = lancerMicroTour(deps, now);
+  cadence.sondeEnVol = lancerMicroTour(deps, now, resolu.compte, resolu.env);
   try {
-    const resultat = await sondeInitEnVol;
-    dernierResultatInit = resultat;
+    const resultat = await cadence.sondeEnVol;
+    cadence.dernierResultat = resultat;
     repondreResultatInit(id, emitter, resultat);
   } finally {
-    sondeInitEnVol = null;
+    cadence.sondeEnVol = null;
   }
 }

@@ -37,7 +37,6 @@ import {
   collerImageDuPressePapierNatif,
   filesFromClipboard,
   filesFromDrop,
-  toAttachmentRefs,
   toContractAttachments,
   toSentAttachments,
   useAttachmentDraft,
@@ -49,13 +48,14 @@ import { Modal } from "./Modal";
 import { useFavorisModeles } from "./useFavorisModeles";
 import { ModelPicker, type OptionEpinglee } from "./ModelPicker";
 import { OllamaPanel } from "./OllamaPanel";
-import { capSessions, deriveTitleFromText, formatRelativeDate, newSessionMeta, sortByRecent } from "./sessionStore";
+import { formatRelativeDate, newSessionMeta, sortByRecent } from "./sessionStore";
 import { PanneauLateral, SidebarSection } from "./SidebarSection";
 import { useComposerLiveDraft } from "./useComposerLiveDraft";
 import { useComposerUndo } from "./useComposerUndo";
 import { useRovingFocus } from "./useRovingFocus";
 import { BarreOnglets } from "./BarreOnglets";
 import { ongletApresFermeture } from "./fermetureOnglets";
+import { buildPersistedChatState, nextEntryId, sanitizeChatState } from "./chatPersistance";
 import { useStickToBottom } from "./useStickToBottom";
 import { BoutonArret, ChatComposerEnvoi } from "./ChatComposerEnvoi";
 import {
@@ -63,7 +63,6 @@ import {
   COMPACT_SUMMARY_PREFIX,
   shouldCompactChat,
   toApiMessages,
-  toChatCompaction,
   type ChatCompaction,
 } from "./chatCompaction";
 import {
@@ -82,12 +81,10 @@ import {
   claudePermission,
   claudeStart,
   contextCompact,
-  isRouteTier,
   modelsDetail,
   parseChatDone,
   parseClaudeDone,
   routerRoute,
-  toRouteTarget,
   type ChatAttachment,
   type ChatMessage,
   type AvancementWeb,
@@ -116,11 +113,26 @@ import { appliquerDebordNotice, libelleDebordNotice, type DebordNotice } from ".
 import { NoticeEnTete } from "./heureDiscrete";
 import { useBattementReveil } from "./useReveil";
 import { gererReveils } from "./reveilRuntime";
-import { withReveilsDefault, type Reveil, type ReveilHistorise } from "./reveil";
+import type { Reveil, ReveilHistorise } from "./reveil";
 import { ReveilBanniere, ReveilControl } from "./ReveilControl";
 import { prochainOnglet } from "./onglets";
 import { resoudreFournisseur } from "./choixFournisseur";
 import { estCibleUtilisable, resoudreRouteMontante } from "./routageAuto";
+import { turnSubtypeNotice } from "./agentTurns";
+import { promptAvecRecapitulatif } from "./sessionPerdue";
+import { autoPropose, avecCompteChat, compteAPersister, compteExplicite, modeleCompatibleCompte, optionsMoteurClaude, useComptesClaude, VALEUR_MOTEUR_TEAMS, type CompteClaude } from "./comptesClaude";
+import { useCompteSession } from "./useCompteSession";
+import { useFournisseurChoisi } from "./useFournisseurChoisi";
+import { contextTokens, withAppendedDelta, withEntryDone, withEntryError, withSessionReprise } from "./chatEntrees";
+import { Deroulant } from "./Deroulant";
+import { candidatTitreChat, texteRecherchableChat, titreSessionChat } from "./chatTitres";
+import { claudeTitreDiscussion } from "./sidecar";
+import { doitTitrer, filtrerSessions, marquerTentee, poserTitreIA } from "./titresDiscussions";
+import { RattrapageTitres, RechercheSessions } from "./RechercheEtRattrapage";
+import { ArchivesGroupe } from "./ArchivesGroupe";
+import { useArchivesChat } from "./useArchivesChat";
+import { logUi } from "./journal";
+import { useRattrapageTitres } from "./useRattrapageTitres";
 
 /*
  * Fournisseur spécial « Claude (abonnement) » : il ne passe pas par le moteur
@@ -170,63 +182,8 @@ export interface ChatEntry {
   routeReasons?: string[];
   /** R9 — sources web citées par cette réponse (`[1]`, `[2]`…). Persistées avec l'entrée. */
   sourcesWeb?: { n: number; titre: string; url: string }[];
-}
-
-/**
- * Ids d'entrées : PERSISTÉS avec la session (clés React du fil, cibles des
- * patchs `withAppendedDelta`/`withEntryDone`) — un compteur de module
- * repartirait de zéro à chaque lancement/HMR et ferait entrer en collision
- * une entrée neuve avec une entrée persistée (même défaut que `nextId` côté
- * AgentPage.tsx, constaté le 2026-08-04). D'où l'UUID.
- */
-function nextEntryId(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
-}
-
-// Helpers purs (hors du composant) pour garder les callbacks peu imbriqués,
-// même esprit que withAppendedChunk/withStatus dans SystemPage.tsx.
-function withAppendedDelta(entries: ChatEntry[], id: string, delta: string): ChatEntry[] {
-  return entries.map((e) => (e.id === id ? { ...e, content: e.content + delta } : e));
-}
-
-function withEntryDone(
-  entries: ChatEntry[],
-  id: string,
-  aborted: boolean,
-  usage: ChatUsage | null,
-  contextTokens: number | null = null,
-): ChatEntry[] {
-  return entries.map((e) =>
-    e.id === id ? { ...e, status: aborted ? "aborted" : "done", usage, contextTokens } : e,
-  );
-}
-
-/**
- * Taille du contexte de la conversation, en tokens : prompt + complétion du
- * DERNIER tour ayant remonté un usage. Le prompt d'un tour contient déjà tout
- * l'historique envoyé (voir toApiMessages) — additionner les tours compterait
- * donc plusieurs fois les mêmes messages. `null` tant qu'aucun usage n'est
- * connu (fournisseur muet, session rechargée avant le premier tour).
- */
-function contextTokens(entries: ChatEntry[]): number | null {
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const entry = entries[i];
-    // Priorité à l'occupation réelle mesurée côté sidecar (moteur Claude, voir
-    // ChatEntry.contextTokens) ; repli sur prompt + complétion (moteur neutre,
-    // ou entrées d'avant ce champ).
-    // Un total nul n'est pas une mesure (fournisseur muet, tour sans appel
-    // modèle) : on continue de remonter plutôt que d'afficher une jauge à 0 %.
-    if (typeof entry.contextTokens === "number" && entry.contextTokens > 0) return entry.contextTokens;
-    if (entry.usage) {
-      const total = (entry.usage.promptTokens ?? 0) + (entry.usage.completionTokens ?? 0);
-      if (total > 0) return total;
-    }
-  }
-  return null;
-}
-
-function withEntryError(entries: ChatEntry[], id: string, errorMessage: string): ChatEntry[] {
-  return entries.map((e) => (e.id === id ? { ...e, status: "error", errorMessage } : e));
+  /** T-187 — ce tour a été relancé sur une NOUVELLE session (l'ancienne avait disparu) : avis sous la bulle. Persisté. */
+  sessionReprise?: boolean;
 }
 
 /* ---------- Historique de sessions (Lot Sessions) ---------- */
@@ -242,18 +199,19 @@ function withEntryError(entries: ChatEntry[], id: string, errorMessage: string):
  */
 // T-061 — empreinte de la dernière écriture par conversation (sauverChat n'écrit que ce qui a changé).
 const chatDejaEcrit = new Map<string, string>();
-const MAX_PERSISTED_CHAT_ENTRIES = 200;
-const MAX_CHAT_SESSIONS = 30;
 const CHAT_SAVE_DEBOUNCE_MS = 1500;
 
-interface ChatSession {
+export interface ChatSession {
   id: string;
   title: string;
   titleCustom: boolean;
+  /** T-197 — titre généré par le modèle ; absent des sessions antérieures. Voir `titreAffiche`. */
+  titreIA?: string;
   createdAt: string;
   updatedAt: string;
   entries: ChatEntry[];
   providerId: string;
+  compte?: CompteClaude; // compte Claude CHOISI (docs/spec-deux-comptes.md) ; absent = perso
   model: string;
   systemPrompt: string;
   /** Session Agent SDK (fournisseur Claude (abonnement) uniquement) — `null` sinon/pas encore initialisée. */
@@ -271,7 +229,7 @@ interface ChatSession {
   reveilsHistorique: ReveilHistorise[];
 }
 
-interface PersistedChatState {
+export interface PersistedChatState {
   sessions: ChatSession[];
   activeId: string;
   /** Sessions ouvertes en onglet, dans l'ordre d'affichage de la barre. */
@@ -406,197 +364,6 @@ function freshChatSession(providerId: string): ChatSession {
   };
 }
 
-/** `{kind,name}` seulement (voir `toAttachmentRefs`) — un `previewUrl` persisté par erreur reste toléré (ignoré à l'affichage). */
-function isAttachmentRef(value: unknown): value is SentAttachment {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (v.kind === "image" || v.kind === "text") && typeof v.name === "string";
-}
-
-function isChatEntry(value: unknown): value is ChatEntry {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.id === "string" &&
-    (v.role === "user" || v.role === "assistant") &&
-    typeof v.content === "string" &&
-    (v.status === "streaming" || v.status === "done" || v.status === "error" || v.status === "aborted") &&
-    (v.attachments === undefined || (Array.isArray(v.attachments) && v.attachments.every(isAttachmentRef)))
-  );
-}
-
-function isChatSession(value: unknown): value is ChatSession {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.id === "string" &&
-    typeof v.title === "string" &&
-    typeof v.titleCustom === "boolean" &&
-    typeof v.createdAt === "string" &&
-    typeof v.updatedAt === "string" &&
-    Array.isArray(v.entries) &&
-    v.entries.every(isChatEntry) &&
-    typeof v.providerId === "string" &&
-    typeof v.model === "string" &&
-    typeof v.systemPrompt === "string" &&
-    (typeof v.claudeSessionId === "string" || v.claudeSessionId === null) &&
-    typeof v.webSearch === "boolean" &&
-    (v.routedTier === null || isRouteTier(v.routedTier)) &&
-    (v.routedTarget === null || toRouteTarget(v.routedTarget) !== null) &&
-    (v.compaction === null || toChatCompaction(v.compaction) !== null) &&
-    // T-120 — même principe que `compaction` juste au-dessus (`withReveilsDefault` déjà passé).
-    (v.reveils === undefined || Array.isArray(v.reveils)) &&
-    (v.reveilsHistorique === undefined || Array.isArray(v.reveilsHistorique))
-  );
-}
-
-/**
- * Complète `webSearch` (défaut `true`) sur une session brute qui ne l'a pas
- * encore (sessions persistées avant l'ajout de ce champ) — appliqué AVANT
- * `isChatSession`, qui lui exige le champ.
- */
-function withWebSearchDefault(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  const v = value as Record<string, unknown>;
-  if (typeof v.webSearch === "boolean") return value;
-  return { ...v, webSearch: true };
-}
-
-/**
- * R1 — complète/assainit `routedTier`/`routedTarget` (sessions persistées
- * avant ces champs, ou valeurs corrompues → `null`) — appliqué AVANT
- * `isChatSession`, même principe que `withWebSearchDefault`.
- */
-function withRoutingDefaults(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  const v = value as Record<string, unknown>;
-  return {
-    ...v,
-    routedTier: isRouteTier(v.routedTier) ? v.routedTier : null,
-    routedTarget: toRouteTarget(v.routedTarget),
-  };
-}
-
-/**
- * R4 — complète/assainit `compaction` (sessions persistées avant ce champ, ou
- * valeur corrompue → `null` = envoi intégral, comportement d'avant) — appliqué
- * AVANT `isChatSession`, même principe que `withRoutingDefaults`.
- */
-function withCompactionDefault(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  const v = value as Record<string, unknown>;
-  return { ...v, compaction: toChatCompaction(v.compaction) };
-}
-
-/**
- * Valide défensivement le document lu du disque — `null` si absent/corrompu
- * (première exécution après ce lot). `openConversationIds` : les documents
- * antérieurs au Lot Onglets multiples ne l'ont pas → `[activeId]` (une seule
- * conversation ouverte, comme avant) ; les références à des sessions
- * disparues (tombées hors plafond) sont filtrées, avec le même repli. La
- * session active est toujours garantie ouverte en onglet (le Chat n'a pas
- * d'onglets fichier : une active sans onglet n'aurait aucun sens ici).
- */
-/**
- * Réattribue un id frais aux entrées dont l'id est déjà porté par une entrée
- * vue avant — `seen` est PARTAGÉ sur toutes les sessions du document (même
- * réparation inter-sessions que `dedupeTurnIds` côté AgentPage.tsx : le fil
- * rend toutes les conversations dans le même composant, une clé partagée
- * entre deux conversations fait réutiliser le DOM au changement d'onglet).
- * Ne réordonne ni ne supprime rien : les index restent stables, la
- * compaction (`upToIndex`) n'est pas affectée.
- */
-function dedupeEntryIds(entries: ChatEntry[], seen: Set<string>): ChatEntry[] {
-  return entries.map((e) => {
-    const entry = seen.has(e.id) ? { ...e, id: nextEntryId(e.role === "user" ? "u" : "a") } : e;
-    seen.add(entry.id);
-    return entry;
-  });
-}
-
-function sanitizeChatState(raw: unknown): PersistedChatState | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const v = raw as Record<string, unknown>;
-  if (!Array.isArray(v.sessions) || v.sessions.length === 0) return null;
-  const normalizedSessions = v.sessions
-    .map(withWebSearchDefault)
-    .map(withRoutingDefaults)
-    .map(withCompactionDefault)
-    .map(withReveilsDefault);
-  if (!normalizedSessions.every(isChatSession) || typeof v.activeId !== "string") {
-    return null;
-  }
-  const activeId = normalizedSessions.some((s) => s.id === v.activeId) ? v.activeId : normalizedSessions[0].id;
-  const rawOpen =
-    Array.isArray(v.openConversationIds) && v.openConversationIds.every((id): id is string => typeof id === "string")
-      ? v.openConversationIds
-      : [activeId];
-  const knownOpen = rawOpen.filter((id) => normalizedSessions.some((s) => s.id === id));
-  const openConversationIds = knownOpen.length > 0 ? knownOpen : [activeId];
-  // Unicité GLOBALE des ids d'entrées, toutes sessions confondues (voir dedupeEntryIds).
-  const seenEntryIds = new Set<string>();
-  return {
-    sessions: normalizedSessions.map((s) => ({ ...s, entries: dedupeEntryIds(s.entries, seenEntryIds) })),
-    activeId,
-    openConversationIds: openConversationIds.includes(activeId)
-      ? openConversationIds
-      : [...openConversationIds, activeId],
-  };
-}
-
-/** Titre auto depuis le premier message utilisateur d'une session (voir sessionStore.ts). */
-function deriveChatSessionTitle(entries: ChatEntry[]): string {
-  const firstUser = entries.find((e) => e.role === "user");
-  return deriveTitleFromText(firstUser?.content ?? "");
-}
-
-/**
- * Sérialise une session en vue de la persistance : borne aux 200 dernières
- * entrées, jamais un tour encore `streaming`, et — conformément au contrat —
- * les pièces jointes perdent leur aperçu (`toAttachmentRefs`) : seuls
- * `kind`/`name` survivent sur disque.
- */
-function buildPersistedChatSession(session: ChatSession): ChatSession {
-  const nonStreaming = session.entries.filter((e) => e.status !== "streaming");
-  const persistableEntries = nonStreaming
-    .slice(-MAX_PERSISTED_CHAT_ENTRIES)
-    .map((e) => (e.attachments ? { ...e, attachments: toAttachmentRefs(e.attachments) } : e));
-  // R4 — la troncature aux 200 dernières entrées décale les index de la
-  // transcription : `upToIndex` est réaligné (et borné) pour que le résumé
-  // couvre toujours les MÊMES tours après rechargement ; s'il ne couvre plus
-  // rien (tours résumés tous tombés hors plafond), la compaction est oubliée.
-  let compaction = session.compaction;
-  if (compaction) {
-    const dropped = nonStreaming.length - persistableEntries.length;
-    const upToIndex = Math.min(compaction.upToIndex - dropped, persistableEntries.length);
-    compaction = upToIndex > 0 ? { ...compaction, upToIndex } : null;
-  }
-  return {
-    ...session,
-    entries: persistableEntries,
-    compaction,
-    title: session.titleCustom ? session.title : deriveChatSessionTitle(persistableEntries),
-  };
-}
-
-/**
- * Sérialise le document complet : plafonne le nombre de sessions conservées
- * (voir `capSessions`, sessionStore.ts) — `openConversationIds` est filtré en
- * cohérence (jamais une référence à une session tombée hors plafond), avec un
- * repli sur `[activeId]` si ce filtrage le viderait entièrement (jamais zéro
- * onglet persisté alors qu'une session active existe).
- */
-function buildPersistedChatState(state: PersistedChatState): PersistedChatState {
-  const keptSessions = capSessions(state.sessions, state.activeId, MAX_CHAT_SESSIONS);
-  const keptIds = new Set(keptSessions.map((s) => s.id));
-  const openConversationIds = state.openConversationIds.filter((id) => keptIds.has(id));
-  return {
-    sessions: keptSessions.map(buildPersistedChatSession),
-    activeId: state.activeId,
-    openConversationIds: openConversationIds.length > 0 ? openConversationIds : [state.activeId],
-  };
-}
-
 export interface ChatPageHandle {
   /**
    * Raccourci global Ctrl+N (voir App.tsx) : nouvelle conversation. Renvoie
@@ -647,18 +414,14 @@ export const ChatPage = forwardRef<
   // recherche web) : rechargée à chaque bascule d'onglet (voir
   // `selectChatSession`), verrouillée pendant que SA conversation streame —
   // les autres onglets restent librement consultables/éditables.
-  const [providerId, setProviderId] = useState("");
-  // T-018 — dernier fournisseur DÉLIBÉRÉMENT posé (sélecteur, bascule/fermeture
-  // d'onglet, suppression, restauration de session) : c'est lui qu'on rétablit
-  // quand la liste des fournisseurs revient après une éclipse. Poser un
-  // fournisseur passe donc TOUJOURS par `choisirFournisseur` — sauf le repli
-  // automatique, qui effacerait l'intention qu'il est censé protéger.
-  const choixFournisseurRef = useRef("");
-  const choisirFournisseur = useCallback((id: string) => {
-    choixFournisseurRef.current = id;
-    setProviderId(id);
-  }, []);
+  const { providerId, setProviderId, choixFournisseurRef, compteChoisi, setCompteChoisi, choisirFournisseur } = useFournisseurChoisi(); // voir useFournisseurChoisi.ts (T-018)
   const [model, setModel] = useState("");
+  const comptes = useComptesClaude();
+  // Compte du tour = ce que le sélecteur affiche, sans exception. Le routage Auto ne connaît que perso : Auto n'est donc
+  // proposé que si ce compte est perso (hors fournisseur Claude, le compte est sans objet : perso).
+  const { compte: compteTour } = useCompteSession({ choisi: providerId === CLAUDE_PROVIDER_ID ? compteChoisi : null, defautProjet: null, projetId: null, comptes, visible: pageVisible });
+  const autoOk = autoPropose(compteTour);
+  useEffect(() => { if (!autoOk) setModel((m) => modeleCompatibleCompte(m, compteTour, AUTO_MODEL, CLAUDE_MODELS[0].id)); }, [autoOk, compteTour, model]);
   // Effort de raisonnement (Claude abonnement seulement) : état simple de la page,
   // "" = Défaut. Retombe sur Défaut si le modèle courant ne supporte plus le niveau.
   const [effort, setEffort] = useState<EffortLevel | "">("");
@@ -951,10 +714,10 @@ export const ChatPage = forwardRef<
         // T-120 — le réveil vit aussi dans le runtime (armé/désarmé/consommé au battement) : recopié pareil.
         reveils: runtime.reveils,
         reveilsHistorique: runtime.reveilsHistorique,
-        ...(s.id === activeId ? { providerId, model, systemPrompt, webSearch } : {}),
+        ...(s.id === activeId ? { providerId, model, systemPrompt, webSearch } : {}), // le compte n'est jamais recopié d'ici : il vit dans la session (avecCompteChat)
         updatedAt: new Date().toISOString(),
       };
-      return merged.titleCustom ? merged : { ...merged, title: deriveChatSessionTitle(merged.entries) };
+      return { ...merged, title: titreSessionChat(merged, merged.entries) };
     });
   }
 
@@ -962,9 +725,37 @@ export const ChatPage = forwardRef<
   function persistChatState(liveSessions: ChatSession[], activeId: string) {
     if (!chatHydratedRef.current) return;
     const doc = buildPersistedChatState({ sessions: liveSessions, activeId, openConversationIds: openConversationIdsRef.current });
-    void sauverChat(IO_ETAT, doc.sessions, { activeId: doc.activeId, openConversationIds: doc.openConversationIds }, chatDejaEcrit).catch(() => {
-      // best effort : une écriture ratée ne bloque pas l'UI, la prochaine sauvegarde retentera.
+    void sauverChat(IO_ETAT, doc.sessions, { activeId: doc.activeId, openConversationIds: doc.openConversationIds }, chatDejaEcrit)
+      // T-152 — une fois TOUT le vif écrit : ce qui dépasse le seuil est archivé (restaurable), jamais abandonné.
+      .then(() => archivage.archiverHorsPlafond(doc))
+      .catch((err: unknown) => {
+        // Une écriture ratée ne bloque pas l'UI, la prochaine sauvegarde retentera — mais elle se voit au journal.
+        logUi("warn", "ui", "sauvegarde du Chat échouée", { fields: { erreur: String(err) } });
+      });
+  }
+
+  /** T-152 — archive acquise : la conversation sort de la vue (sauf active, ouverte ou en tour). Rend les ids retirés. */
+  function retirerDeLaVue(ids: string[]): string[] {
+    const sortantes = ids.filter(
+      (i) => i !== activeSessionIdRef.current && !openConversationIdsRef.current.includes(i) && !runtimes.consulter(i)?.streaming,
+    );
+    if (sortantes.length > 0) setSessions((prev) => prev.filter((s) => !sortantes.includes(s.id)));
+    return sortantes;
+  }
+  const archivage = useArchivesChat(
+    () => new Set(sessionsRef.current.map((s) => s.id)),
+    retirerDeLaVue,
+    (id) => retirerConversationChat(IO_ETAT, id, chatDejaEcrit), // mis de côté (retire-…), pas détruit
+  );
+
+  /** Clic sur une archive : relue, réinsérée dans les conversations vives, ouverte comme une autre. */
+  async function restoreChatArchive(id: string) {
+    const ok = await archivage.restaurer(id, (conv) => {
+      setSessions([...buildLiveSessions(), conv]);
+      return true;
     });
+    if (ok) selectChatSession(id);
+    else setTabsNotice("Archive illisible : voir le journal.");
   }
 
   // Chargement du document persisté, une seule fois (StrictMode-safe, même
@@ -999,7 +790,7 @@ export const ChatPage = forwardRef<
           setSessions(restored.sessions);
           setActiveSessionId(activeSession.id);
           setOpenConversationIds(restored.openConversationIds);
-          choisirFournisseur(activeSession.providerId);
+          choisirFournisseur(activeSession.providerId, compteExplicite(activeSession));
           setModel(activeSession.model);
           setSystemPrompt(activeSession.systemPrompt);
           setWebSearch(activeSession.webSearch);
@@ -1012,6 +803,8 @@ export const ChatPage = forwardRef<
       })
       .finally(() => {
         chatHydratedRef.current = true;
+        // T-152 — l'index d'archives se lit une fois le vif connu (le vif fait foi sur l'archive).
+        void archivage.charger(new Set(sessionsRef.current.map((s) => s.id)));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1028,7 +821,7 @@ export const ChatPage = forwardRef<
     }, CHAT_SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSessionId, entries, providerId, model, systemPrompt, webSearch, openConversationIds]);
+  }, [activeSessionId, entries, providerId, compteChoisi, model, systemPrompt, webSearch, openConversationIds]);
 
   // Sélectionne un fournisseur par défaut dès que la liste est connue, replie
   // si le courant a disparu, et RÉTABLIT le choix de l'utilisateur quand son
@@ -1111,14 +904,8 @@ export const ChatPage = forwardRef<
   /* R1/R7 — la sentinelle « Auto » n'est pas un modèle du catalogue : épinglée
      en tête, elle survit à tous les filtres. */
   const epinglesModeles = useMemo<OptionEpinglee[]>(
-    () => [
-      {
-        value: AUTO_MODEL,
-        label: "Auto (montant)",
-        title: "Commence bas et monte selon la complexité ; la session ne redescend jamais.",
-      },
-    ],
-    [],
+    () => (autoOk ? [{ value: AUTO_MODEL, label: "Auto (montant)", title: "Commence bas et monte selon la complexité ; la session ne redescend jamais." }] : []),
+    [autoOk],
   );
 
   // Recollage en bas du fil : voir useStickToBottom.ts (logique partagée avec
@@ -1155,6 +942,7 @@ export const ChatPage = forwardRef<
         systemPrompt: systemPrompt.trim() || null,
         attachments,
         meta,
+        compte: compteTour,
       },
       {
         onInit: (sessionId) => {
@@ -1375,6 +1163,53 @@ export const ChatPage = forwardRef<
     setCompactionModalOpen(false);
   }
 
+  /*
+   * Titres des discussions (T-197). Toutes les sessions du Chat vivent dans
+   * `sessionsRef` : le titre arrivé tardivement se pose par id, même hors de
+   * l'onglet actif, sans écraser un renommage fait entre-temps (`poserTitreIA`).
+   */
+  function candidatVif(s: ChatSession) {
+    const runtime = runtimes.consulter(s.id);
+    return candidatTitreChat(runtime ? { ...s, entries: runtime.entries, routedTarget: runtime.routedTarget } : s, s.providerId === CLAUDE_PROVIDER_ID);
+  }
+
+  function poserTitreIAChat(convId: string, titre: string) {
+    const avant = sessionsRef.current;
+    const apres = poserTitreIA(avant, convId, titre);
+    if (apres === avant) return;
+    setSessions(apres);
+    persistChatState(apres, activeSessionIdRef.current);
+  }
+
+  async function titrerSession(convId: string, compte: CompteClaude) {
+    const s = sessionsRef.current.find((x) => x.id === convId);
+    if (!s) return;
+    const candidat = candidatVif(s);
+    if (!doitTitrer(candidat) || !candidat.echange) return;
+    marquerTentee(convId);
+    const titre = await claudeTitreDiscussion(candidat.echange.message, candidat.echange.reponse, compte);
+    if (titre) poserTitreIAChat(convId, titre);
+  }
+
+  // « Nommer les anciennes discussions (N) » : rien ne part sans le clic.
+  const rattrapageTitres = useRattrapageTitres();
+  const vivesATitrer = sessions.filter((s) => doitTitrer(candidatVif(s)));
+
+  function lancerRattrapageTitres() {
+    void rattrapageTitres.lancer({
+      ids: vivesATitrer.map((s) => s.id),
+      nommer: async (id) => {
+        const s = sessionsRef.current.find((x) => x.id === id);
+        if (!s) return undefined;
+        const candidat = candidatVif(s);
+        if (!doitTitrer(candidat) || !candidat.echange) return undefined;
+        marquerTentee(id);
+        return claudeTitreDiscussion(candidat.echange.message, candidat.echange.reponse, compteExplicite(s) ?? "perso");
+      },
+      appliquer: poserTitreIAChat,
+    });
+  }
+
   async function handleSend(overrideContent?: string) {
     // Conversation À LAQUELLE ce tour appartient, figée ici : tout ce qui suit
     // (callbacks de streaming, fin de tour, sauvegarde) écrit dans CETTE
@@ -1476,6 +1311,7 @@ export const ChatPage = forwardRef<
       updateEntriesFor(convId, (prev) => withAppendedDelta(prev, assistantId, delta));
     };
 
+    let tourClaudeReussi = false;
     try {
       // R1 — mode Auto : résolution de la cible AVANT l'envoi (classement au
       // premier tour, cible mémorisée ensuite — affinité de session). Un
@@ -1552,7 +1388,7 @@ export const ChatPage = forwardRef<
         return;
       }
 
-      const { id, done } = engineIsClaudeTurn
+      const lancement = engineIsClaudeTurn
         ? sendViaClaude(convId, content, onDelta, contractAttachments, webSearch, sendModel, meta)
         : chatSend(
             sendProviderId,
@@ -1583,20 +1419,58 @@ export const ChatPage = forwardRef<
               },
             },
           );
-      updateRuntime(convId, (r) => ({ ...r, activeRequestId: id }));
+      updateRuntime(convId, (r) => ({ ...r, activeRequestId: lancement.id }));
 
-      const data = await done;
+      const data = await lancement.done;
       // Tour terminé sans erreur (même sans chunk reçu) : second signe de
       // succès qui fixe l'affinité en attente (no-op si déjà fixée).
       commitAffinity?.();
       if (engineIsClaudeTurn) {
-        const d = parseClaudeDone(data);
+        let d = parseClaudeDone(data);
+        // T-187 — la session à reprendre n'existe plus (transcript purgé) : on
+        // l'oublie, puis on relance UNE seule fois sur une nouvelle session, le
+        // prompt portant un récapitulatif des messages gardés par l'application.
+        // Le message affiché et stocké reste `content`, jamais le récapitulatif.
+        if (d.sessionPerdue) {
+          updateRuntime(convId, (r) => ({ ...r, claudeSessionId: null }));
+          const recap = historyEntries.map((e) => ({ role: e.role, texte: e.content }));
+          // `sendViaClaude` relit la session dans le runtime : elle est à null.
+          const relance = sendViaClaude(
+            convId,
+            promptAvecRecapitulatif(recap, content),
+            onDelta,
+            contractAttachments,
+            webSearch,
+            sendModel,
+            meta,
+          );
+          updateRuntime(convId, (r) => ({ ...r, activeRequestId: relance.id }));
+          updateEntriesFor(convId, (prev) => withSessionReprise(prev, assistantId));
+          d = parseClaudeDone(await relance.done);
+        }
         const usage: ChatUsage | null = d.usage
           ? { promptTokens: d.usage.inputTokens, completionTokens: d.usage.outputTokens }
           : null;
-        updateEntriesFor(convId, (prev) => withEntryDone(prev, assistantId, d.subtype === "aborted", usage, d.contextTokens));
+        // Un échec du SDK (`error_during_execution`…) ne doit jamais passer pour
+        // un succès : sans texte, la bulle porte l'erreur (plus de bulle vide
+        // muette « 0 + 0 tokens ») ; avec du texte, elle le garde.
+        const echec = d.subtype !== "success" && d.subtype !== "aborted";
+        const bulleSansTexte = !getRuntime(convId).entries.some((e) => e.id === assistantId && e.content.trim() !== "");
+        if (echec && bulleSansTexte) {
+          const message = [
+            turnSubtypeNotice(d.subtype) ?? `Le tour s'est terminé anormalement (${d.subtype}).`,
+            ...d.erreurs,
+          ].join(" — ");
+          updateEntriesFor(convId, (prev) => withEntryError(prev, assistantId, message));
+          // Comme dans le `catch` : le message n'a pas abouti, ses pièces reviennent.
+          restoreAttachments(sentDrafts);
+        } else {
+          updateEntriesFor(convId, (prev) => withEntryDone(prev, assistantId, d.subtype === "aborted", usage, d.contextTokens));
+          tourClaudeReussi = d.subtype === "success";
+        }
         // Compteur local « conso hebdo Fable » (encart conso) — avant le
         // notifyUsageChanged() du finally, pour que l'encart lise à jour.
+        // Tour réellement abouti : celui de la relance, le cas échéant.
         await recordModelUsage(sendModel, d.usage);
       } else {
         const { finishReason, usage } = parseChatDone(data);
@@ -1629,6 +1503,8 @@ export const ChatPage = forwardRef<
       // Active par REF : ce callback peut s'exécuter longtemps après l'envoi,
       // l'utilisateur a pu changer d'onglet entre-temps.
       persistChatState(liveSessions, activeSessionIdRef.current);
+      // T-197 — après la sauvegarde, sans l'attendre ; jamais d'erreur à l'écran.
+      if (tourClaudeReussi) void titrerSession(convId, compteTour);
     }
   }
 
@@ -1782,7 +1658,7 @@ export const ChatPage = forwardRef<
     setActiveSessionId(fresh.id);
     // R1 — nouvelle conversation = « Auto (routeur) » par défaut (le reste de
     // la config LLM du panneau — fournisseur, prompt système — est conservé).
-    setModel(AUTO_MODEL);
+    setModel(AUTO_MODEL); setCompteChoisi(null); // une nouvelle conversation repart de perso
     setOpenConversationIds((prev) => [...prev, fresh.id]);
     setConfirmDeleteId(null);
     clearAttachments();
@@ -1903,7 +1779,7 @@ export const ChatPage = forwardRef<
     ensureRuntime(target);
     setActiveSessionId(id);
     setOpenConversationIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
-    choisirFournisseur(target.providerId);
+    choisirFournisseur(target.providerId, compteExplicite(target));
     setModel(target.model);
     setSystemPrompt(target.systemPrompt);
     setWebSearch(target.webSearch);
@@ -1975,7 +1851,7 @@ export const ChatPage = forwardRef<
         ensureRuntime(target);
         nextActiveId = target.id;
         setActiveSessionId(target.id);
-        choisirFournisseur(target.providerId);
+        choisirFournisseur(target.providerId, compteExplicite(target));
         setModel(target.model);
         setSystemPrompt(target.systemPrompt);
         setWebSearch(target.webSearch);
@@ -1997,7 +1873,7 @@ export const ChatPage = forwardRef<
         setOpenConversationIds([fresh.id]);
         setActiveSessionId(fresh.id);
         // R1 — conversation neuve = « Auto (routeur) » par défaut.
-        setModel(AUTO_MODEL);
+        setModel(AUTO_MODEL); setCompteChoisi(null);
         clearAttachments();
         persistChatState(withFresh, fresh.id);
         focusComposer();
@@ -2079,7 +1955,7 @@ export const ChatPage = forwardRef<
       ensureRuntime(nextActive);
       setActiveSessionId(nextActive.id);
       setOpenConversationIds(nextOpen.includes(nextActive.id) ? nextOpen : [...nextOpen, nextActive.id]);
-      choisirFournisseur(nextActive.providerId);
+      choisirFournisseur(nextActive.providerId, compteExplicite(nextActive));
       setModel(nextActive.model);
       setSystemPrompt(nextActive.systemPrompt);
       setWebSearch(nextActive.webSearch);
@@ -2122,8 +1998,8 @@ export const ChatPage = forwardRef<
   }
 
   /** Libellé affiché pour le fournisseur d'une session dans le panneau « Historique ». */
-  function sessionProviderLabel(pid: string): string {
-    if (pid === CLAUDE_PROVIDER_ID) return "Claude (abonnement)";
+  function sessionProviderLabel(pid: string, compte?: CompteClaude): string {
+    if (pid === CLAUDE_PROVIDER_ID) return compte === "teams" ? "Claude Teams" : "Claude (abonnement)";
     return providers.find((p) => p.id === pid)?.label ?? pid;
   }
 
@@ -2135,6 +2011,9 @@ export const ChatPage = forwardRef<
   // de sessions (↑/↓) — un seul élément tabbable par collection.
   const sessionsRoving = useRovingFocus<HTMLUListElement>({ selector: ".session-item__title" });
   const sortedSessions = sortByRecent(sessions);
+  // T-197 — recherche : titre affiché puis texte des messages.
+  const [requete, setRequete] = useState("");
+  const visibles = requete.trim() === "" ? sortedSessions : filtrerSessions(sortedSessions, requete, (s) => texteRecherchableChat(runtimes.consulter(s.id)?.entries ?? s.entries));
   const tabbableSessionId = sortedSessions.some((s) => s.id === activeSessionId)
     ? activeSessionId
     : sortedSessions[0]?.id;
@@ -2174,19 +2053,26 @@ export const ChatPage = forwardRef<
                 affichés (leur runtime est indépendant). */}
             <div className="field">
               <label htmlFor="chat-provider">Fournisseur</label>
-              <select
+              <Deroulant
                 id="chat-provider"
-                value={providerId}
+                value={providerId === CLAUDE_PROVIDER_ID && compteChoisi === "teams" ? VALEUR_MOTEUR_TEAMS : providerId}
                 disabled={streaming}
-                onChange={(e) => choisirFournisseur(e.currentTarget.value)}
+                onChange={(v) => {
+                  if (v !== VALEUR_MOTEUR_TEAMS && v !== CLAUDE_PROVIDER_ID) return choisirFournisseur(v);
+                  choisirFournisseur(CLAUDE_PROVIDER_ID);
+                  // Geste de l'utilisateur : le choix est posé SUR la session active (perso = suivre le défaut, rien à figer).
+                  const c = compteAPersister(v === VALEUR_MOTEUR_TEAMS ? "teams" : "perso", "perso");
+                  setCompteChoisi(c);
+                  setSessions(avecCompteChat(sessionsRef.current, activeSessionIdRef.current, c));
+                }}
               >
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.label}
                   </option>
                 ))}
-                <option value={CLAUDE_PROVIDER_ID}>Claude (abonnement)</option>
-              </select>
+                {optionsMoteurClaude(comptes, CLAUDE_PROVIDER_ID, compteChoisi ?? "perso").map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </Deroulant>
             </div>
 
             <div className="field">
@@ -2224,11 +2110,11 @@ export const ChatPage = forwardRef<
             {isClaude && effortsPour(model).length > 0 && (
               <div className="field">
                 <label htmlFor="chat-effort">Effort</label>
-                <select
+                <Deroulant
                   id="chat-effort"
                   value={effort}
                   disabled={streaming}
-                  onChange={(e) => setEffort(e.currentTarget.value as EffortLevel | "")}
+                  onChange={(v) => setEffort(v as EffortLevel | "")}
                 >
                   <option value="">Défaut</option>
                   {effortsPour(model).map((n) => (
@@ -2236,7 +2122,7 @@ export const ChatPage = forwardRef<
                       {n}
                     </option>
                   ))}
-                </select>
+                </Deroulant>
               </div>
             )}
 
@@ -2302,8 +2188,11 @@ export const ChatPage = forwardRef<
               Nouvelle conversation
             </button>
 
+            {sessions.length > 0 && <RechercheSessions id="chat-recherche" valeur={requete} onChange={setRequete} />}
             {sessions.length === 0 ? (
               <p className="empty-hint">Aucune session.</p>
+            ) : requete.trim() !== "" && visibles.length === 0 ? (
+              <p className="empty-hint">Aucune discussion ne correspond.</p>
             ) : (
               <ul
                 className="session-list"
@@ -2311,7 +2200,7 @@ export const ChatPage = forwardRef<
                 onKeyDown={sessionsRoving.onKeyDown}
                 onFocus={sessionsRoving.onFocus}
               >
-                {sortedSessions.map((s) => (
+                {visibles.map((s) => (
                   <li key={s.id} className={`session-item${s.id === activeSessionId ? " session-item--active" : ""}`}>
                     {editingSessionId === s.id ? (
                       <input
@@ -2345,7 +2234,7 @@ export const ChatPage = forwardRef<
                     )}
                     <div className="session-item__meta">
                       <span className="session-item__date">{formatRelativeDate(s.updatedAt)}</span>
-                      <span className="session-item__engine">{sessionProviderLabel(s.providerId)}</span>
+                      <span className="session-item__engine">{sessionProviderLabel(s.providerId, s.compte)}</span>
                     </div>
                     {confirmDeleteId === s.id ? (
                       <div className="session-item__confirm">
@@ -2391,6 +2280,19 @@ export const ChatPage = forwardRef<
                 ))}
               </ul>
             )}
+            <ArchivesGroupe
+              archives={requete.trim() === "" ? archivage.archives : filtrerSessions(archivage.archives, requete)}
+              restoreArchive={(id) => void restoreChatArchive(id)}
+              trashArchive={(id) => void archivage.mettreDeCote(id)}
+              rechercheActive={requete.trim() !== ""}
+              unite="messages"
+            />
+            <RattrapageTitres
+              n={vivesATitrer.length}
+              etat={rattrapageTitres.etat}
+              onLancer={lancerRattrapageTitres}
+              onArreter={rattrapageTitres.arreter}
+            />
           </SidebarSection>
         </PanneauLateral>
 
@@ -2527,7 +2429,7 @@ export const ChatPage = forwardRef<
                 {/* T-120 — action secondaire, donc dans la colonne d'icônes et
                     pas sur une ligne à elle (constat du 2026-09-05). */}
                 <ReveilControl
-                  reveils={activeReveils}
+                  reveils={activeReveils} compte={compteTour}
                   historique={activeRuntime.reveilsHistorique}
                   brouillon={draft}
                   onEnregistrer={enregistrerReveil}

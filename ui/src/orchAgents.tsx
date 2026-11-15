@@ -47,6 +47,8 @@ import {
 import { type ProviderConfig } from "./providerAdmin";
 import { type PermissionMode } from "./sidecar";
 import { useEffect, useState } from "react";
+import { Deroulant } from "./Deroulant";
+import { confirmer } from "./confirmer";
 
 export interface AgentsSectionProps {
   cwd: string | null;
@@ -309,26 +311,26 @@ export function AgentEditor({ mode, cwd, hasProject, providers, initial, initial
             </div>
             <div className="field">
               <label htmlFor="ag-scope">Portée</label>
-              <select
+              <Deroulant
                 id="ag-scope"
                 value={scope}
                 disabled={mode === "edit"}
-                onChange={(e) => setScope(e.currentTarget.value as "project" | "global")}
+                onChange={(v) => setScope(v as "project" | "global")}
               >
                 {hasProject && <option value="project">Projet</option>}
                 <option value="global">Global</option>
-              </select>
+              </Deroulant>
             </div>
             <div className="field">
               <label htmlFor="ag-engine">Moteur</label>
-              <select id="ag-engine" value={engineValue} onChange={(e) => setEngineValue(e.currentTarget.value)}>
+              <Deroulant id="ag-engine" value={engineValue} onChange={setEngineValue}>
                 <option value="">Claude (abonnement)</option>
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.label}
                   </option>
                 ))}
-              </select>
+              </Deroulant>
             </div>
             <div className="field">
               <label htmlFor="ag-model">Modèle</label>
@@ -336,22 +338,22 @@ export function AgentEditor({ mode, cwd, hasProject, providers, initial, initial
                 id="ag-model"
                 value={model}
                 onChange={(e) => setModel(e.currentTarget.value)}
-                placeholder="ex. claude-fable-5-1, qwen3.5:4b"
+                placeholder="ex. claude-fable-5-2, qwen3.5:4b"
               />
             </div>
             <div className="field">
               <label htmlFor="ag-permission">Mode de permission</label>
-              <select
+              <Deroulant
                 id="ag-permission"
                 value={permissionMode}
-                onChange={(e) => setPermissionMode(e.currentTarget.value as PermissionMode)}
+                onChange={(v) => setPermissionMode(v as PermissionMode)}
               >
                 {PERMISSION_MODE_OPTIONS.filter((o) => o.value !== "plan" || engineValue === "").map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>
                 ))}
-              </select>
+              </Deroulant>
             </div>
             <div className="field">
               <label htmlFor="ag-instructions">Instructions</label>
@@ -491,7 +493,7 @@ export function AgentsSection({
   }
 
   async function handleDelete(agent: AgentInfo) {
-    if (!window.confirm(`Supprimer l'agent « ${agent.name} » ?`)) return;
+    if (!(await confirmer(`Supprimer l'agent « ${agent.name} » ?`))) return;
     setActionError("");
     try {
       await agentsDelete(cwd, agent.path);

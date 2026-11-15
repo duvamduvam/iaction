@@ -22,6 +22,7 @@ import {
   type LogLevel,
   type LogScope,
 } from "./logsClient";
+import { copierTexte } from "./copierTexte";
 import { Markdown } from "./Markdown";
 import {
   estBacklogIndisponible,
@@ -37,6 +38,7 @@ import { tachesReportRead, tachesReports, type TacheReportInfo } from "./tachesC
 import { MajPanel } from "./MajPanel";
 import { PingPanel } from "./PingPanel";
 import { useRovingFocus } from "./useRovingFocus";
+import { Deroulant } from "./Deroulant";
 
 const MAX_LOG_LINES = 200;
 
@@ -519,14 +521,8 @@ function JournalPanel() {
 
   async function handleCopier() {
     const texte = affichees.map(entryToText).join("\n");
-    try {
-      await navigator.clipboard.writeText(texte);
-      setMessage(`${affichees.length} entrée(s) copiée(s).`);
-    } catch {
-      // Presse-papier refusé (contexte non sécurisé, permission) : on le dit,
-      // sans casser la page — la liste reste sélectionnable à la souris.
-      setMessage("Copie impossible : presse-papier inaccessible.");
-    }
+    // T-214 : replis et journal dans copierTexte ; la liste reste sélectionnable à la souris.
+    setMessage((await copierTexte(texte)) ? `${affichees.length} entrée(s) copiée(s).` : "Copie impossible : presse-papier inaccessible.");
   }
 
   async function handlePurger() {
@@ -578,10 +574,10 @@ function JournalPanel() {
       <div className="journal-filters">
         <div className="field field--inline">
           <label htmlFor="journal-scope">Scope</label>
-          <select
+          <Deroulant
             id="journal-scope"
             value={scope}
-            onChange={(e) => setScope(e.currentTarget.value as LogScope | "tous")}
+            onChange={(v) => setScope(v as LogScope | "tous")}
           >
             <option value="tous">tous</option>
             {LOG_SCOPES.map((s) => (
@@ -589,21 +585,17 @@ function JournalPanel() {
                 {s}
               </option>
             ))}
-          </select>
+          </Deroulant>
         </div>
         <div className="field field--inline">
           <label htmlFor="journal-periode">Période</label>
-          <select
-            id="journal-periode"
-            value={periode}
-            onChange={(e) => setPeriode(e.currentTarget.value as PeriodeId)}
-          >
+          <Deroulant id="journal-periode" value={periode} onChange={(v) => setPeriode(v as PeriodeId)}>
             {PERIODES.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.label}
               </option>
             ))}
-          </select>
+          </Deroulant>
         </div>
         <div className="field field--inline journal-filters__search">
           <label htmlFor="journal-recherche">Rechercher</label>
@@ -910,28 +902,28 @@ function TicketsPanel() {
       <div className="journal-filters">
         <div className="field field--inline">
           <label htmlFor="tickets-statut">Statut</label>
-          <select
+          <Deroulant
             id="tickets-statut"
             value={statut}
-            onChange={(e) => setStatut(e.currentTarget.value as StatutFiltre)}
+            onChange={(v) => setStatut(v as StatutFiltre)}
           >
             {STATUT_FILTRES.map((f) => (
               <option key={f.id} value={f.id}>
                 {f.label}
               </option>
             ))}
-          </select>
+          </Deroulant>
         </div>
         <div className="field field--inline">
           <label htmlFor="tickets-type">Type</label>
-          <select id="tickets-type" value={type} onChange={(e) => setType(e.currentTarget.value)}>
+          <Deroulant id="tickets-type" value={type} onChange={setType}>
             <option value="tous">tous</option>
             {TICKET_TYPES.map((t) => (
               <option key={t} value={t}>
                 {t}
               </option>
             ))}
-          </select>
+          </Deroulant>
         </div>
         <div className="field field--inline journal-filters__search">
           <label htmlFor="tickets-recherche">Rechercher</label>

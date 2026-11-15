@@ -13,6 +13,8 @@ import {
   choisirArchivables,
   nomArchive,
   nomIndexArchives,
+  poserTitreArchive,
+  resumer,
   PREFIXE_ARCHIVE,
   PREFIXE_INDEX_ARCHIVES,
   restaurer,
@@ -120,7 +122,7 @@ describe("archiver (invariants 1 et 4)", () => {
     expect(r.archivees).toEqual(["s1"]);
     expect(fichiers.get("projarch-s1")).toEqual({ projetId: "didier", session: session(1) });
     expect((fichiers.get("archives-didier") as { archives: EntreeArchive[] }).archives).toEqual([
-      { id: "s1", title: "Session 1", titleCustom: false, createdAt: session(1).createdAt, updatedAt: session(1).updatedAt, nbTours: 0 },
+      { id: "s1", title: "Session 1", titleCustom: false, aTitrer: false, createdAt: session(1).createdAt, updatedAt: session(1).updatedAt, nbTours: 0 },
     ]);
     expect(lignes).toEqual([]);
   });
@@ -279,5 +281,31 @@ describe("retirerArchive : la corbeille ne détruit pas", () => {
     expect(index).toEqual(a.index);
     expect(fichiers.has("projarch-s1")).toBe(true);
     expect(lignes.map((l) => l.niveau)).toEqual(["error"]);
+  });
+});
+
+describe("titre IA d'une archive (T-197)", () => {
+  const sans = (): PersistedSession => session(1);
+
+  it("poserTitreArchive écrit le fichier ET l'index, et le retire du compteur", async () => {
+    const { io, fichiers } = fauxMagasin({ [nomArchive("s1")]: { projetId: "p", session: sans() } });
+    const index = [resumer(sans())];
+    const dejaEcrit = new Map<string, string>();
+    const apres = await poserTitreArchive(io, "p", "s1", "Chansons pour ukulélé", index, dejaEcrit, espion().journaliser);
+    const fichier = fichiers.get(nomArchive("s1")) as { session: PersistedSession };
+    expect(fichier.session).toMatchObject({ titreIA: "Chansons pour ukulélé", title: "Chansons pour ukulélé" });
+    expect(apres[0]).toMatchObject({ titreIA: "Chansons pour ukulélé", aTitrer: false });
+    expect((fichiers.get(nomIndexArchives("p")) as { archives: EntreeArchive[] }).archives[0].titreIA).toBe("Chansons pour ukulélé");
+  });
+
+  it("un renommage fait entre-temps l'emporte : le fichier n'est pas réécrit", async () => {
+    const renommee = { ...sans(), titleCustom: true, title: "Mon nom" };
+    const { io, ecritures } = fauxMagasin({ [nomArchive("s1")]: { projetId: "p", session: renommee } });
+    await poserTitreArchive(io, "p", "s1", "Titre IA", [resumer(renommee)], new Map(), espion().journaliser);
+    expect(ecritures).not.toContain(nomArchive("s1"));
+  });
+
+  it("le résumé garde titreIA", () => {
+    expect(resumer({ ...sans(), titreIA: "X" }).titreIA).toBe("X");
   });
 });

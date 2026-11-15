@@ -1,5 +1,5 @@
 /*
- * La barre de navigation principale — les sept onglets de pages, et l'action
+ * La barre de navigation principale — les six onglets de pages, et l'action
  * qui n'est PAS un onglet (terminal). Pas de bouton « nouvelle fenêtre » : une
  * seconde fenêtre s'ouvre en relançant IAction (instance unique, T-062).
  *

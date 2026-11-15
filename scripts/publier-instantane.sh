@@ -32,6 +32,25 @@
 
 set -euo pipefail
 
+# ── Plages sans publication (11/11) ─────────────────────────────────────
+# Le commit fabriqué porte l'heure de publication, et `git commit-tree` ne passe
+# par AUCUN hook : la garde est donc ici. Plages lues dans un fichier LOCAL hors
+# dépôt (une ligne « JOURS DEBUT FIN », jours ISO 1 = lundi, heures pleines, FIN
+# exclue ; fichier absent = aucune plage). Jamais contourner en changeant la date.
+PLAGES="${PLAGES_SANS_COMMIT:-$HOME/.config/didier/plages-sans-commit}"
+if [ -r "$PLAGES" ]; then
+  read -r JOUR_N HEURE_N <<<"$(date '+%u %H')"
+  if awk -v j="$JOUR_N" -v h="$((10#$HEURE_N))" '
+      !/^[[:space:]]*#/ && NF >= 3 {
+        n = split($1, r, "-"); a = r[1] + 0; b = (n > 1 ? r[2] : r[1]) + 0
+        if (j >= a && j <= b && h >= $2 + 0 && h < $3 + 0) dedans = 1
+      }
+      END { exit !dedans }' "$PLAGES"; then
+    echo "publier-instantane : plage sans publication ($PLAGES) — réessaie après la plage." >&2
+    exit 1
+  fi
+fi
+
 DEPOT_PUBLIC="git@github.com:duvamduvam/iaction.git"
 URL_PR="https://github.com/duvamduvam/iaction/compare/main...instantane?expand=1"
 IDENTITE_NOM="duvamduvam"

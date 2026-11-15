@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { calculerSignalEscalade, type TourPourEscalade } from "./escaladeSignal";
 
 function tour(overrides: Partial<TourPourEscalade>): TourPourEscalade {
-  return { conversationId: "c1", ts: "2026-08-29T10:00:00Z", model: "claude-haiku-4-5", erreur: false, ...overrides };
+  return { conversationId: "c1", ts: "2026-08-29T10:00:00Z", model: "claude-haiku-5-5", erreur: false, ...overrides };
 }
 
 describe("calculerSignalEscalade", () => {
@@ -20,7 +20,7 @@ describe("calculerSignalEscalade", () => {
 
   it("compte une escalade incontestable : erreur sur haiku puis tour suivant sur opus", () => {
     const r = calculerSignalEscalade([
-      tour({ ts: "10:00:00", model: "claude-haiku-4-5", erreur: true }),
+      tour({ ts: "10:00:00", model: "claude-haiku-5-5", erreur: true }),
       tour({ ts: "10:01:00", model: "claude-opus-5-5", erreur: false }),
     ]);
     expect(r.toursEscalade).toBe(1);
@@ -30,7 +30,7 @@ describe("calculerSignalEscalade", () => {
 
   it("ne compte PAS une réussite suivie d'un tier supérieur : pas d'erreur, pas d'escalade", () => {
     const r = calculerSignalEscalade([
-      tour({ ts: "10:00:00", model: "claude-haiku-4-5", erreur: false }),
+      tour({ ts: "10:00:00", model: "claude-haiku-5-5", erreur: false }),
       tour({ ts: "10:01:00", model: "claude-opus-5-5", erreur: false }),
     ]);
     expect(r.toursEscalade).toBe(0);
@@ -47,7 +47,7 @@ describe("calculerSignalEscalade", () => {
 
     const inferieur = calculerSignalEscalade([
       tour({ ts: "10:00:00", model: "claude-opus-5-5", erreur: true }),
-      tour({ ts: "10:01:00", model: "claude-haiku-4-5", erreur: false }),
+      tour({ ts: "10:01:00", model: "claude-haiku-5-5", erreur: false }),
     ]);
     expect(inferieur.toursEscalade).toBe(0);
   });
@@ -63,7 +63,7 @@ describe("calculerSignalEscalade", () => {
 
   it("respecte les frontières de conversation : pas d'escalade inter-conversations", () => {
     const r = calculerSignalEscalade([
-      tour({ conversationId: "a", ts: "10:00:00", model: "claude-haiku-4-5", erreur: true }),
+      tour({ conversationId: "a", ts: "10:00:00", model: "claude-haiku-5-5", erreur: true }),
       tour({ conversationId: "b", ts: "10:01:00", model: "claude-opus-5-5", erreur: false }),
     ]);
     expect(r.toursEscalade).toBe(0);
@@ -73,16 +73,16 @@ describe("calculerSignalEscalade", () => {
   it("réordonne les tours d'une conversation reçus dans le désordre", () => {
     const r = calculerSignalEscalade([
       tour({ ts: "10:05:00", model: "claude-opus-5-5", erreur: false }),
-      tour({ ts: "10:00:00", model: "claude-haiku-4-5", erreur: true }),
+      tour({ ts: "10:00:00", model: "claude-haiku-5-5", erreur: true }),
     ]);
     expect(r.toursEscalade).toBe(1);
   });
 
   it("une conversation avec plusieurs escalades ne compte qu'une fois au dénominateur conversation", () => {
     const r = calculerSignalEscalade([
-      tour({ ts: "10:00:00", model: "claude-haiku-4-5", erreur: true }),
+      tour({ ts: "10:00:00", model: "claude-haiku-5-5", erreur: true }),
       tour({ ts: "10:01:00", model: "claude-opus-5-5", erreur: true }),
-      tour({ ts: "10:02:00", model: "claude-haiku-4-5", erreur: true }),
+      tour({ ts: "10:02:00", model: "claude-haiku-5-5", erreur: true }),
       tour({ ts: "10:03:00", model: "claude-opus-5-5", erreur: false }),
     ]);
     expect(r.toursEscalade).toBe(2);

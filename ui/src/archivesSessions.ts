@@ -35,12 +35,14 @@
 
 import { nomPour, type IoEtat } from "./etatEclate";
 import {
+  candidatTitre,
   isPersistedSession,
   MAX_SESSIONS_PER_PROJECT,
   type PersistedProjectEntry,
   type PersistedSession,
 } from "./modeleProjet";
 import { capSessions, sortByRecent } from "./sessionStore";
+import { doitTitrer } from "./titresDiscussions";
 
 export const PREFIXE_ARCHIVE = "projarch-";
 export const PREFIXE_INDEX_ARCHIVES = "archives-";
@@ -54,6 +56,15 @@ export interface EntreeArchive {
   id: string;
   title: string;
   titleCustom: boolean;
+  /** T-197 — titre du modèle, conservé avec l'archive. Absent sur les index d'avant. */
+  titreIA?: string;
+  /**
+   * T-197 — cette archive attend-elle un titre (éligible à « Nommer les anciennes
+   * discussions ») ? Calculé à l'archivage, sans lire le fichier à chaque
+   * affichage. Absent sur les index d'avant : compté éligible tant qu'un passage
+   * n'a pas lu l'archive et tranché (le compteur peut alors surestimer, jamais sous-estimer).
+   */
+  aTitrer?: boolean;
   createdAt: string;
   updatedAt: string;
   nbTours: number;
@@ -77,6 +88,8 @@ export function resumer(session: PersistedSession): EntreeArchive {
     id: session.id,
     title: session.title,
     titleCustom: session.titleCustom,
+    ...(session.titreIA ? { titreIA: session.titreIA } : {}),
+    aTitrer: doitTitrer(candidatTitre(session), new Set()),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     nbTours: session.turns.length,
@@ -273,6 +286,72 @@ export async function retirerArchive(
   const nom = nomArchive(idSession);
   await io.renommer(nom, `${PREFIXE_RETIRE}${nom}`.slice(0, NOM_MAX)).catch((err: unknown) => {
     journaliser("warn", "fichier d'archive non renommé sous retire-…", { projetId, sessionId: idSession, erreur: String(err) });
+  });
+  return suivant;
+}
+
+/**
+ * T-197 — relit une archive pour le passage de rattrapage. `null` si illisible
+ * ou invalide (journalisé) : le passage compte alors un échec, rien n'est modifié.
+ */
+export async function lireSessionArchivee(
+  io: IoEtat,
+  projetId: string,
+  idSession: string,
+  journaliser: Journaliser,
+): Promise<PersistedSession | null> {
+  try {
+    const brut = await io.lire(nomArchive(idSession));
+    const session = (brut as Partial<FichierArchive> | null)?.session;
+    if (isPersistedSession(session) && session.id === idSession) return session;
+    journaliser("error", "archive invalide ou absente (titre)", { projetId, sessionId: idSession });
+  } catch (err) {
+    journaliser("error", "archive illisible (titre)", { projetId, sessionId: idSession, erreur: String(err) });
+  }
+  return null;
+}
+
+/** T-197 — l'archive n'a finalement rien à titrer (moteur neutre, pas de réponse…) : l'index le retient, le compteur retombe. */
+export async function marquerArchiveSansTitre(
+  io: IoEtat,
+  projetId: string,
+  idSession: string,
+  index: readonly EntreeArchive[],
+  journaliser: Journaliser,
+): Promise<EntreeArchive[]> {
+  const suivant = index.map((e) => (e.id === idSession ? { ...e, aTitrer: false } : e));
+  await ecrireIndex(io, projetId, suivant).catch((err: unknown) => {
+    journaliser("warn", "index d'archives non mis à jour (titre)", { projetId, sessionId: idSession, erreur: String(err) });
+  });
+  return suivant;
+}
+
+/**
+ * T-197 — pose le titre du modèle dans l'archive : son fichier `projarch-…` ET
+ * son entrée d'index. Le fichier d'abord : un échec ici laisse tout en l'état et
+ * lève (le passage compte un échec). Un renommage fait entre-temps l'emporte
+ * (l'archive est relue juste avant l'écriture). Rend l'index à jour.
+ */
+export async function poserTitreArchive(
+  io: IoEtat,
+  projetId: string,
+  idSession: string,
+  titre: string,
+  index: readonly EntreeArchive[],
+  dejaEcrit: Map<string, string>,
+  journaliser: Journaliser,
+): Promise<EntreeArchive[]> {
+  const actuelle = await lireSessionArchivee(io, projetId, idSession, journaliser);
+  if (!actuelle) throw new Error("archive illisible");
+  if (actuelle.titleCustom || actuelle.titreIA) return marquerArchiveSansTitre(io, projetId, idSession, index, journaliser);
+  const nouvelle: PersistedSession = { ...actuelle, titreIA: titre, title: titre };
+  const fichier: FichierArchive = { projetId, session: nouvelle };
+  await io.ecrire(nomArchive(idSession), fichier);
+  dejaEcrit.set(idSession, JSON.stringify(nouvelle));
+  const resume = resumer(nouvelle);
+  const suivant = index.map((e) => (e.id === idSession ? { ...resume, aTitrer: false } : e));
+  await ecrireIndex(io, projetId, suivant).catch((err: unknown) => {
+    journaliser("error", "titre posé dans l'archive mais index non écrit", { projetId, sessionId: idSession, erreur: String(err) });
   });
   return suivant;
 }

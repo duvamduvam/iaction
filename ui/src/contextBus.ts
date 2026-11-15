@@ -91,7 +91,7 @@ const CONTEXT_WINDOWS: { match: string; tokens: number }[] = [
   ...MODELES_ABONNEMENT_CLAUDE.map((m) => ({ match: m.id, tokens: m.contexte })),
   // Générations sorties du sélecteur mais encore épinglées sur des fils : le
   // palier 1 M est arrivé avec la génération 4.6, avant c'est 200 k. Ces
-  // entrées se lisent APRÈS la liste, donc `claude-fable-5-1` l'emporte sur le
+  // entrées se lisent APRÈS la liste, donc `claude-fable-5-2` l'emporte sur le
   // préfixe `claude-fable` qu'il contient.
   { match: "claude-fable", tokens: 1_000_000 },
   { match: "claude-mythos", tokens: 1_000_000 },

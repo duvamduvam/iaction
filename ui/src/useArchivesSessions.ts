@@ -12,6 +12,9 @@ import {
   archiver,
   chargerIndexArchives,
   choisirArchivables,
+  lireSessionArchivee,
+  marquerArchiveSansTitre,
+  poserTitreArchive,
   restaurer,
   retirerArchive,
   sansVifs,
@@ -20,7 +23,10 @@ import {
 } from "./archivesSessions";
 import { IO_ETAT } from "./etatEclate";
 import { logUi } from "./journal";
-import type { PersistedProjectEntry, PersistedSession } from "./modeleProjet";
+import { compteExplicite, type CompteClaude } from "./comptesClaude";
+import { candidatTitre, type PersistedProjectEntry, type PersistedSession } from "./modeleProjet";
+import { claudeTitreDiscussion } from "./sidecar";
+import { doitTitrer, marquerTentee } from "./titresDiscussions";
 
 /** Le journal réel : canal `ui`, le projet et la session dans les champs. */
 const journaliser: Journaliser = (niveau, msg, fields) => logUi(niveau, "ui", `archives de sessions : ${msg}`, { fields });
@@ -38,6 +44,13 @@ export interface ArchivesSessions {
   restaurerArchive: (idSession: string, inserer: (session: PersistedSession) => boolean) => Promise<boolean>;
   /** Corbeille : met l'archive de côté (`retire-…`), ne la détruit pas. */
   retirerUneArchive: (idSession: string) => Promise<void>;
+  /**
+   * T-197 — rattrapage d'UNE archive : relue, éligibilité tranchée sur son
+   * contenu, titre demandé, puis écrit dans son fichier et son index. Rend le
+   * titre, `null` en cas d'échec, `undefined` si l'archive n'a finalement rien
+   * à titrer (le compteur retombe sans que ce soit un échec).
+   */
+  nommerUneArchive: (idSession: string, compteParDefaut: CompteClaude) => Promise<string | null | undefined>;
 }
 
 /**
@@ -106,5 +119,23 @@ export function useArchivesSessions(
     poser(await retirerArchive(IO_ETAT, pour, idSession, indexRef.current, dejaEcrit.current, journaliser), pour);
   }
 
-  return { archives, archiverHorsPlafond, restaurerArchive, retirerUneArchive };
+  async function nommerUneArchive(idSession: string, compteParDefaut: CompteClaude): Promise<string | null | undefined> {
+    const pour = projetRef.current;
+    if (!pour) return null;
+    const session = await lireSessionArchivee(IO_ETAT, pour, idSession, journaliser);
+    if (!session) return null;
+    if (!doitTitrer(candidatTitre(session), new Set())) {
+      poser(await marquerArchiveSansTitre(IO_ETAT, pour, idSession, indexRef.current, journaliser), pour);
+      return undefined;
+    }
+    const echange = candidatTitre(session).echange;
+    if (!echange) return undefined;
+    marquerTentee(idSession);
+    const titre = await claudeTitreDiscussion(echange.message, echange.reponse, compteExplicite(session.engine ?? {}) ?? compteParDefaut);
+    if (!titre) return null;
+    poser(await poserTitreArchive(IO_ETAT, pour, idSession, titre, indexRef.current, dejaEcrit.current, journaliser), pour);
+    return titre;
+  }
+
+  return { archives, archiverHorsPlafond, restaurerArchive, retirerUneArchive, nommerUneArchive };
 }

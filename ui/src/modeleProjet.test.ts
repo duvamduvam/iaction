@@ -14,14 +14,15 @@
 import { describe, expect, it } from "vitest";
 import type { AgentTurn } from "./agentTurns";
 import {
-  appliquerTitresIA,
   buildPersistedSession,
+  candidatTitre,
   dedupeTurnIds,
-  deriveSessionTitle,
   freshSession,
   MAX_PERSISTED_TURNS,
   sanitizePersistedConversations,
   sessionStateFromPersisted,
+  surMoteurClaude,
+  titreSession,
   withRoutingRepair,
   type ProjectSession,
 } from "./modeleProjet";
@@ -178,81 +179,87 @@ describe("sanitizePersistedConversations — le videur à l'entrée", () => {
   });
 });
 
-describe("deriveSessionTitle", () => {
+describe("titreSession — règle unique du titre affiché (T-197)", () => {
   it("prend le premier tour utilisateur, pas le premier tour tout court", () => {
     const turns = [tour("a-1", { role: "assistant", content: "Bonjour !" }), tour("u-2", { content: "Répare la CI" })];
-    expect(deriveSessionTitle(turns)).toContain("Répare");
+    expect(titreSession({ title: "", titleCustom: false }, turns)).toContain("Répare");
   });
 
   it("sans tour utilisateur : titre par défaut, jamais une chaîne vide", () => {
-    expect(deriveSessionTitle([]).length).toBeGreaterThan(0);
+    expect(titreSession({ title: "", titleCustom: false }, []).length).toBeGreaterThan(0);
+  });
+
+  it("le titre IA prime sur le repli, le renommage prime sur tout", () => {
+    const turns = [tour("u-1", { content: "Donne les aticté" })];
+    expect(titreSession({ title: "x", titleCustom: false, titreIA: "Activités du week-end" }, turns)).toBe("Activités du week-end");
+    expect(titreSession({ title: "Mon titre", titleCustom: true, titreIA: "Activités du week-end" }, turns)).toBe("Mon titre");
+  });
+
+  it("le titre est lu sur le texte VU : displayContent, jamais le bloc de connaissances", () => {
+    const turns = [tour("u-1", { content: "[Connaissances] blabla\n\nQuestion", displayContent: "Question réelle" })];
+    expect(titreSession({ title: "", titleCustom: false }, turns)).toBe("Question réelle");
   });
 });
 
-describe("appliquerTitresIA — T-063, le panneau Sessions ne doit plus converger", () => {
-  it("cas nominal : titre IA distinct, il remplace le repli local", () => {
-    const { sessions, changed } = appliquerTitresIA(
-      [session("a")],
-      new Map([["srv-a", "Déployer n8n sur OVH"]]),
-    );
-    expect(changed).toBe(true);
-    expect(sessions[0].title).toBe("Déployer n8n sur OVH");
+const reponseTexte = (texte: string): AgentTurn => ({
+  id: "a-1",
+  role: "assistant",
+  status: "done",
+  blocks: [{ type: "text", content: texte }] as unknown as AgentTurn["blocks"],
+});
+
+describe("titreIA — T-197, survit à la sauvegarde et au rechargement", () => {
+  const tours = [tour("u-1", { content: "Donne les aticté" }), reponseTexte("Voici")];
+
+  it("buildPersistedSession conserve titreIA et affiche ce titre, pas le repli", () => {
+    const persistee = buildPersistedSession(session("a", { turns: tours, titreIA: "Activités du week-end" }));
+    expect(persistee.titreIA).toBe("Activités du week-end");
+    expect(persistee.title).toBe("Activités du week-end");
   });
 
-  it("deux sessions convergent vers le même titre IA : la première le gagne, la seconde garde son repli", () => {
-    const { sessions, changed } = appliquerTitresIA(
-      [session("a"), session("b")],
-      new Map([
-        ["srv-a", "Déployer n8n sur OVH"],
-        ["srv-b", "Déployer n8n sur OVH"],
-      ]),
-    );
-    expect(changed).toBe(true);
-    expect(sessions[0].title).toBe("Déployer n8n sur OVH");
-    expect(sessions[1].title).toBe("repli local b"); // pas de doublon : repli gardé
-    expect(sessions[0].title).not.toBe(sessions[1].title);
+  it("aller-retour disque : le titre IA est relu", () => {
+    const brut = JSON.parse(JSON.stringify(buildPersistedSession(session("a", { turns: tours, titreIA: "Activités du week-end" }))));
+    expect(sessionStateFromPersisted(brut).titreIA).toBe("Activités du week-end");
   });
 
-  it("reprise (resume) partageant son sessionId serveur : même mécanique, un seul gagnant", () => {
-    const { sessions, changed } = appliquerTitresIA(
-      [session("premiere", { sessionId: "srv-partage" }), session("reprise", { sessionId: "srv-partage" })],
-      new Map([["srv-partage", "Déployer n8n sur OVH"]]),
-    );
-    expect(changed).toBe(true);
-    expect(sessions[0].title).toBe("Déployer n8n sur OVH");
-    expect(sessions[1].title).toBe("repli local reprise");
+  it("une session sans le champ (antérieure) est acceptée et n'en reçoit pas", () => {
+    const brut = JSON.parse(JSON.stringify(buildPersistedSession(session("a", { turns: tours }))));
+    expect("titreIA" in brut).toBe(false);
+    const entree = { sessions: [brut], activeId: "a", openConversationIds: ["a"], openFilePaths: [], activeTab: "conv:a" };
+    const propre = sanitizePersistedConversations({ "/p": entree });
+    expect(propre["/p"].sessions).toHaveLength(1);
+    expect(sessionStateFromPersisted(propre["/p"].sessions[0]).titreIA).toBeUndefined();
   });
 
-  it("le titre IA est déjà porté par une autre session (pas candidate) : repli gardé", () => {
-    const { sessions, changed } = appliquerTitresIA(
-      [session("a", { title: "Déployer n8n sur OVH", titleCustom: true }), session("b")],
-      new Map([["srv-b", "Déployer n8n sur OVH"]]),
-    );
-    expect(changed).toBe(false);
-    expect(sessions[1].title).toBe("repli local b");
+  it("un titreIA illisible est ignoré sans invalider la session", () => {
+    const brut = { ...JSON.parse(JSON.stringify(buildPersistedSession(session("a", { turns: tours })))), titreIA: 42 };
+    expect(sessionStateFromPersisted(brut).titreIA).toBeUndefined();
   });
 
-  it("titleCustom n'est jamais écrasé", () => {
-    const { sessions, changed } = appliquerTitresIA(
-      [session("a", { titleCustom: true, title: "Mon titre à moi" })],
-      new Map([["srv-a", "Déployer n8n sur OVH"]]),
-    );
-    expect(changed).toBe(false);
-    expect(sessions[0].title).toBe("Mon titre à moi");
+  it("la synchronisation d'un tour (copie + recalcul) garde titreIA", () => {
+    const fusion = { ...session("a", { turns: [], titreIA: "Activités du week-end" }), turns: tours };
+    const apres = { ...fusion, title: titreSession(fusion, fusion.turns) };
+    expect(apres.titreIA).toBe("Activités du week-end");
+    expect(apres.title).toBe("Activités du week-end");
+  });
+});
+
+describe("candidatTitre / surMoteurClaude — T-197", () => {
+  const echange = [tour("u-1", { content: "[Connaissances]…", displayContent: "Chansons faciles ?" }), reponseTexte("Voici")];
+
+  it("le message envoyé au titre est celui que l'utilisateur a vu", () => {
+    const c = candidatTitre(session("a", { turns: echange }));
+    expect(c.echange).toEqual({ message: "Chansons faciles ?", reponse: "Voici" });
+    expect(c.moteurClaude).toBe(true);
   });
 
-  it("sans sessionId (moteur neutre) : jamais concernée", () => {
-    const { sessions, changed } = appliquerTitresIA(
-      [session("a", { sessionId: null })],
-      new Map([["srv-a", "Déployer n8n sur OVH"]]),
-    );
-    expect(changed).toBe(false);
-    expect(sessions[0].title).toBe("repli local a");
+  it("moteur neutre ou cible de routage neutre : pas Claude", () => {
+    expect(surMoteurClaude({ engine: { providerId: "ollama", model: "m" } })).toBe(false);
+    expect(surMoteurClaude({ engine: { providerId: null, model: "" }, routedTarget: { engine: "neutral", model: "m" } })).toBe(false);
   });
 
-  it("référence stable quand rien ne change : pas de re-render inutile", () => {
-    const prev = [session("a")];
-    const { sessions } = appliquerTitresIA(prev, new Map());
-    expect(sessions).toBe(prev);
+  it("réponse non terminée : pas d'échange", () => {
+    const enCours = [echange[0], { ...echange[1], status: "streaming" as const }];
+    expect(candidatTitre(session("a", { turns: enCours })).echange).toBeNull();
   });
 });

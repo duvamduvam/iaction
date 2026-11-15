@@ -17,7 +17,8 @@ export function SourcesWeb({ sources }: { sources?: SourceWeb[] }) {
   return (
     <div className="chat-bubble__sources">
       {sources.map((s) => (
-        <a key={s.url} href={s.url} target="_blank" rel="noreferrer noopener" title={s.url}>
+        // Clic routé vers le navigateur système par le filet global (liensExternes.ts).
+        <a key={s.url} href={s.url} rel="noreferrer noopener" title={s.url}>
           [{s.n}] {s.titre}
         </a>
       ))}

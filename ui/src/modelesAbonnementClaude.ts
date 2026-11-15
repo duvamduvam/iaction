@@ -39,6 +39,15 @@
  * `claude-sonnet-5` est sorti le 2026-10-06, remplacé par `claude-sonnet-5-5`
  * (sorti le 2026-09-28) : même tarif ($2/$10), une génération de plus, plus
  * rapide en sortie et plus sobre en tokens (T-143).
+ * `claude-haiku-4-5` est sorti le 2026-11-07, remplacé par `claude-haiku-5-5` :
+ * dix fois moins cher ($0,10/$0,50 contre $1/$5), fenêtre de 1 M au lieu de
+ * 200 k, et les cinq niveaux d'effort (Haiku 4.5 n'en avait aucun). Arrivé
+ * dans le CLI embarqué avec l'agent SDK 0.3.319, signalé par veille-modeles.
+ * `claude-fable-5-1` est sorti le 2026-11-11, remplacé par `claude-fable-5-2`
+ * (sorti le 2026-11-09) : MOINS cher ($8/$40 contre $10/$50), même étage, une
+ * génération de plus — Fable coûte désormais 2× Opus 5.5, et non plus 2,5×.
+ * Arrivé dans le CLI embarqué avec l'agent SDK 0.3.322, signalé par
+ * veille-modeles (T-212).
  *
  * AVANT d'ajouter un id ici : vérifier qu'il existe dans le binaire que le
  * sidecar lance vraiment, et qui n'est PAS le `claude` installé sur la machine
@@ -74,7 +83,7 @@ export interface ModeleAbonnement {
 
 export const MODELES_ABONNEMENT_CLAUDE: ModeleAbonnement[] = [
   {
-    id: "claude-fable-5-1",
+    id: "claude-fable-5-2",
     contexte: 1_000_000,
     efforts: NIVEAUX_EFFORT,
     note: "Le plus capable — raisonnement long, travail agentique",
@@ -83,7 +92,7 @@ export const MODELES_ABONNEMENT_CLAUDE: ModeleAbonnement[] = [
     id: "claude-opus-5-5",
     contexte: 1_000_000,
     efforts: NIVEAUX_EFFORT,
-    note: "Opus courant — niveau Fable sur la plupart des tâches, 2,5× moins cher",
+    note: "Opus courant — niveau Fable sur la plupart des tâches, 2× moins cher",
   },
   {
     id: "claude-sonnet-5-5",
@@ -91,16 +100,40 @@ export const MODELES_ABONNEMENT_CLAUDE: ModeleAbonnement[] = [
     efforts: NIVEAUX_EFFORT,
     note: "Sonnet courant — même tarif que Sonnet 5, plus rapide et plus sobre en tokens",
   },
-  { id: "claude-haiku-4-5", contexte: 200_000, efforts: [], note: "Le plus rapide et le plus économique" },
+  {
+    id: "claude-haiku-5-5",
+    contexte: 1_000_000,
+    efforts: NIVEAUX_EFFORT,
+    note: "Le plus rapide et le plus économique — raisonne, contrairement à Haiku 4.5",
+  },
 ];
 
 /** Ids seuls — pour les consommateurs qui n'ont que faire des libellés. */
 export const IDS_ABONNEMENT_CLAUDE: string[] = MODELES_ABONNEMENT_CLAUDE.map((m) => m.id);
 
 /**
- * Niveaux d'effort proposables pour un modèle. Modèle inconnu, vide ou
- * non-Claude (moteur neutre) : aucun — on ne devine pas ce qu'on ne connaît pas.
+ * T-213 — modèles SORTIS du sélecteur mais encore servis, et donc encore
+ * épinglés sur des fils. Ils ne sont plus proposés, mais un fil resté sur l'un
+ * d'eux garde son réglage d'effort : sans cette liste, `effortsPour` les
+ * ignorait, le sélecteur d'effort disparaissait et l'effort repartait au
+ * défaut sans rien dire. Un modèle qui n'est plus servi du tout s'en retire.
+ */
+export const MODELES_HERITES_CLAUDE: ReadonlyArray<{ id: string; efforts: EffortLevel[] }> = [
+  { id: "claude-fable-5-1", efforts: NIVEAUX_EFFORT }, // sorti le 2026-11-11 (T-212)
+  { id: "claude-fable-5", efforts: NIVEAUX_EFFORT },
+  { id: "claude-opus-5", efforts: NIVEAUX_EFFORT }, // sorti le 2026-09-26 (T-143)
+  { id: "claude-sonnet-5", efforts: NIVEAUX_EFFORT }, // sorti le 2026-10-06
+];
+
+/**
+ * Niveaux d'effort proposables pour un modèle : ceux du sélecteur, puis ceux
+ * des modèles hérités encore servis. Modèle inconnu, vide ou non-Claude
+ * (moteur neutre) : aucun — on ne devine pas ce qu'on ne connaît pas.
  */
 export function effortsPour(modelId: string | null | undefined): EffortLevel[] {
-  return MODELES_ABONNEMENT_CLAUDE.find((m) => m.id === modelId)?.efforts ?? [];
+  return (
+    MODELES_ABONNEMENT_CLAUDE.find((m) => m.id === modelId)?.efforts ??
+    MODELES_HERITES_CLAUDE.find((m) => m.id === modelId)?.efforts ??
+    []
+  );
 }

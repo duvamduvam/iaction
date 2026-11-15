@@ -224,7 +224,7 @@ fn commande_sidecar(node: &str, entry: &str, reseau: &crate::reseau::Reseau) -> 
     // `HTTPS_PROXY` par défaut, contrairement à curl ou à un navigateur. Sur un
     // poste d'entreprise à egress contrôlé, tous les appels sortants échouent
     // donc en `UND_ERR_CONNECT_TIMEOUT` pendant que le navigateur d'à côté
-    // fonctionne — constaté le 2026-08-13 sur le poste Région, où l'app
+    // fonctionne — constaté le 2026-08-13 sur le poste du bureau, où l'app
     // affichait « erreur réseau » sur chaque fournisseur (T-043).
     //
     // Le drapeau ne fait rien quand aucune variable n'est posée : il est donc

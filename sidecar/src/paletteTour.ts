@@ -82,13 +82,32 @@ export const ANNONCE_QUESTION_INTERACTIVE = [
   "et poursuis.",
 ].join(" ");
 
+/**
+ * T-210 — les deux outils d'action du serveur `studio`, annoncés seulement
+ * quand ils sont exposés. Constat du 2026-11-08 : l'agent écrivait « Opus
+ * suffit » ou « tu peux lancer /compact » au lieu d'appeler l'outil. La
+ * consigne globale du poste lui demande de SIGNALER ; ces phrases lui disent
+ * qu'ici, il peut FAIRE.
+ */
+export const ANNONCE_CHANGER_MODELE =
+  "Quand le modèle n'est pas le bon pour la demande, appelle `mcp__studio__changer_modele` au lieu de signaler le changement en texte.";
+export const ANNONCE_COMPACTER =
+  "Quand le contexte doit être compacté, appelle `mcp__studio__compacter` au lieu de demander à l'utilisateur de taper /compact.";
+
+/** Ce que le serveur `studio` expose réellement au tour (voir `ServeurStudio`, askUser.ts). */
+export interface OutilsAnnonces {
+  changerModele: boolean;
+  compacter: boolean;
+}
+
 /** Forme acceptée par le SDK : prompt propre, ou preset Claude Code + ajout. */
 export type InstructionSysteme =
   | string
   | { type: "preset"; preset: "claude_code"; append?: string };
 
 /**
- * Instruction système du tour (T-019 pour l'annonce, T-052 pour le preset).
+ * Instruction système du tour (T-019 pour l'annonce, T-052 pour le preset,
+ * T-210 pour les outils `studio` d'action).
  *
  * ── Ce que le SDK fait quand on ne dit rien, et pourquoi c'était un piège ─
  * `sdk.mjs` (0.3.214) : `if (i === undefined) f = ""`. Sans `systemPrompt`, le
@@ -119,8 +138,14 @@ export function composerInstructionSysteme(
   instructionAgent: string | null,
   annoncerQuestion: boolean,
   outilsIntegres: boolean,
+  outilsStudio: OutilsAnnonces | null = null,
 ): InstructionSysteme | undefined {
-  const morceaux = [instructionAgent, annoncerQuestion ? ANNONCE_QUESTION_INTERACTIVE : null].filter(
+  const morceaux = [
+    instructionAgent,
+    annoncerQuestion ? ANNONCE_QUESTION_INTERACTIVE : null,
+    outilsStudio?.changerModele ? ANNONCE_CHANGER_MODELE : null,
+    outilsStudio?.compacter ? ANNONCE_COMPACTER : null,
+  ].filter(
     (m): m is string => typeof m === "string" && m.trim().length > 0,
   );
   const ajout = morceaux.join("\n\n");

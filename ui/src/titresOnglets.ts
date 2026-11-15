@@ -69,8 +69,7 @@ function motsCommuns(a: readonly string[], b: readonly string[]): number {
  *
  * Deux titres identiques ne sont jamais repliés : le préfixe commun est alors
  * le titre entier, il ne resterait rien à montrer. On préfère deux onglets
- * pareils à deux onglets vides — et le cas est déjà tenu ailleurs
- * (`appliquerTitresIA` garde un repli distinctif plutôt qu'un doublon).
+ * pareils à deux onglets vides.
  */
 export function titresDistinctifs(titres: readonly string[]): string[] {
   const decoupes = titres.map(mots);

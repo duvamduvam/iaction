@@ -11,7 +11,13 @@
 import { describe, expect, it } from "vitest";
 
 import { contextWindowFor } from "./contextBus";
-import { effortsPour, IDS_ABONNEMENT_CLAUDE, MODELES_ABONNEMENT_CLAUDE, NIVEAUX_EFFORT } from "./modelesAbonnementClaude";
+import {
+  effortsPour,
+  IDS_ABONNEMENT_CLAUDE,
+  MODELES_ABONNEMENT_CLAUDE,
+  MODELES_HERITES_CLAUDE,
+  NIVEAUX_EFFORT,
+} from "./modelesAbonnementClaude";
 
 describe("modèles de l'abonnement Claude", () => {
   it("connaît l'Opus courant", () => {
@@ -69,12 +75,26 @@ describe("niveaux d'effort", () => {
   it("offre les cinq niveaux aux modèles qui raisonnent", () => {
     expect(effortsPour("claude-opus-5-5")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(effortsPour("claude-sonnet-5-5")).toEqual(NIVEAUX_EFFORT);
+    // Haiku 5.5 raisonne, contrairement à Haiku 4.5.
+    expect(effortsPour("claude-haiku-5-5")).toEqual(NIVEAUX_EFFORT);
   });
 
-  it("n'en offre aucun à Haiku, aux modèles inconnus ni au moteur neutre", () => {
+  it("n'en offre aucun à un modèle sorti de la liste, aux inconnus ni au moteur neutre", () => {
     expect(effortsPour("claude-haiku-4-5")).toEqual([]);
     expect(effortsPour("gpt-inconnu")).toEqual([]);
     expect(effortsPour("")).toEqual([]);
     expect(effortsPour(null)).toEqual([]);
+  });
+});
+
+describe("T-213 — modèles sortis du sélecteur mais encore servis", () => {
+  it("un fil épinglé sur un modèle hérité garde ses niveaux d'effort", () => {
+    expect(effortsPour("claude-fable-5-1")).toEqual(NIVEAUX_EFFORT);
+    expect(effortsPour("claude-opus-5")).toEqual(NIVEAUX_EFFORT);
+    expect(effortsPour("claude-sonnet-5")).toEqual(NIVEAUX_EFFORT);
+  });
+
+  it("un modèle hérité n'est jamais proposé dans le sélecteur", () => {
+    for (const h of MODELES_HERITES_CLAUDE) expect(IDS_ABONNEMENT_CLAUDE).not.toContain(h.id);
   });
 });

@@ -40,6 +40,9 @@ import {
   type UsageRoutage,
   type UsageStats,
 } from "./usageStatsClient";
+import { secondCompteDispo, useComptesClaude, type CompteClaude } from "./comptesClaude";
+import { SelecteurCompte } from "./SupervisionCompte";
+import { compteEffectif, libelleDebord } from "./compteSupervision";
 import { useRovingFocus } from "./useRovingFocus";
 import {
   ClaudeSubscriptionPanel,
@@ -498,7 +501,7 @@ function RoutagePanel({
               <div className="panel__title">Débord du mois</div>
               <div className="supervision-kpi-value">{formatUsd(routage.debordMoisUsd)}</div>
               <div className="supervision-kpi-sub">
-                {plafondLabel} · routage auto seulement
+                {libelleDebord(plafondLabel)}
               </div>
             </div>
           </div>
@@ -584,6 +587,10 @@ export function SupervisionPage() {
   // se tait, elle n'invente pas un « = ».
   const [precedent, setPrecedent] = useState<UsageStats | null>(null);
   const [loadError, setLoadError] = useState(false);
+  // T-191 — sélecteur de compte, visible seulement avec un compte teams listé.
+  const comptes = useComptesClaude();
+  const [compteChoisi, setCompteChoisi] = useState<CompteClaude>("perso");
+  const compte = compteEffectif(compteChoisi, comptes);
 
   const periode = useMemo(() => periodRange(bucket, anchor), [bucket, anchor]);
   const tendance = useMemo(() => trendRange(bucket, anchor), [bucket, anchor]);
@@ -612,8 +619,8 @@ export function SupervisionPage() {
     let cancelled = false;
     setLoadError(false);
     Promise.all([
-      usageStats(periode.from, periode.to, bucket),
-      usageStats(tendance.from, tendance.to, bucket),
+      usageStats(periode.from, periode.to, bucket, compte),
+      usageStats(tendance.from, tendance.to, bucket, compte),
     ])
       .then(([p, t]) => {
         if (cancelled) return;
@@ -626,14 +633,14 @@ export function SupervisionPage() {
     return () => {
       cancelled = true;
     };
-  }, [periode, tendance, bucket]);
+  }, [periode, tendance, bucket, compte]);
 
   // Requête SÉPARÉE, et c'est délibéré : l'échec d'une comparaison ne doit pas
   // vider la page. Elle se tait, le reste s'affiche.
   useEffect(() => {
     let cancelled = false;
     setPrecedent(null);
-    usageStats(comparable.periode.from, comparable.periode.to, bucket)
+    usageStats(comparable.periode.from, comparable.periode.to, bucket, compte)
       .then((p) => {
         if (!cancelled) setPrecedent(p);
       })
@@ -643,7 +650,7 @@ export function SupervisionPage() {
     return () => {
       cancelled = true;
     };
-  }, [comparable, bucket]);
+  }, [comparable, bucket, compte]);
 
   // L'ancre est CONSERVÉE en changeant de granularité : depuis le 3 juillet en
   // « Jour », « Semaine » montre la semaine du 3 juillet — pas un retour brutal
@@ -661,6 +668,8 @@ export function SupervisionPage() {
           l'extérieur.
         </p>
       </div>
+
+      {secondCompteDispo(comptes) && <SelecteurCompte compte={compte} comptes={comptes} onChange={setCompteChoisi} />}
 
       <PeriodSelector
         bucket={bucket}

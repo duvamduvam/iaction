@@ -33,6 +33,7 @@ import {
   type McpStatus,
 } from "./mcpClient";
 import { openTerminal } from "./systemClient";
+import { Deroulant } from "./Deroulant";
 
 /** Compteurs d'appels par serveur, portés par la conversation active. */
 export type McpUsage = Record<string, { calls: number; lastTool: string }>;
@@ -127,13 +128,13 @@ function AddConnectorModal({
         <div className="orch-modal__body">
           <div className="field">
             <label htmlFor="mcp-add-kind">Connecteur</label>
-            <select id="mcp-add-kind" value={selectedId} onChange={(e) => selectEntry(e.currentTarget.value)}>
+            <Deroulant id="mcp-add-kind" value={selectedId} onChange={selectEntry}>
               {entries.map((e) => (
                 <option key={e.id} value={e.id}>
                   {e.label}
                 </option>
               ))}
-            </select>
+            </Deroulant>
           </div>
           {selected && <p className="empty-hint">{selected.description}</p>}
           <div className="field">

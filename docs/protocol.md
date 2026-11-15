@@ -37,7 +37,7 @@ Réponses corrélées par `id` :
 {"event": "ready", "data": {"version": "0.1.0", "pid": 1234}}
 ```
 
-- Méthode inconnue → `error` avec `data.message` explicite. Ligne non-JSON reçue → le sidecar log sur stderr et ignore (il ne crashe jamais sur une entrée invalide).
+- Méthode inconnue → `error` avec `data.message` explicite (`méthode inconnue: <méthode>`) et `data.code: "methode_inconnue"` (T-169) : l'UI y reconnaît un sidecar plus ancien qu'elle (« relancez IAction »). `code` est optionnel et propre à ce cas ; les autres erreurs n'ont que `message`. Ligne non-JSON reçue → le sidecar log sur stderr et ignore (il ne crashe jamais sur une entrée invalide).
 
 ## Méthodes Lot 0
 
@@ -364,10 +364,26 @@ par `sessionId` : le SDK recharge tout le contexte via `resume`).
   "systemPrompt":null,
   "chatOnly":false,
   "interactive":false,
+  "modeleVerrouille":false,
   "tools":null,
-  "mcp":true}}
+  "mcp":true,
+  "compte":"perso|teams"}}
 ```
 
+- `meta.conversationId` (optionnel, voir `meta` dans « Journal d'usage ») : identifiant de la
+  conversation IAction. T-180 : le sidecar le transmet au serveur MCP
+  `iaction`, où il sert de clé aux sessions distantes ouvertes sur un relais
+  (`session_distante_demander`). Absent, un relais est refusé.
+
+- `compte` (optionnel) : compte Claude du tour (voir « Deux comptes Claude »
+  ci-dessous). Absent = `perso`, c'est-à-dire l'environnement du sidecar tel
+  quel. `teams` ajoute `CLAUDE_CONFIG_DIR=<foyer>/.claude-compte2` à l'env du
+  CLI, rien d'autre. Id inconnu, ou compte indisponible (identifiants absents
+  ou expirés) : `error` avant tout lancement du SDK, avec la commande
+  `CLAUDE_CONFIG_DIR=~/.claude-compte2 claude auth login`. Le compte est
+  journalisé à chaque tour (scope `claude`, « compte du tour »). `sessionId`
+  peut changer de compte (la reprise croisée est prouvée) ; le cache de prompt
+  est alors perdu.
 - `effort` (optionnel) : niveau d'effort de raisonnement, passé au SDK
   (`Options.effort`). Absent ou `null` : rien n'est posé, le réglage global
   (`~/.claude/settings.json`) ou le défaut du modèle s'applique. Valeur
@@ -403,6 +419,11 @@ par `sessionId` : le SDK recharge tout le contexte via `resume`).
   peut répondre en direct → l'outil de question `mcp__studio__ask_user` est
   exposé (§ Questions interactives plus bas). Armé par la page Projets
   seulement ; jamais par l'orchestration ni les tâches planifiées.
+- `modeleVerrouille: true` (T-207) : le modèle est fixé par l'agent préréglé
+  (sélecteur grisé côté UI) → l'outil `mcp__studio__changer_modele` n'est PAS
+  exposé (§ Changement de modèle par l'agent plus bas). Absent = `false`.
+  N'agit pas sur `mcp__studio__compacter` (T-216) : le verrou porte sur le
+  modèle, pas sur le contexte.
 
 **Sources de réglages** (hors chat pur) : `settingSources: ['user', 'project',
 'local']`. Un tour de projet hérite donc des skills et commandes **globaux du
@@ -518,6 +539,8 @@ permission que les autres outils MCP. Sans index : rien n'est ajouté
 (comportement inchangé). Un serveur `iaction` déclaré dans `.mcp.json` prime.
 Jamais en mode `chatOnly`.
 
+Les traces `console.log` des bibliothèques tierces vont sur stderr, jamais sur stdout, qui reste réservé au protocole (T-170, `consoleVersStderr.ts`).
+
 Événements `chunk` typés par `data.kind` :
 
 | kind | data | sens |
@@ -532,12 +555,26 @@ Jamais en mode `chatOnly`.
 | `background_wait` | `{count, descriptions[]}` | le tour du modèle est fini mais `count` tâche(s) de fond tournent encore : le sidecar garde le process ouvert, leurs rapports réveilleront l'agent (le `done` viendra du tour suivant) |
 | `background_timeout` | `{count, plafondMs}` | T-155 — le plafond d'attente des tâches de fond (`IACTION_BACKGROUND_WAIT_TIMEOUT_MS`, 30 min par défaut) a expiré : émis juste AVANT l'interrupt qui abandonne les `count` tâche(s) encore vivantes, puis le `done` livre le résultat déjà connu. Un sidecar plus ancien ne l'émet pas (l'UI retombe sur « interrompue(s) avant leur terme »), et une UI ancienne l'ignore (kind inconnu) |
 | `compact` | `{trigger, preTokens}` | compaction de contexte terminée (`trigger` = `manual` pour « /compact », `auto` pour la compaction automatique du CLI ; `preTokens` = contexte avant compaction, `null` si inconnu) — un tour « /compact » ne produit AUCUN texte : sans ce chunk, l'UI n'a aucun signal de fin de travail |
+| `model_change` | `{from, to, effortFrom, effortTo, raison}` | T-207 — l'agent vient de changer lui-même de modèle (et/ou d'effort) via l'outil `mcp__studio__changer_modele`. **Déjà appliqué** au moteur (`setModel` / `applyFlagSettings`) quand le chunk part, dans le tour en cours : l'UI n'a qu'à aligner ses sélecteurs (les tours suivants partent avec) et afficher le bandeau « L'agent est passé à … · Annuler ». `from`/`effortFrom` = valeurs d'avant (`null` = inconnu ou défaut), `to`/`effortTo` = valeurs d'après (`effortTo` = `effortFrom` si l'agent n'a pas touché à l'effort), `raison` = la phrase de l'agent. Jamais émis si le moteur a refusé le changement (l'agent reçoit alors une erreur d'outil) ni quand le modèle demandé est déjà en place. Témoin : `fixtures/protocole/claude-model-change-chunk.json` |
+| `compaction_demandee` | `{raison}` | T-216 — l'agent a programmé le compactage de sa conversation via l'outil `mcp__studio__compacter`. **Rien n'est compacté** dans le tour : l'UI met `/compact` en file pour la conversation (une fois au plus, comme le bouton « Compacter » pendant un tour en cours) et affiche l'avis « L'agent a demandé un compactage — il partira à la fin du tour · Annuler » ; « Annuler » retire `/compact` de la file. La commande part quand le tour rend vraiment la main (après les rapports de tâches de fond, ou « Rendre la main ») ; « Arrêter » vide la file, elle comprise. `raison` = la phrase de l'agent (chaîne vide tolérée : la demande reste valable). Témoin : `fixtures/protocole/claude-compaction-demandee-chunk.json` |
 | `push_perdu` | `{contenu, avaitPieces}` | T-087 — un `claude.push` jamais injecté (aucun `tool_result` du fil depuis) ressort ici, **avant** le `done`/`error` de clôture : l'UI repose `contenu` en file d'attente et marque la bulle « en cours de tour » correspondante comme reportée ; `avaitPieces` commande la restauration des pièces jointes (voir § `claude.push`) |
 | `sous_agent_battement` | `{toolUseId, outils, dernierOutil, instant}` | T-102 — un sous-agent (`Task`/`Agent`, en vol) vient d'utiliser un outil de plus. `toolUseId` = id du `Task`/`Agent` LANCEUR (le même que son `tool_use` dans le fil, pas celui de l'outil intérieur) ; `outils` = compteur CUMULÉ d'outils vus chez ce sous-agent ; `dernierOutil` = nom du dernier outil observé ; `instant` = epoch ms de cette observation. Ne réintroduit PAS le détail que T-092 a retiré du fil (jamais l'entrée/sortie de l'outil) : sert uniquement à faire battre une ligne discrète sous l'appel `Agent`, pour qu'un sous-agent qui tourne plusieurs dizaines de minutes reste distinguable d'un blocage |
 
 Fin de tour : `done` avec
-`{sessionId, subtype:"success|error_…", result, usage:{inputTokens,outputTokens,cacheReadInputTokens?}, totalCostUsd, contextTokens}`
+`{sessionId, subtype:"success|error_…", result, usage:{inputTokens,outputTokens,cacheReadInputTokens?}, totalCostUsd, contextTokens, erreurs, sessionPerdue}`
 (`totalCostUsd` = estimation locale SDK, non contractuelle).
+
+**`erreurs` et `sessionPerdue`** (T-187) — `erreurs` : le tableau `errors` du
+`result` SDK, chaque entrée bornée à 500 caractères (`[]` si absent). Ce sont
+des libellés techniques ; ils vont aussi au journal (champ `erreurs` de la ligne
+`tour Claude terminé en erreur`). `sessionPerdue` : vrai quand le tour demandait
+une reprise (`sessionId` fourni) et que le SDK répond « No conversation found
+with session ID » — le transcript a été purgé de `~/.claude/projects`. Le
+`subtype` est alors `error_during_execution`, `num_turns` 0, en ~450 ms : rien
+d'autre ne distingue ce cas d'un arrêt. Contrat côté UI : oublier le
+`sessionId`, relancer UNE seule fois un `claude.start` sans `sessionId` dont le
+prompt porte un récapitulatif de l'historique gardé par l'application, et
+afficher un avis court. Un client ancien ignore les deux champs (sans effet).
 
 **`contextTokens`** — occupation de la fenêtre de contexte au DERNIER appel
 modèle du tour (`input + cache_read + cache_creation` de ce seul appel), `null`
@@ -707,11 +744,62 @@ l'environnement `IACTION_BACKGROUND_WAIT_TIMEOUT_MS`) : au-delà, même effet
 qu'un `claude.release`. Sans plafond, une tâche de fond qui ne se termine
 jamais (serveur, watcher) tenait le tour ouvert indéfiniment.
 
+### `claude.setModel`
+
+```json
+{"id":"req-12c","method":"claude.setModel","params":{"targetId":"req-10","model":"claude-fable-5-1","effort":"high|null"}}
+```
+
+T-207 — remet modèle (et effort) sur un tour **vivant** : c'est ce qu'appelle
+le bouton « Annuler » du bandeau de changement automatique (chunk
+`model_change`) quand le tour tourne encore. Même mécanique que l'outil de
+l'agent (`query.setModel`, puis `applyFlagSettings({effortLevel})` si `effort`
+est fourni ; si le second échoue, le modèle d'avant est remis). `effort` :
+absent = inchangé, `null` = défaut du modèle, sinon un niveau connu (sinon
+`error`). Réponse : `done` `{applied: bool}` — `false` si le tour n'existe plus
+(l'UI s'en tient au sélecteur, qui vaudra pour le prochain tour) ; `error` si
+le moteur refuse (journalisé, jamais muet).
+
+**Changement de modèle par l'agent** (T-207, `docs/spec-changement-modele-auto.md`) :
+le serveur MCP in-process `studio` porte, en plus de `ask_user`, l'outil
+`changer_modele` (`mcp__studio__changer_modele`, auto-autorisé : pas de modale).
+Entrée : `modele` (un des identifiants de l'abonnement), `effort` optionnel
+(`low|medium|high|xhigh|max`), `raison` (une phrase, obligatoire). Effet
+immédiat dans le tour en cours, puis valable pour les suivants (l'UI aligne ses
+sélecteurs). Dans les deux sens (Fable comme Haiku), sans validation :
+l'utilisateur est informé après coup. Exposé aux tours `interactive` seulement,
+hors chat pur et hors `modeleVerrouille`. Modèle et effort déjà en place :
+l'outil répond « déjà en place », sans appel ni chunk. Échec du moteur :
+résultat d'outil `isError`, entrée de journal `error`, aucun chunk.
+
+**Compactage demandé par l'agent** (T-216) : le même serveur `studio` porte
+l'outil `compacter` (`mcp__studio__compacter`, auto-autorisé : pas de modale).
+Entrée : `raison` (une phrase, obligatoire, non vide). Effet : chunk
+`compaction_demandee`, entrée de journal `info` (« compactage demandé par
+l'agent », `raison` et `sessionId`), et le modèle lit « Compactage programmé :
+il partira dès la fin de ce tour. Termine ton tour normalement (résumé court
+de l'état si utile). ». Exposé aux tours `interactive` seulement, hors chat
+pur — mais AUSSI sous `modeleVerrouille`.
+
+**Outils `studio` jamais différés** (T-210) : le serveur est créé avec
+`createSdkMcpServer({ …, alwaysLoad: true })` — option documentée par le SDK
+(`CreateSdkMcpServerOptions.alwaysLoad`, posée en
+`_meta['anthropic/alwaysLoad']` sur chaque outil, équivalent API de
+`defer_loading: false`). Sans elle, `ask_user`, `changer_modele` et
+`compacter` arrivaient au modèle comme outils différés derrière ToolSearch :
+leur nom seul, sans la description qui dit quand les appeler. L'instruction
+système ajoute en plus, pour chaque outil d'action exposé, une phrase qui dit
+de l'appeler au lieu de signaler le changement de modèle ou de demander
+`/compact` (`composerInstructionSysteme`, sidecar/src/paletteTour.ts).
+
 ### `claude.commands`
 
 ```json
-{"id":"req-13","method":"claude.commands","params":{"cwd":"/chemin/projet"}}
+{"id":"req-13","method":"claude.commands","params":{"cwd":"/chemin/projet","compte":"perso|teams"}}
 ```
+
+`compte` (optionnel, même règle que `claude.start`) : le menu reflète les
+skills et commandes du compte qui servira ; mêmes refus (inconnu, indisponible).
 
 Énumère les slash-commands / skills invocables pour un projet — alimente le
 menu « / » du composeur (UI). Ouvre une session SDK en **entrée streamée**
@@ -731,80 +819,85 @@ Code, **et** globaux du poste (`~/.claude/skills`, `~/.claude/commands`).
 pas). Échec d'initialisation SDK (auth, cwd invalide) → `error` lisible ;
 l'UI se rabat alors sur un menu vide (aucun blocage de la saisie).
 
-### `claude.agents`
+### `claude.comptes`
 
 ```json
-{"id":"req-15","method":"claude.agents","params":{"all":false}}
+{"id":"req-16","method":"claude.comptes","params":{}}
 ```
 
-Liste les sessions Claude Code **de ce poste** (T-159, `docs/spec-sessions-claude.md`).
-Le sidecar lance `claude agents --json` (`--all` si `all: true`, qui ajoute les
-sessions d'arrière-plan terminées) — le front ne lance aucun processus. Binaire :
-le CLI détendu du paquet s'il existe (voir `cliClaude.ts`), sinon `claude` du
-PATH, sinon le binaire de l'extension VSCode « Claude Code » ; on ne passe au
-suivant que sur « introuvable ». Délai : 15 s (`IACTION_AGENTS_TIMEOUT_MS` pour
-les tests). `done` :
+`done` : `{"comptes":[{"id":"perso","label":"Claude Perso","connecte":true},
+{"id":"teams","label":"Claude Teams","connecte":true}]}`. `perso` figure
+toujours ; `teams` seulement si `<foyer>/.claude-compte2/.credentials.json`
+existe (sinon la fonction est invisible : l'interface garde son libellé
+« Claude (abonnement) »). `connecte: false` si la date `refreshTokenExpiresAt`
+du fichier est dépassée. Date absente ou illisible : `true`, le CLI tranche.
+Témoin : `fixtures/protocole/claude-comptes-done.json`.
+
+### Deux comptes Claude
+
+Spec : [spec-deux-comptes.md](spec-deux-comptes.md). Deux ids fixes, `perso`
+(l'environnement du processus, aucun `CLAUDE_CONFIG_DIR` ajouté) et `teams`
+(`<foyer>/.claude-compte2`). Le module `compteClaude.ts` est le seul à connaître
+ce tableau. **IAction ne lit, ne stocke ni ne transmet aucun jeton** : du fichier
+d'identifiants, seule la date `refreshTokenExpiresAt` est extraite (recherche
+textuelle ciblée, le fichier n'est jamais désérialisé). Jamais de bascule
+automatique : le compte est un paramètre du tour, posé par un geste de
+l'utilisateur.
+
+`claude-windows.jsonl` : champ `compte` écrit **seulement** s'il diffère de
+`perso`. Le débord (R3) et le routeur ne lisent que les lignes de `perso` : une
+ligne `teams` n'a jamais d'effet sur eux. Les **tâches de fond** (tâches
+planifiées, étapes d'orchestration headless), le routage Auto et les sessions
+distantes restent sur `perso` : le sidecar n'y pose aucun `compte`. Un **agent
+sélectionné dans une session** suit le compte de cette session (séparation des
+comptes). Le routage Auto ne connaissant que `perso`, l'interface ne le propose
+pas quand le compte effectif d'une conversation est autre.
+
+Sondes : chaque compte disponible (listé et connecté) est sondé à sa cadence
+(`usage.claude.init`), affiché ou non — le débord lit ainsi un relevé `perso`
+frais pendant un travail sur Teams.
+
+Côté configuration du poste, un projet peut déclarer `compteClaude`
+(`"perso"` | `"teams"`) : compte par défaut de ses sessions, résolu côté
+interface (choix explicite de la session, sinon ce défaut, sinon `perso`). Le
+sidecar ne le voit pas : il ne reçoit que le `compte` résolu, et **seulement
+`teams`** (`perso` = paramètre absent). Défaut `teams` sans aucun second compte :
+retour à `perso` avec un `warn`. Compte présent mais déconnecté : pas de repli,
+le tour est refusé avec la commande de connexion. Liste des comptes inconnue
+(échec de `claude.comptes`) : la dernière liste connue est conservée et l'envoi
+attend la réponse.
+
+### `claude.titreDiscussion`
 
 ```json
-{"sessions":[{"sessionId":"a39b8619-…","name":"projet-38","cwd":"/chemin/projet","kind":"interactive","status":"busy","pid":473635,"startedAt":1792438061712}]}
+{"id":"req-14","method":"claude.titreDiscussion","params":{"message":"…","reponse":"…","compte":"perso"}}
 ```
 
-Tout champ absent de la sortie du CLI vaut `null` ; une entrée sans `sessionId`
-est écartée (et comptée au journal). **Aucun échec muet** : CLI introuvable,
-délai dépassé, code de sortie non nul, JSON invalide ou non tableau → `error`
-avec un message lisible, et une entrée `error` au journal (scope `claude`).
+Titre court d'une discussion, généré par Haiku (`claude-haiku-5-5`) à partir de
+son premier message et de la première réponse (T-197,
+`docs/spec-titres-discussions.md`). Remplace `claude.sessionTitles`, retirée :
+les titres du CLI étaient parasités par le bloc de connaissances injecté.
+`message` et `reponse` sont coupés à 1500 caractères et passés au modèle entre
+`<message_utilisateur>` et `<reponse>`. `compte` (`perso` par défaut, `teams`)
+passe par `compteDemande` puis `envCompte`, comme le micro-tour d'`usage.claude.init`.
 
-### `claude.forkSession`
+Le tour ne laisse rien derrière lui : `tools: []`, `maxTurns: 1`,
+`settingSources: []`, `cwd` = dossier personnel, `persistSession: false` (aucune
+session fantôme dans l'historique du CLI), aucun MCP. Sortie nettoyée : première
+ligne, sans guillemets ni point final, espaces normalisés ; rejet si vide ou de
+plus de 70 caractères. `done` :
 
 ```json
-{"id":"req-16","method":"claude.forkSession","params":{"sessionId":"<uuid>","cwd":"/chemin/projet"}}
+{"titre":"Chansons faciles pour ukulélé"}
 ```
 
-Copie une session Claude Code (`forkSession` du SDK, équivalent de `resume` +
-`forkSession: true`) : le transcript est cloné sous un nouvel identifiant,
-l'original n'est **jamais** ouvert en écriture (il peut appartenir à une session
-vivante). `done` : `{"sessionId":"<uuid de la copie>"}` — à passer ensuite comme
-`sessionId` d'un `claude.start` ordinaire. Échec (session introuvable, SDK) →
-`error` + entrée au journal.
-
-### `claude.sessionTitles`
-
-```json
-{"id":"req-14","method":"claude.sessionTitles","params":{"cwd":"/chemin/projet","sessionIds":["<uuid>","<uuid>"]}}
-```
-
-Récupère les titres déjà calculés par le CLI Claude pour les sessions d'un
-projet, afin de remplacer le repli local terne de l'UI (les premiers
-caractères du premier message, voir `deriveTitleFromText` dans
-`ui/src/sessionStore.ts`). Appelle `listSessions({dir: cwd})` du SDK : une
-simple lecture des métadonnées JSONL déjà sur disque, **sans ouvrir de
-session ni consommer le moindre token**. `sessionIds` est optionnel ; s'il
-est fourni, seules ces sessions sont considérées.
-
-Titre retenu par session : `customTitle` (renommage manuel via `/rename`)
-s'il existe, sinon `summary`. Filtré si `summary` n'est en réalité que le
-premier prompt tel quel (le SDK y retombe tant qu'aucun titre IA n'a été
-calculé) — comparé à `firstPrompt` par préfixe (le SDK tronque parfois
-`summary`) : dans ce cas la session est absente du résultat, l'UI garde alors
-son repli local. `done` :
-
-```json
-{"titles": [{"sessionId":"<uuid>","title":"Organiser tâches sprint 2 et études stratégiques"}]}
-```
-
-Best effort, **ne lève jamais** : SDK indisponible, `cwd` inconnu du CLI ou
-aucune session → `done` `{titles: []}` (jamais `error`), amélioration
-purement cosmétique qui ne doit jamais bloquer l'affichage du panneau
-Sessions.
-
-**Et ne traîne jamais non plus** (T-137) : l'attente de `listSessions` est
-bornée à **8 s**, au-delà desquelles la réponse est le même `{titles: []}`.
-La promesse « best effort » ne valait auparavant que pour les EXCEPTIONS —
-une lenteur laissait la requête sans réponse indéfiniment, ce qui s'est vu
-sur des machines où le premier import du SDK dépasse plusieurs secondes. Le
-dépassement écrit une ligne `warn` (`cwd`, délai) : le repli est silencieux
-pour l'utilisateur, jamais pour le journal. `IACTION_SESSION_TITLES_TIMEOUT_MS`
-change la borne — prévu pour les tests, pas pour un réglage d'exploitation.
+**Ne lève jamais, ne traîne jamais, ne se relance jamais.** Délai, quota, compte
+inconnu ou non connecté, SDK en panne, réponse inexploitable, message ou
+réponse vide : `done` `{"titre":null}` — jamais `error` — et une ligne `warn`
+qui dit la cause **sans le texte de la discussion**. Le tour est abandonné au
+bout de 30 s (T-137). L'interface ne demande qu'une fois par session et par
+lancement ; un sidecar ancien qui ne connaît pas la méthode répond `error`
+« méthode inconnue », que l'interface traite comme `null`.
 
 ## Méthodes Lot 6 — agent du moteur neutre (« tous agents à égalité »)
 
@@ -955,8 +1048,12 @@ L'hôte seul, jamais l'URL complète : un chemin peut porter un identifiant.
 ### `usage.claude`
 
 ```json
-{"id":"req-14","method":"usage.claude","params":{}}
+{"id":"req-14","method":"usage.claude","params":{"compte":"perso|teams"}}
 ```
+
+`compte` (optionnel, défaut `perso`) : le dépôt d'instantané est tenu **par
+compte**, le relevé d'un compte n'écrase jamais celui de l'autre. Id inconnu →
+`error` ; compte sans relevé (ou déconnecté) → `{"available":false}`.
 
 Renvoie le **dernier instantané connu** des limites d'abonnement, capturé en
 fin de chaque tour `claude.start` via la méthode expérimentale du SDK
@@ -1000,11 +1097,15 @@ writing ») — d'où la capture opportuniste sur les messages `assistant`.
 ### `usage.claude.init`
 
 ```json
-{"id":"req-15","method":"usage.claude.init","params":{}}
+{"id":"req-15","method":"usage.claude.init","params":{"compte":"perso|teams"}}
 ```
 
+`compte` (optionnel, défaut `perso`) : le micro-tour reçoit l'env du compte. La
+cadence (5 min, silence de saturation) et le coalescing sont **par compte**.
+Compte inconnu ou indisponible → `error` sans micro-tour.
+
 Initialise le relevé sans conversation : joue un micro-tour chat pur
-(`claude-haiku-4-5`, prompt « ping », aucun outil, cwd = home) et renvoie le
+(`claude-haiku-5-5`, prompt « ping », aucun outil, cwd = home) et renvoie le
 même `done` que `usage.claude` (instantané capturé pendant ce tour, mémorisé
 comme dernier instantané connu). Coût négligeable, mais pas nul — voir
 « Cadence des sondes coûteuses » ci-dessus : le sidecar ne joue RÉELLEMENT ce
@@ -1622,6 +1723,12 @@ abandon), écrit par les moteurs :
   comme un projet à part entière depuis `source: "chat"`. `null`/`null` sur
   les lignes écrites avant S2 → elles tombent dans « (non attribué) ».
 
+- `compte` (T-191) : compte Claude qui a servi le tour (`teams`…). Écrit
+  **seulement hors `perso`** — même convention que `claude-windows.jsonl` ; une
+  ligne sans champ vaut `perso`. Posé côté sidecar depuis le compte résolu de
+  `claude.start` (injecté dans `meta`, jamais lu de l'UI). Seul `claude.start`
+  en pose un ; tous les autres moteurs restent `perso`.
+
 **`claude-windows.jsonl`** — un instantané par capture d'usage abonnement
 réussie (voir usage.claude) : `{"ts":"…","windows":{…}}` (mêmes `windows`
 génériques que le snapshot usage.claude).
@@ -1631,6 +1738,10 @@ génériques que le snapshot usage.claude).
 ```json
 {"id":"req-70","method":"usage.stats","params":{"from":"2026-06-19","to":"2026-07-19","bucket":"day"}}
 ```
+
+`compte` (optionnel, T-191) : `perso` par défaut, un id inconnu est refusé
+(`error`) ; seuls les événements de ce compte sont agrégés (comme
+`usage.claude.history`). Le plafond de débord ne compte que `perso`.
 
 `bucket` ∈ `day|week|month` (semaines ISO, lundi). `from`/`to` : dates
 `YYYY-MM-DD` locales incluses ; défaut = 30 derniers jours. `done` :
@@ -1789,12 +1900,13 @@ génériques que le snapshot usage.claude).
 ### `usage.claude.history`
 
 ```json
-{"id":"req-71","method":"usage.claude.history","params":{"days":30}}
+{"id":"req-71","method":"usage.claude.history","params":{"days":30,"compte":"perso|teams"}}
 ```
 
 `done` : `{"snapshots":[{"ts":"…","windows":{…}}]}` — relit
 `claude-windows.jsonl`, filtré aux `days` derniers jours (défaut 30), ordre
-chronologique.
+chronologique, et au `compte` demandé (défaut `perso` ; une ligne sans champ
+`compte` vaut `perso`). Id inconnu → `error`.
 
 ## Méthode TK1 — backlog de tickets (lecture)
 
@@ -2161,7 +2273,7 @@ appelé, et pour compléter un tier manquant ou invalide) :
 
 | tier | cible |
 |---|---|
-| trivial | claude · `claude-haiku-4-5` |
+| trivial | claude · `claude-haiku-5-5` |
 | simple | claude · `claude-sonnet-5-5` |
 | moyen | claude · `claude-opus-5-5` |
 | complexe | claude · `claude-opus-5-5` |
@@ -2515,6 +2627,58 @@ calcul, mêmes chemins qu'à l'indexation). Sans index :
   (`mcp__iaction__search_knowledge`), ajouté par le sidecar **seulement
   quand l'index du projet existe** — voir `claude.start` § RAG local.
 
+### Outils `sessions_distantes_lister` / `session_distante_demander` (moteur Claude, T-178)
+
+Du même serveur MCP in-process `iaction`, **toujours présents** pour tout tour
+Claude local (donc aussi pour les sous-agents lancés par l'outil `Agent`, qui
+héritent des MCP) ; jamais sur un tour `chatOnly`, donc jamais sur un tour
+piloté sur une session distante. Implémentation :
+`sidecar/src/outilsSessionsDistantes.ts` (client : `sessionsDistantes.ts`).
+
+- `mcp__iaction__sessions_distantes_lister` (sans args) : une ligne par session
+  non archivée (titre, id `cse_…`, connexion, activité, dépôt, dernière activité).
+- `mcp__iaction__session_distante_demander` (`session`, `message`,
+  `delai_minutes?` — défaut 15, max 30) : `session` = id `cse_…` ou titre ; un
+  titre désigne la session **connectée** la plus récente (aucune, toutes
+  déconnectées, ou plusieurs dépôts différents sous le même titre = erreur
+  explicite). Le message part précédé de `[Message d'un agent de <machine> via
+  IAction]`. Résultat : texte final, outils utilisés là-bas (résumés, 20 max),
+  durée et coût. Toute demande de permission distante est refusée
+  (« un agent ne valide pas de permission à la place de l'utilisateur… ») et
+  signalée dans le résultat — **sauf sur un tour interactif (T-185)** : elle
+  est alors posée à l'utilisateur par un chunk `permission_request` de
+  l'outil `mcp__studio__ask_user` (« Autoriser » / « Refuser »), et une
+  session absente, déconnectée ou `requires_action` ouvre de même une
+  question « Réessayer / Abandonner » (et « Envoyer quand même » pour
+  `requires_action`) avant tout envoi. Aucun chunk nouveau.
+- **Relais en mode serveur (T-180)** : si `session` désigne un relais (session
+  `remote-control-cli` portant un `environment_id`), le message n'est PAS
+  envoyé au relais : IAction crée une session neuve sur son environnement pour
+  la conversation IAction courante, la réutilise aux appels suivants, et la
+  recrée si elle a été archivée ou déconnectée (le résultat commence alors par
+  « Nouvelle session distante, contexte précédent perdu »). `fil` (optionnel,
+  relais seulement, défaut `defaut`) ouvre des fils distincts, donc des
+  sessions distinctes, dans une même conversation. La conversation est
+  `meta.conversationId` du `claude.start` ; sans lui, un relais est refusé
+  (erreur explicite). Une session interactive (`--remote-control`) garde le
+  comportement ci-dessus. Détails et format de l'association :
+  `docs/spec-sessions-claude.md`, § « Une session par conversation ».
+- Toute erreur (déconnexion, 401, délai, flux fermé, tour distant en échec) :
+  résultat d'outil `isError` lisible + journal. Pas de rapatriement
+  automatique : l'échange vit dans la conversation locale de l'agent.
+
+### `sessionsDistantes.archiverConversation` (T-180)
+
+`{"method":"sessionsDistantes.archiverConversation","params":{"conversationId":"…"}}`
+→ `done {archivees, echecs}`. Archive les sessions distantes ouvertes sur un
+relais pour cette conversation IAction et retire leurs associations. Sans
+association : `{archivees:0, echecs:0}` et aucun appel réseau. Un échec d'API
+est journalisé, compté dans `echecs`, et l'association est conservée (le
+balayage de démarrage du sidecar, 7 jours d'inactivité, la rattrape).
+`conversationId` manquant : `error`. Appelée par la page Projets à la
+SUPPRESSION d'une conversation (pas à la fermeture d'un onglet), sans attendre
+la réponse. Le sidecar lance aussi ce balayage au démarrage, sans méthode.
+
 ### Outil `search_chat` — historique du Chat (moteur Claude)
 
 Second outil du même serveur MCP in-process `iaction`
@@ -2539,6 +2703,23 @@ avec un message lisible, le tour continue.
 Conséquence à connaître : **tout agent de projet peut interroger l'historique
 du Chat**, quel que soit le projet. C'est voulu (demande du 2026-08-03), mais
 c'est un pont entre espaces auparavant étanches.
+
+### Outil `lire_usage` — consommation de l'abonnement (moteur Claude, T-202)
+
+Même serveur MCP `iaction`, toujours présent (`mcp__iaction__lire_usage`,
+aucun argument). Il rend, en texte court : le % de la fenêtre 5 h, de la
+fenêtre 7 jours et des fenêtres hebdo propres à un modèle (Fable…) avec
+l'heure de reprise de chacune quand le relevé l'a, et l'**âge du relevé**
+(écrit par battement, il peut être vieux). Source : le dernier relevé de
+`claude-windows.jsonl` du **compte du tour** (`compte` transmis par
+`claude.ts` à `buildKnowledgeMcpServer`). Implémentation :
+`sidecar/src/outilUsage.ts`.
+
+Appelé **à la demande de l'agent** (avant une tâche longue, ou pour tenir un
+seuil donné par l'utilisateur) : rien n'est injecté dans le prompt système ni
+dans les messages. Aucun relevé : texte « Aucun relevé d'usage disponible
+pour ce compte » sans `isError`. Lecture en échec : `isError` et ligne
+d'erreur au journal.
 
 ### `project.ensureDoc` — guide d'intégration du projet
 

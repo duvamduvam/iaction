@@ -11,6 +11,7 @@ import { useState, type FormEvent } from "react";
 
 import { construireFournisseur, fournisseurRecevable, type ProviderFormValues } from "./providerFormCalc";
 import { PROFILS_CONNUS, bodyExtrasRecevable, type ProfilConnu } from "./providerTraits";
+import { Deroulant } from "./Deroulant";
 
 export function ProviderForm({
   mode,
@@ -104,11 +105,11 @@ export function ProviderForm({
     <form className="provider-form" onSubmit={(e) => void handleSubmit(e)}>
       <div className="field">
         <label htmlFor={`pf-preset-${mode}`}>Préréglage</label>
-        <select
+        <Deroulant
           id={`pf-preset-${mode}`}
           value=""
-          onChange={(e) => {
-            const profil = PROFILS_CONNUS.find((p) => p.id === e.currentTarget.value);
+          onChange={(v) => {
+            const profil = PROFILS_CONNUS.find((p) => p.id === v);
             if (profil) appliquerProfil(profil);
           }}
         >
@@ -118,7 +119,7 @@ export function ProviderForm({
               {p.label}
             </option>
           ))}
-        </select>
+        </Deroulant>
         <p className="empty-hint">
           Remplit l'URL et le profil d'une plateforme connue. Simple aide de saisie : tout reste
           modifiable, et rien n'est décidé par la marque à l'exécution.
@@ -222,14 +223,14 @@ export function ProviderForm({
       </div>
       <div className="field">
         <label htmlFor={`pf-catalogshape-${mode}`}>Forme du catalogue</label>
-        <select
+        <Deroulant
           id={`pf-catalogshape-${mode}`}
           value={catalogShape}
-          onChange={(e) => setCatalogShape(e.currentTarget.value)}
+          onChange={setCatalogShape}
         >
           <option value="">Standard (OpenAI)</option>
           <option value="slugs">Liste de slugs</option>
-        </select>
+        </Deroulant>
         <p className="empty-hint">
           « Liste de slugs » lit <code>slug</code>/<code>name</code> et ne garde que les entrées
           conversationnelles (une entrée d'export ou de transcription n'est pas un modèle de chat).

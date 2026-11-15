@@ -8,6 +8,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import ErrorBoundary from "./ErrorBoundary";
 import { jalonPremierRendu, jalonScript } from "./demarrage";
+import { installerInterceptionLiens } from "./liensExternes";
 import { installerSondeFrappe } from "./sondeFrappe";
 import "./theme.css";
 
@@ -18,6 +19,10 @@ jalonScript();
 // T-095 — l'instrument de latence de frappe, ÉTEINT par défaut (Ctrl+Alt+M).
 // Installé avant le rendu : l'écouteur doit horodater la touche avant React.
 installerSondeFrappe();
+
+// Tout lien web cliqué part dans le navigateur système, jamais dans la
+// fenêtre de l'application (voir liensExternes.ts).
+installerInterceptionLiens();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

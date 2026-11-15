@@ -31,6 +31,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { promises as fsp } from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 
 import { lancer, assert, entry, fail, fakeClaudeModule, dossierTest } from "./harness.mjs";
@@ -64,10 +65,10 @@ function creerFauxFournisseur() {
 
 /* ── Un sidecar piloté, comme dans protocol.test.js mais en miniature ───── */
 
-async function avecSidecar(corps) {
+async function avecSidecar(corps, envSupplementaire = {}) {
   const child = spawn(process.execPath, [entry], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, IACTION_FAKE_CLAUDE: "1", IACTION_FAKE_CLAUDE_MODULE: fakeClaudeModule },
+    env: { ...process.env, IACTION_FAKE_CLAUDE: "1", IACTION_FAKE_CLAUDE_MODULE: fakeClaudeModule, ...envSupplementaire },
   });
   const received = [];
   const waiters = [];
@@ -182,6 +183,117 @@ async function testTemoinClaudeStart() {
   });
 }
 
+/*
+ * claude.comptes — foyer JETABLE (HOME/USERPROFILE) portant des identifiants du
+ * second compte : le témoin ne dépend d'aucun compte réel du poste, et le
+ * `~/.claude-compte2` de la machine n'est jamais lu. Le fichier ne porte que
+ * l'échéance, pas de jeton.
+ */
+async function testTemoinClaudeComptes() {
+  const foyer = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-temoin-foyer-"));
+  try {
+    await fsp.mkdir(path.join(foyer, ".claude-compte2"), { recursive: true });
+    await fsp.writeFile(
+      path.join(foyer, ".claude-compte2", ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { refreshTokenExpiresAt: Date.now() + 8 * 24 * 3600 * 1000 } }),
+    );
+    await avecSidecar(
+      async ({ send, waitFor }) => {
+        send({ id: "temoin-comptes-1", method: "claude.comptes", params: {} });
+        const done = await waitFor((e) => e.id === "temoin-comptes-1" && e.event !== "chunk", "done claude.comptes");
+        await confronter("claude-comptes-done", done);
+      },
+      { HOME: foyer, USERPROFILE: foyer },
+    );
+  } finally {
+    await fsp.rm(foyer, { recursive: true, force: true });
+  }
+}
+
+/*
+ * claude.titreDiscussion — faux SDK dédié (fakeClaudeTitre.mjs) : aucun modèle
+ * réel. La sortie « « Chansons… . » » prouve aussi le nettoyage (guillemets, point).
+ */
+async function testTemoinTitreDiscussion() {
+  const fakeTitre = path.join(dossierTest, "fakeClaudeTitre.mjs");
+  await avecSidecar(
+    async ({ send, waitFor }) => {
+      send({ id: "temoin-titre-1", method: "claude.titreDiscussion", params: { message: "Des chansons faciles ?", reponse: "Voici trois accords." } });
+      const done = await waitFor((e) => e.id === "temoin-titre-1" && e.event !== "chunk", "done claude.titreDiscussion");
+      await confronter("claude-titre-discussion-done", done);
+    },
+    { IACTION_FAKE_CLAUDE_MODULE: fakeTitre },
+  );
+}
+
+/*
+ * Chunk `model_change` (T-207) — l'agent change lui-même de modèle. Faux SDK
+ * dédié (fakeClaudeModele.mjs) qui appelle le VRAI gestionnaire de l'outil
+ * `changer_modele` ; le témoin est donc bien émis par le vrai sidecar.
+ */
+async function testTemoinModelChange() {
+  const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-temoin-modele-"));
+  try {
+    await avecSidecar(
+      async ({ send, waitFor }) => {
+        send({
+          id: "temoin-modele-1",
+          method: "claude.start",
+          params: {
+            cwd,
+            prompt: JSON.stringify({
+              appels: [{ modele: "claude-opus-5-5", effort: "medium", raison: "Travail courant : la spec est fermée" }],
+            }),
+            model: "claude-fable-5-1",
+            effort: "high",
+            interactive: true,
+          },
+        });
+        const chunk = await waitFor(
+          (e) => e.id === "temoin-modele-1" && e.event === "chunk" && e.data.kind === "model_change",
+          "chunk model_change",
+        );
+        await confronter("claude-model-change-chunk", chunk);
+      },
+      { IACTION_FAKE_CLAUDE_MODULE: path.join(dossierTest, "fakeClaudeModele.mjs"), IACTION_FAKE_CLAUDE_STUDIO: "1" },
+    );
+  } finally {
+    await fsp.rm(cwd, { recursive: true, force: true });
+  }
+}
+
+/*
+ * Chunk `compaction_demandee` (T-216) — l'agent programme le compactage. Même
+ * faux SDK que `model_change`, qui appelle le VRAI gestionnaire de `compacter`.
+ */
+async function testTemoinCompactionDemandee() {
+  const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-temoin-compactage-"));
+  try {
+    await avecSidecar(
+      async ({ send, waitFor }) => {
+        send({
+          id: "temoin-compactage-1",
+          method: "claude.start",
+          params: {
+            cwd,
+            prompt: JSON.stringify({ compacter: [{ raison: "Étape 2 terminée, contexte lourd" }] }),
+            model: "claude-opus-5-5",
+            interactive: true,
+          },
+        });
+        const chunk = await waitFor(
+          (e) => e.id === "temoin-compactage-1" && e.event === "chunk" && e.data.kind === "compaction_demandee",
+          "chunk compaction_demandee",
+        );
+        await confronter("claude-compaction-demandee-chunk", chunk);
+      },
+      { IACTION_FAKE_CLAUDE_MODULE: path.join(dossierTest, "fakeClaudeModele.mjs"), IACTION_FAKE_CLAUDE_STUDIO: "1" },
+    );
+  } finally {
+    await fsp.rm(cwd, { recursive: true, force: true });
+  }
+}
+
 async function testTemoinErreur() {
   await avecSidecar(async ({ send, waitFor }) => {
     send({ id: "temoin-erreur-1", method: "methode.inconnue", params: {} });
@@ -194,5 +306,9 @@ await lancer(
   capturer ? "témoins du protocole — CAPTURE" : "témoins du protocole",
   testTemoinChatSend,
   testTemoinClaudeStart,
+  testTemoinClaudeComptes,
+  testTemoinTitreDiscussion,
+  testTemoinModelChange,
+  testTemoinCompactionDemandee,
   testTemoinErreur,
 );

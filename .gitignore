@@ -23,3 +23,6 @@ src-tauri/binaries/
 sidecar/dist-verif/
 sidecar/dist-dev/
 scripts/.audit-motifs
+
+# Sorties locales de l’outil Playwright MCP
+.playwright-mcp/

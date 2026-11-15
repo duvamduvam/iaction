@@ -93,8 +93,11 @@ const windows = await readWithRotation(path.join(root, "claude-windows.jsonl"));
 const cutoff = DAYS > 0 ? Date.now() - DAYS * 24 * 3600 * 1000 : -Infinity;
 const inWindow = (r) => Date.parse(r.ts) >= cutoff;
 
-const evs = events.filter(inWindow);
-const wins = windows.filter(inWindow);
+// T-191 : les événements portent `compte` hors `perso` ; la baseline mesure le compte principal.
+const evs = events.filter(inWindow).filter((e) => (e.compte ?? "perso") === "perso");
+// Deux comptes Claude (docs/spec-deux-comptes.md) : la baseline mesure le compte principal. Une ligne sans
+// champ `compte` vaut `perso` ; les relevés d'un autre compte ne se mêlent pas aux siens.
+const wins = windows.filter(inWindow).filter((w) => (w.compte ?? "perso") === "perso");
 
 if (evs.length === 0) {
   console.log(`Aucun événement d'usage sur la période (--days=${DAYS}). Rien à analyser.`);

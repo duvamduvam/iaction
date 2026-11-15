@@ -20,9 +20,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LOG_APPEND_METHOD, isLogLevel, isLogScope, logUi } from "./journal";
-import { toModelDetail, type ModelDetail } from "./modelDetail";
+import { parseModelsDetail, type ModelDetail } from "./modelDetail";
 import type { ProviderTraits } from "./providerTraits";
 import type { EffortLevel } from "./modelesAbonnementClaude";
+import { parseCommandesSlash, type SlashCommandInfo } from "./commandesSlash";
+import { parseTitreDiscussion } from "./titresDiscussions";
+
+export type { SlashCommandInfo } from "./commandesSlash";
 
 export type { ModelDetail, ModelPricing } from "./modelDetail";
 
@@ -131,7 +135,14 @@ function rejeterRequetesEnVol(etat: string): void {
  * Exportée : pure, testée sans mock de Tauri.
  */
 export function messageErreurProtocole(data: Record<string, unknown>): string {
-  return typeof data.message === "string" && data.message.length > 0 ? data.message : "Erreur inconnue";
+  const message = typeof data.message === "string" && data.message.length > 0 ? data.message : "Erreur inconnue";
+  // T-169 — « méthode inconnue » = l'interface connaît une méthode que le sidecar en cours
+  // n'a pas (dev : rechargement à chaud de l'UI, sidecar lancé plus tôt). Le préfixe est
+  // gardé : des appelants détectent encore « méthode inconnue » dans le message.
+  if (data.code === "methode_inconnue" || message.startsWith("méthode inconnue")) {
+    return `${message} — le sidecar est plus ancien que l'interface : relancez IAction`;
+  }
+  return message;
 }
 
 function handleSidecarEvent(payload: RawSidecarEvent): void {
@@ -325,7 +336,7 @@ export interface ChatOptions {
   maxTokens?: number;
 }
 
-import { toRouteDebord, isRouteTier, toRouteTarget } from "./protocole";
+import { toRouteDebord, isRouteTier, toRouteTarget, parseCompactionDemandee, parseModelChange, type ModelChangeData } from "./protocole";
 
 export {
   parseChatDone,
@@ -336,6 +347,8 @@ export {
   type ClaudeDoneData,
   type ClaudeUsage,
   type NeutralDoneData,
+  type ModelChangeData,
+  parseModelChange,
   isRouteTier,
   toRouteTarget,
 } from "./protocole";
@@ -369,15 +382,7 @@ export async function modelsList(providerId: string): Promise<ModelInfo[]> {
  */
 export async function modelsDetail(providerId: string): Promise<ModelDetail[]> {
   const { done } = request("models.detail", { providerId });
-  const data = await done;
-  if (!Array.isArray(data.models)) return [];
-  const out: ModelDetail[] = [];
-  for (const raw of data.models) {
-    if (typeof raw !== "object" || raw === null) continue;
-    const detail = toModelDetail(raw as Record<string, unknown>);
-    if (detail) out.push(detail);
-  }
-  return out;
+  return parseModelsDetail(await done);
 }
 
 /**
@@ -610,7 +615,6 @@ export function chatSend(
   );
 }
 
-/** Extrait `finishReason`/`usage`/`modelUsed` du `data` reçu au `done` d'un `chat.send`. */
 /** Interrompt le `chat.send` en cours identifié par `targetId`. */
 export async function chatAbort(targetId: string): Promise<boolean> {
   const { done } = request("chat.abort", { targetId });
@@ -681,15 +685,17 @@ export interface ClaudeStartParams {
    *  `mcp__studio__ask_user` (modale à choix cliquables). Réservé aux tours
    *  lancés depuis une page ouverte — jamais pour l'orchestration headless. */
   interactive?: boolean;
+  /** T-207 — agent préréglé à modèle fixe : l'outil `changer_modele` n'est pas exposé à l'agent. */
+  modeleVerrouille?: boolean;
   /** T-003 — allowlist d'outils de l'agent (`null`/absent = palette complète). Hors mode `chatOnly`. */
   tools?: string[] | null;
   /** Pièces jointes du `prompt` (voir docs/protocol.md) — omis si vide/absent. */
   attachments?: ChatAttachment[];
   /** Métadonnées de supervision (voir docs/protocol.md § S1) — omis si absent. */
   meta?: RequestMeta;
+  compte?: "perso" | "teams"; // compte Claude du tour (docs/spec-deux-comptes.md) — omis = perso
 }
 
-/** Callbacks appelés au fil de l'eau, un par `kind` de chunk (union discriminée côté protocole). */
 /** État d'un serveur MCP au démarrage du tour (chunk `init`, voir docs/protocol.md). */
 export interface ClaudeInitMcpServer {
   name: string;
@@ -737,14 +743,15 @@ export interface ClaudeStartCallbacks {
   onBackgroundTimeout?: (count: number, plafondMs: number) => void;
   /** Compaction de contexte terminée (« /compact » ou compaction auto) — `preTokens` = taille du contexte avant, si connue. */
   onCompact?: (trigger: string, preTokens: number | null) => void;
+  /** T-207 — l'agent a changé lui-même de modèle / d'effort (outil `changer_modele`) : déjà appliqué côté moteur, à répercuter dans les sélecteurs. */
+  onModelChange?: (changement: ModelChangeData) => void;
+  /** T-216 — l'agent a programmé le compactage (outil `compacter`) : « /compact » à mettre en file, rien n'est encore compacté. */
+  onCompactionDemandee?: (raison: string) => void;
   /** T-087 — un `claude.push` jamais injecté (aucun retour d'outil depuis) : à reposer en file, jamais perdu en silence. */
   onPushPerdu?: (contenu: string, avaitPieces: boolean) => void;
 }
 
-function str(data: Record<string, unknown>, key: string, fallback = ""): string {
-  const v = data[key];
-  return typeof v === "string" ? v : fallback;
-}
+const str = (data: Record<string, unknown>, key: string, fallback = ""): string => (typeof data[key] === "string" ? (data[key] as string) : fallback);
 const num = (data: Record<string, unknown>, key: string): number => (typeof data[key] === "number" ? (data[key] as number) : 0);
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((d): d is string => typeof d === "string") : []);
 
@@ -799,6 +806,11 @@ const CLAUDE_CHUNK_HANDLERS: Record<string, ClaudeChunkHandler> = {
   background_timeout: (data, callbacks) => callbacks.onBackgroundTimeout?.(num(data, "count"), num(data, "plafondMs")),
   compact: (data, callbacks) =>
     callbacks.onCompact?.(str(data, "trigger", "manual"), typeof data.preTokens === "number" ? data.preTokens : null),
+  model_change: (data, callbacks) => {
+    const changement = parseModelChange(data);
+    if (changement) callbacks.onModelChange?.(changement);
+  },
+  compaction_demandee: (data, callbacks) => callbacks.onCompactionDemandee?.(parseCompactionDemandee(data).raison),
   push_perdu: (data, callbacks) => callbacks.onPushPerdu?.(str(data, "contenu"), data.avaitPieces === true),
 };
 
@@ -822,9 +834,11 @@ export function claudeStart(params: ClaudeStartParams, callbacks: ClaudeStartCal
       chatOnly: params.chatOnly === true,
       ...(params.webSearch === true ? { webSearch: true } : {}),
       ...(params.interactive === true ? { interactive: true } : {}),
+      ...(params.modeleVerrouille === true ? { modeleVerrouille: true } : {}),
       ...(params.tools ? { tools: params.tools } : {}),
       ...(params.attachments && params.attachments.length > 0 ? { attachments: params.attachments } : {}),
       ...(params.meta ? { meta: params.meta } : {}),
+      ...(params.compte === "teams" ? { compte: params.compte } : {}), // perso = absent, comme avant
     },
     {
       onChunk: (data) => {
@@ -835,7 +849,6 @@ export function claudeStart(params: ClaudeStartParams, callbacks: ClaudeStartCal
   );
 }
 
-/** Extrait les champs typés du `data` reçu au `done` d'un `claude.start`. */
 /** Répond à un `permission_request` en attente sur le tour `targetId`. */
 export async function claudePermission(
   targetId: string,
@@ -894,6 +907,26 @@ export async function projectEnsureDoc(cwd: string): Promise<boolean> {
   const { done } = request("project.ensureDoc", { cwd });
   const data = await done;
   return data.ensured === true;
+}
+
+/**
+ * T-207 — remet modèle (et effort) sur un tour VIVANT : bouton « Annuler » du
+ * bandeau de changement automatique. `effort` : `undefined` = inchangé, `null`
+ * = défaut du modèle. `false` si le tour n'existe plus (l'appelant s'en tient
+ * alors au sélecteur, qui vaudra pour le prochain tour).
+ */
+export async function claudeSetModel(
+  targetId: string,
+  model: string,
+  effort?: EffortLevel | null,
+): Promise<boolean> {
+  const { done } = request("claude.setModel", {
+    targetId,
+    model,
+    ...(effort !== undefined ? { effort } : {}),
+  });
+  const data = await done;
+  return data.applied === true;
 }
 
 /** Rend la main pendant l'attente des rapports de tâches de fond (chunk
@@ -1016,77 +1049,41 @@ export async function neutralAbort(targetId: string): Promise<boolean> {
 
 /* ---------- Helpers typés « claude.commands » (menu « / » du composeur) ---------- */
 
-/** Un slash-command/skill invocable pour un projet (voir docs/protocol.md, `claude.commands`). */
-export interface SlashCommandInfo {
-  name: string;
-  description: string;
-  argumentHint: string;
-  aliases?: string[];
+/**
+ * Slash-commands/skills invocables pour un projet, du compte du tour (menu « / »
+ * du composeur). Rejette si l'init SDK échoue (auth, cwd) : l'appelant retombe
+ * sur une liste vide (voir docs/protocol.md, `claude.commands`).
+ */
+export async function claudeCommands(cwd: string, compte?: "perso" | "teams"): Promise<SlashCommandInfo[]> {
+  const { done } = request("claude.commands", { cwd, ...(compte === "teams" ? { compte } : {}) });
+  return parseCommandesSlash(await done);
 }
 
-function toSlashCommandInfo(value: unknown): SlashCommandInfo | null {
-  if (typeof value !== "object" || value === null) return null;
-  const v = value as Record<string, unknown>;
-  if (typeof v.name !== "string" || !v.name) return null;
-  const info: SlashCommandInfo = {
-    name: v.name,
-    description: typeof v.description === "string" ? v.description : "",
-    argumentHint: typeof v.argumentHint === "string" ? v.argumentHint : "",
-  };
-  if (Array.isArray(v.aliases)) {
-    const aliases = v.aliases.filter((a): a is string => typeof a === "string" && a.length > 0);
-    if (aliases.length > 0) info.aliases = aliases;
-  }
-  return info;
-}
+// Helpers typés R5 (`knowledge.*`) : voir connaissancesClient.ts, même patron que consoClient.ts.
+
+/* ---------- Helper typé « claude.titreDiscussion » (titre court d'une discussion, T-197) ---------- */
 
 /**
- * Énumère les slash-commands/skills invocables pour un projet (alimente le menu
- * « / » du composeur). Best effort : rejette en cas d'échec d'initialisation SDK
- * (auth, cwd invalide) — à l'appelant de retomber sur une liste vide sans bloquer
- * la saisie (voir docs/protocol.md, `claude.commands`).
+ * Titre généré par le modèle pour une discussion (voir docs/protocol.md,
+ * `claude.titreDiscussion`), ou `null`. Best effort : ne rejette JAMAIS. Un
+ * sidecar en service qui ne connaît pas encore la méthode répond par une
+ * erreur — elle vaut `null`, sans message à l'écran (requête déclarée « sonde » :
+ * son échec est journalisé en `debug`, pas en `error`). Aucune relance ici : la
+ * tentative unique par session est tenue par `titresDiscussions.ts`.
  */
-export async function claudeCommands(cwd: string): Promise<SlashCommandInfo[]> {
-  const { done } = request("claude.commands", { cwd });
-  const data = await done;
-  if (!Array.isArray(data.commands)) return [];
-  const out: SlashCommandInfo[] = [];
-  for (const raw of data.commands) {
-    const info = toSlashCommandInfo(raw);
-    if (info) out.push(info);
-  }
-  return out;
-}
-
-// Helpers typés R5 (`knowledge.*`, connaissances indexées) : sortis dans
-// connaissancesClient.ts (cliquet de taille) — voir aussi consoClient.ts,
-// même patron.
-
-/* ---------- Helpers typés « claude.sessionTitles » (titres courts calculés par le CLI) ---------- */
-
-/**
- * Titres de sessions déjà calculés par le CLI Claude (voir docs/protocol.md,
- * `claude.sessionTitles`) — best effort et zéro token : ne rejette jamais,
- * une panne (sidecar, SDK, cwd inconnu du CLI) renvoie une map vide et
- * l'appelant retombe sur son repli local (`deriveTitleFromText`).
- */
-export async function claudeSessionTitles(cwd: string, sessionIds?: string[]): Promise<Map<string, string>> {
-  const titles = new Map<string, string>();
+export async function claudeTitreDiscussion(
+  message: string,
+  reponse: string,
+  compte?: "perso" | "teams",
+): Promise<string | null> {
   try {
-    const params: Record<string, unknown> = { cwd };
-    if (sessionIds && sessionIds.length > 0) params.sessionIds = sessionIds;
-    const { done } = request("claude.sessionTitles", params);
-    const data = await done;
-    if (!Array.isArray(data.titles)) return titles;
-    for (const raw of data.titles) {
-      if (typeof raw !== "object" || raw === null) continue;
-      const v = raw as Record<string, unknown>;
-      if (typeof v.sessionId === "string" && v.sessionId && typeof v.title === "string" && v.title) {
-        titles.set(v.sessionId, v.title);
-      }
-    }
-    return titles;
+    const { done } = request(
+      "claude.titreDiscussion",
+      { message, reponse, ...(compte === "teams" ? { compte } : {}) },
+      { sonde: true },
+    );
+    return parseTitreDiscussion(await done);
   } catch {
-    return titles;
+    return null;
   }
 }

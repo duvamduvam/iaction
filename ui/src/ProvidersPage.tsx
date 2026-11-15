@@ -79,6 +79,8 @@ import type { ProvidersLoadState } from "./useProviders";
 import { useRovingFocus } from "./useRovingFocus";
 import { SHORTCUT_GROUPS } from "./raccourcisClavier";
 import { ReseauSection } from "./ReseauSection";
+import { Deroulant } from "./Deroulant";
+import { confirmer } from "./confirmer";
 
 const OPENROUTER_PROVIDER_ID = "openrouter";
 
@@ -321,9 +323,9 @@ function ProjectsSection({
               project={project}
               onEdit={() => setEditingId(project.id)}
               onDelete={() => {
-                if (window.confirm(`Supprimer le projet « ${project.name} » ?`)) {
-                  void onDeleteProject(project.id);
-                }
+                void confirmer(`Supprimer le projet « ${project.name} » ?`).then((ok) => {
+                  if (ok) void onDeleteProject(project.id);
+                });
               }}
             />
           ),
@@ -684,9 +686,9 @@ function OpenRouterModelsSection({
                 placeholder="Rechercher (id, nom)…"
                 aria-label="Rechercher un modèle"
               />
-              <select
+              <Deroulant
                 value={sortKey}
-                onChange={(e) => setSortKey(e.currentTarget.value as ModelSortKey)}
+                onChange={(v) => setSortKey(v as ModelSortKey)}
                 aria-label="Trier les modèles"
               >
                 {MODEL_SORT_OPTIONS.map((o) => (
@@ -694,7 +696,7 @@ function OpenRouterModelsSection({
                     {o.label}
                   </option>
                 ))}
-              </select>
+              </Deroulant>
               <button type="button" className="btn btn--ghost" onClick={() => void loadModels()}>
                 Rafraîchir
               </button>
@@ -1011,11 +1013,11 @@ function RoutingSection({
             return (
               <div className="routing-row" key={tier}>
                 <span className="routing-row__tier">{label}</span>
-                <select
+                <Deroulant
                   aria-label={`Moteur du niveau ${label}`}
                   value={row.engine}
-                  onChange={(e) => {
-                    const engine = e.currentTarget.value === "neutral" ? "neutral" : "claude";
+                  onChange={(v) => {
+                    const engine = v === "neutral" ? "neutral" : "claude";
                     updateRow(tier, {
                       engine,
                       // Bascule vers neutre sans fournisseur mémorisé : proposer le premier déclaré.
@@ -1027,12 +1029,12 @@ function RoutingSection({
                 >
                   <option value="claude">Claude (abonnement)</option>
                   <option value="neutral">Fournisseur neutre</option>
-                </select>
+                </Deroulant>
                 {row.engine === "neutral" && (
-                  <select
+                  <Deroulant
                     aria-label={`Fournisseur du niveau ${label}`}
                     value={row.providerId}
-                    onChange={(e) => updateRow(tier, { providerId: e.currentTarget.value })}
+                    onChange={(v) => updateRow(tier, { providerId: v })}
                   >
                     {/* Fournisseur configuré mais plus déclaré : gardé visible (le Chat replie de toute façon). */}
                     {row.providerId && !providers.some((p) => p.id === row.providerId) && (
@@ -1043,7 +1045,7 @@ function RoutingSection({
                         {p.label}
                       </option>
                     ))}
-                  </select>
+                  </Deroulant>
                 )}
                 <input
                   aria-label={`Modèle du niveau ${label}`}
@@ -1072,11 +1074,11 @@ function RoutingSection({
               </p>
               <div className="routing-row">
                 <span className="routing-row__tier">Classificateur</span>
-                <select
+                <Deroulant
                   aria-label="Fournisseur du classificateur LLM"
                   value={classifierRow.providerId}
                   disabled={!classifierRow.enabled}
-                  onChange={(e) => updateClassifierRow({ providerId: e.currentTarget.value })}
+                  onChange={(v) => updateClassifierRow({ providerId: v })}
                 >
                   {/* Fournisseur configuré mais plus déclaré : gardé visible (repli heuristique côté sidecar). */}
                   {classifierRow.providerId &&
@@ -1088,7 +1090,7 @@ function RoutingSection({
                       {p.label}
                     </option>
                   ))}
-                </select>
+                </Deroulant>
                 <input
                   aria-label="Modèle du classificateur LLM"
                   list="routing-models-classifier"
@@ -1128,11 +1130,11 @@ function RoutingSection({
               </p>
               <div className="routing-row">
                 <span className="routing-row__tier">Résumeur</span>
-                <select
+                <Deroulant
                   aria-label="Fournisseur du résumeur de compaction"
                   value={summarizerRow.providerId}
                   disabled={!summarizerRow.enabled}
-                  onChange={(e) => updateSummarizerRow({ providerId: e.currentTarget.value })}
+                  onChange={(v) => updateSummarizerRow({ providerId: v })}
                 >
                   <option value="">(suivre le classificateur)</option>
                   {/* Fournisseur configuré mais plus déclaré : gardé visible (pas de compaction côté Chat). */}
@@ -1145,7 +1147,7 @@ function RoutingSection({
                       {p.label}
                     </option>
                   ))}
-                </select>
+                </Deroulant>
                 <input
                   aria-label="Modèle du résumeur de compaction"
                   list="routing-models-summarizer"
@@ -1185,12 +1187,12 @@ function RoutingSection({
               </p>
               <div className="routing-row">
                 <span className="routing-row__tier">Débord</span>
-                <select
+                <Deroulant
                   aria-label="Moteur de la cible de débord"
                   value={debordRow.engine}
                   disabled={!debordRow.enabled}
-                  onChange={(e) => {
-                    const engine = e.currentTarget.value === "neutral" ? "neutral" : "claude";
+                  onChange={(v) => {
+                    const engine = v === "neutral" ? "neutral" : "claude";
                     updateDebordRow({
                       engine,
                       ...(engine === "neutral" && !debordRow.providerId
@@ -1201,13 +1203,13 @@ function RoutingSection({
                 >
                   <option value="claude">Claude (abonnement)</option>
                   <option value="neutral">Fournisseur neutre</option>
-                </select>
+                </Deroulant>
                 {debordRow.engine === "neutral" && (
-                  <select
+                  <Deroulant
                     aria-label="Fournisseur de la cible de débord"
                     value={debordRow.providerId}
                     disabled={!debordRow.enabled}
-                    onChange={(e) => updateDebordRow({ providerId: e.currentTarget.value })}
+                    onChange={(v) => updateDebordRow({ providerId: v })}
                   >
                     {/* Fournisseur configuré mais plus déclaré : gardé visible (défaut openrouter avant déclaration). */}
                     {debordRow.providerId && !providers.some((p) => p.id === debordRow.providerId) && (
@@ -1218,7 +1220,7 @@ function RoutingSection({
                         {p.label}
                       </option>
                     ))}
-                  </select>
+                  </Deroulant>
                 )}
                 <input
                   aria-label="Modèle de la cible de débord"
@@ -1461,11 +1463,11 @@ function ServicePresetField({
   return (
     <div className="field">
       <label htmlFor={id}>Service</label>
-      <select
+      <Deroulant
         id={id}
         value={current}
-        onChange={(e) => {
-          const preset = presets.find((p) => p.id === e.currentTarget.value);
+        onChange={(v) => {
+          const preset = presets.find((p) => p.id === v);
           if (preset) onApply(preset);
         }}
       >
@@ -1478,7 +1480,7 @@ function ServicePresetField({
             préréglage), pas un choix : on y arrive en éditant les champs, et
             le proposer à la sélection ne ferait rien. */}
         {current === "" && <option value="">Personnalisé</option>}
-      </select>
+      </Deroulant>
     </div>
   );
 }
@@ -1591,11 +1593,10 @@ function RemoteModelField({
     <>
       <div className="field">
         <label htmlFor={id}>Modèle</label>
-        <select
+        <Deroulant
           id={id}
           value={editing ? FREEFORM_OPTION : value}
-          onChange={(e) => {
-            const next = e.currentTarget.value;
+          onChange={(next) => {
             if (next === FREEFORM_OPTION) {
               setFreeform(true);
               return;
@@ -1610,7 +1611,7 @@ function RemoteModelField({
             </option>
           ))}
           <option value={FREEFORM_OPTION}>Autre (saisie libre)</option>
-        </select>
+        </Deroulant>
       </div>
       {editing && (
         <CommittedInput
@@ -1654,11 +1655,10 @@ function RemoteVoiceField({
       {catalog.length > 0 && (
         <div className="field">
           <label htmlFor={id}>Voix</label>
-          <select
+          <Deroulant
             id={id}
             value={editing ? FREEFORM_OPTION : value}
-            onChange={(e) => {
-              const next = e.currentTarget.value;
+            onChange={(next) => {
               if (next === FREEFORM_OPTION) {
                 setFreeform(true);
                 return;
@@ -1673,7 +1673,7 @@ function RemoteVoiceField({
               </option>
             ))}
             <option value={FREEFORM_OPTION}>Autre (saisie libre)</option>
-          </select>
+          </Deroulant>
         </div>
       )}
       {editing && (
@@ -2056,7 +2056,7 @@ function SpeechKeySourceField({
     <div className="voice-key">
       <div className="field voice-key__source">
         <label htmlFor={selectId}>Clé API</label>
-        <select id={selectId} value={keySource} onChange={(e) => onChangeSource(e.currentTarget.value)}>
+        <Deroulant id={selectId} value={keySource} onChange={onChangeSource}>
           <option value="">Automatique (clé du fournisseur correspondant à l'URL)</option>
           {borrowable.map((p) => (
             <option key={p.id} value={p.id}>
@@ -2065,7 +2065,7 @@ function SpeechKeySourceField({
           ))}
           {orphan && <option value={keySource}>Fournisseur « {orphanLabel} » (indisponible)</option>}
           <option value={SPEECH_KEY_DEDICATED}>Clé dédiée</option>
-        </select>
+        </Deroulant>
       </div>
       <span className={`result-line${status.variant}`}>{status.text}</span>
       {showDedicatedEditor && (
@@ -2253,32 +2253,32 @@ function VoiceSection({
         <div className="voice-form">
           <div className="field">
             <label htmlFor="voice-stt-mode">Mode</label>
-            <select
+            <Deroulant
               id="voice-stt-mode"
               value={config.stt.mode}
-              onChange={(e) => save({ stt: { mode: e.currentTarget.value as SpeechMode } })}
+              onChange={(v) => save({ stt: { mode: v as SpeechMode } })}
             >
               <option value="local">Local (sur cette machine)</option>
               <option value="remote">Distant (API)</option>
-            </select>
+            </Deroulant>
           </div>
           <VoixLocaleAbsente />
           <div className="field">
             <label htmlFor="voice-stt-language">Langue</label>
-            <select
+            <Deroulant
               id="voice-stt-language"
               value={config.stt.language}
-              onChange={(e) => save({ stt: { language: e.currentTarget.value } })}
+              onChange={(v) => save({ stt: { language: v } })}
             >
               {voiceSelectOptions(STT_LANGUAGES, config.stt.language)}
-            </select>
+            </Deroulant>
           </div>
           <div className="field">
             <label htmlFor="voice-stt-device">Micro</label>
-            <select
+            <Deroulant
               id="voice-stt-device"
               value={config.stt.inputDeviceId}
-              onChange={(e) => save({ stt: { inputDeviceId: e.currentTarget.value } })}
+              onChange={(v) => save({ stt: { inputDeviceId: v } })}
             >
               <option value="">Périphérique par défaut du système</option>
               {microphones
@@ -2288,18 +2288,18 @@ function VoiceSection({
                     {d.label}
                   </option>
                 ))}
-            </select>
+            </Deroulant>
           </div>
           {config.stt.mode === "local" ? (
             <div className="field">
               <label htmlFor="voice-stt-model">Modèle Whisper</label>
-              <select
+              <Deroulant
                 id="voice-stt-model"
                 value={config.stt.local.model}
-                onChange={(e) => save({ stt: { local: { model: e.currentTarget.value } } })}
+                onChange={(v) => save({ stt: { local: { model: v } } })}
               >
                 {voiceSelectOptions(WHISPER_MODELS, config.stt.local.model)}
-              </select>
+              </Deroulant>
             </div>
           ) : (
             <>
@@ -2382,26 +2382,26 @@ function VoiceSection({
         <div className="voice-form">
           <div className="field">
             <label htmlFor="voice-tts-mode">Mode</label>
-            <select
+            <Deroulant
               id="voice-tts-mode"
               value={config.tts.mode}
-              onChange={(e) => save({ tts: { mode: e.currentTarget.value as SpeechMode } })}
+              onChange={(v) => save({ tts: { mode: v as SpeechMode } })}
             >
               <option value="local">Local (sur cette machine)</option>
               <option value="remote">Distant (API)</option>
-            </select>
+            </Deroulant>
           </div>
           {config.tts.mode === "local" ? (
             <>
               <div className="field">
                 <label htmlFor="voice-tts-voice">Voix Kokoro</label>
-                <select
+                <Deroulant
                   id="voice-tts-voice"
                   value={config.tts.local.voice}
-                  onChange={(e) => save({ tts: { local: { voice: e.currentTarget.value } } })}
+                  onChange={(v) => save({ tts: { local: { voice: v } } })}
                 >
                   {voiceSelectOptions(KOKORO_VOICES, config.tts.local.voice)}
-                </select>
+                </Deroulant>
               </div>
               <SpeedInput
                 id="voice-tts-local-speed"
@@ -2692,9 +2692,9 @@ export function ProvidersPage({
                   keyConfigured={keyStatus[provider.id] ?? false}
                   onEdit={() => setEditingId(provider.id)}
                   onDelete={() => {
-                    if (window.confirm(`Supprimer le fournisseur « ${provider.label} » ?`)) {
-                      void onDeleteProvider(provider.id);
-                    }
+                    void confirmer(`Supprimer le fournisseur « ${provider.label} » ?`).then((ok) => {
+                      if (ok) void onDeleteProvider(provider.id);
+                    });
                   }}
                   onSaveKey={onSaveKey}
                   onClearKey={onClearKey}

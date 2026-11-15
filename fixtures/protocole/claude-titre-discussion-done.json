@@ -1,0 +1,12 @@
+{
+  "quoi": "done de claude.titreDiscussion : le titre court d'une discussion, généré par Haiku, ou null quand il n'a pas pu l'être (délai, quota, compte non connecté, réponse inexploitable). Jamais un événement error pour ces cas.",
+  "parseur": "parseTitreDiscussion",
+  "evenement": {
+    "id": "temoin-titre-1",
+    "event": "done",
+    "data": {
+      "titre": "Chansons faciles pour ukulélé"
+    }
+  },
+  "attendu": "Chansons faciles pour ukulélé"
+}

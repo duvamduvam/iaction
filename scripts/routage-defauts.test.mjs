@@ -31,7 +31,7 @@ function verifier(intitule, condition, detail = "") {
 
 const SOURCE = `
 export const DEFAULT_ROUTING_TABLE: RoutingTable = {
-  trivial: { engine: "claude", model: "claude-haiku-4-5" },
+  trivial: { engine: "claude", model: "claude-haiku-5-5" },
   moyen: { engine: "claude", model: "claude-opus-5" },
 };
 `;
@@ -39,7 +39,7 @@ export const DEFAULT_ROUTING_TABLE: RoutingTable = {
 {
   const table = lireTable(SOURCE);
   verifier("la table est extraite du source", table !== null);
-  verifier("le palier trivial est lu", table?.trivial === "claude/claude-haiku-4-5", JSON.stringify(table));
+  verifier("le palier trivial est lu", table?.trivial === "claude/claude-haiku-5-5", JSON.stringify(table));
   verifier("le palier moyen est lu", table?.moyen === "claude/claude-opus-5");
   verifier("rien d'autre n'est inventé", Object.keys(table ?? {}).length === 2);
 }

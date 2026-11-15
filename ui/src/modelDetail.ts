@@ -55,3 +55,15 @@ export function toModelDetail(value: Record<string, unknown>): ModelDetail | nul
   if (pricing) model.pricing = pricing;
   return model;
 }
+
+/** Réponse `models.detail` → détails valides (entrées malformées écartées, jamais d'exception). */
+export function parseModelsDetail(data: Record<string, unknown>): ModelDetail[] {
+  if (!Array.isArray(data.models)) return [];
+  const out: ModelDetail[] = [];
+  for (const raw of data.models) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const detail = toModelDetail(raw as Record<string, unknown>);
+    if (detail) out.push(detail);
+  }
+  return out;
+}

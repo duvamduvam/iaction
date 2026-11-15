@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 import { ecrireModeleDefaut, lireModeleDefaut, MODELE_DEFAUT_USINE, normaliserModeleDefaut } from "./modeleDefaut";
 import { MODELES_ABONNEMENT_CLAUDE } from "./modelesAbonnementClaude";
+import { Deroulant } from "./Deroulant";
 
 export function ModeleDefautProjets() {
   const [valeur, setValeur] = useState<string | null>(null);
@@ -55,10 +56,10 @@ export function ModeleDefautProjets() {
       ) : (
         <div className="field">
           <label htmlFor="modele-defaut-projets">Modèle</label>
-          <select
+          <Deroulant
             id="modele-defaut-projets"
             value={courant}
-            onChange={(e) => void choisir(e.currentTarget.value)}
+            onChange={(v) => void choisir(v)}
           >
             {/* Un modèle réglé mais absent de la liste (id saisi ailleurs, modèle
                 retiré de l'abonnement) reste proposé : le taire changerait le
@@ -71,7 +72,7 @@ export function ModeleDefautProjets() {
                 {m.id}
               </option>
             ))}
-          </select>
+          </Deroulant>
           {enregistre && <span className="result-line">Enregistré.</span>}
         </div>
       )}

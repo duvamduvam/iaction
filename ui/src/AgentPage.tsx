@@ -77,10 +77,9 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useRef,
-  useState,
-  type KeyboardEvent,
+  useRef, useState, type KeyboardEvent,
 } from "react";
+import { archiverFilsDistants } from "./filsDistantsClient";
 import { openExternal, useApps } from "./appsAdmin";
 import { chargerProjets, IO_ETAT, retirerProjet, sauverProjet } from "./etatEclate";
 import { ouvrirReference, type ForcageOuverture } from "./refFichier";
@@ -95,7 +94,7 @@ import {
 } from "./Attachments";
 import { FileEditorView, type OpenFileState } from "./FileEditor";
 import { FileTree } from "./FileTree";
-import { fsListDir, fsReadFile, fsWriteFile, sondesDisque, type DirEntry } from "./fsClient";
+import { fsReadFile, fsWriteFile, sondesDisque, type DirEntry } from "./fsClient";
 import { McpPanel } from "./McpPanel";
 import { useFavorisModeles } from "./useFavorisModeles";
 import { agentsList, type AgentInfo, type AgentScope } from "./orchestrationClient";
@@ -103,16 +102,16 @@ import {
   type ProjectConfig,
 } from "./projectAdmin";
 import type { ProviderConfig } from "./providerAdmin";
+import { compteAPersister, compteAuDepart, compteExplicite, defautDeProjet, lireChoixMoteur, resoudreCompteSession, useComptesClaude, type CompteClaude } from "./comptesClaude";
+import { useCompteSession } from "./useCompteSession";
+import { useCommandesSlash } from "./useCommandesSlash";
 import {
   claudeAbort,
   claudeRelease,
-  claudeCommands,
-  claudeSessionTitles,
-  claudePermission,
+  claudeSetModel,
+  claudeTitreDiscussion,
   modelsDetail,
   neutralAbort,
-  neutralPermission,
-  projectEnsureDoc,
   type ModelDetail,
   type PermissionMode,
   type RouteTarget,
@@ -129,7 +128,7 @@ import { BoutonArret, ChatComposerEnvoi } from "./ChatComposerEnvoi";
 import { asRecord } from "./base";
 import {
   contextTokens,
-  spokenTextOfTurn,
+  texteLuDuDernierTour,
   type AgentTurn,
 } from "./agentTurns";
 
@@ -147,24 +146,31 @@ import { useConversationRuntime } from "./useConversationRuntime";
 import { prochainOnglet } from "./onglets";
 import { BarreOnglets } from "./BarreOnglets";
 import { ongletApresFermeture } from "./fermetureOnglets";
+import { useConnaissancesDetectees } from "./useConnaissancesDetectees";
+import { sessionApresTourDeFond, sessionAvecRuntime } from "./fusionSessions";
+import { insererCommandeSlash, matchSlashCommands, menuApresFrappe, menuFerme, type EtatMenuSlash } from "./menuSlash";
+import { ongletEnChargement, ongletLu, ongletModifie, ongletsRenommes, ongletsSansChemin } from "./ongletsFichiers";
 import { PermissionModal } from "./PermissionModal";
-import { cleAutoAllow } from "./permissions";
-import { type PermissionRequestItem } from "./questionsAgent";
+import { useDemandesEnAttente } from "./useDemandesEnAttente";
+import { EnAttenteSection } from "./EnAttenteSection";
 import {
-  appliquerTitresIA,
   buildPersistedEntry,
+  candidatTitre,
   convIdOfTab,
   convTabId,
-  deriveSessionTitle,
   EMPTY_TAB,
   emptyProjectState,
   freshRuntime,
   freshSession,
+  fusionnerMoteur,
+  avecCompteMoteur,
+  moteurNouvelleSession,
   isConvTab,
   resolveAgentSelection,
   SAVE_DEBOUNCE_MS,
   sanitizePersistedConversations,
   sessionStateFromPersisted,
+  texteRecherchable,
   type AgentSelection,
   type ConvRuntime,
   type PersistedConversations,
@@ -179,16 +185,24 @@ import { useBattementReveil } from "./useReveil";
 import { gererReveils } from "./reveilRuntime";
 import { ReveilBanniere, ReveilControl } from "./ReveilControl";
 import { AgentTranscript } from "./agentTranscript";
-import { ConnaissancesSection, LlmSection, SessionsSection } from "./agentSidebarDroit";
+import { LlmSection, SessionsSection } from "./agentSidebarDroit";
+import { ConnaissancesSection } from "./agentSidebarConnaissances";
 import { effortsPour, type EffortLevel } from "./modelesAbonnementClaude";
+import { choixApresAnnulation, effortPourAnnulation, withChangementAnnule, type ChoixModele } from "./changementModele";
+import { annulerCompactionDemandee, avecCompactEnFile, COMMANDE_COMPACT } from "./compactionDemandee";
 import { lireModeleDefaut, MODELE_DEFAUT_USINE, resoudreModeleSession } from "./modeleDefaut";
 import { creerEnvoiProjet } from "./envoiProjet";
 import { useConnaissances } from "./useConnaissances";
 import { useArchivesSessions } from "./useArchivesSessions";
+import { AVIS_ECRITURE_REFUSEE, creerSerie, jugerEcritureProjet, signalerEchecEcritureProjet } from "./gardePersistanceProjet";
+import { logUi } from "./journal";
+import { dejaTentee, doitTitrer, marquerTentee, poserTitreIA } from "./titresDiscussions";
+import { useRattrapageTitres } from "./useRattrapageTitres";
 import { isUnderPath, projectStateFromPersisted, renamedPath } from "./hydratationProjet";
 import { choisirProjetInitial, cleDernierProjet } from "./fenetreProjet";
-import type { RaisonReprise } from "./repriseSession";
 import { etiquetteFenetreCourante, listerProjetsOuverts, poidsProjetsRecents, revendiquerProjet } from "./fenetreClient";
+import { Deroulant } from "./Deroulant";
+import { confirmer } from "./confirmer";
 
 const MAX_OPEN_FILES = 6;
 
@@ -250,13 +264,6 @@ export interface AgentPageHandle {
   isStreaming: () => boolean;
   /** Place le curseur dans le composeur (arrivée sur la page, vidage, nouvelle conversation). */
   focusComposer: () => void;
-  /**
-   * T-159 — ouvre, dans le projet donné, une NOUVELLE conversation qui reprend
-   * `sessionIdCopie` : l'identifiant d'une COPIE de session Claude (jamais de
-   * l'originale, voir `claude.forkSession`). Sélectionne le projet au besoin.
-   * Rend la raison du refus (T-162) ; rien n'est alors créé.
-   */
-  reprendreSession: (projectId: string, sessionIdCopie: string, titre: string) => Promise<RaisonReprise>;
 }
 
 export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function AgentPage(
@@ -281,6 +288,10 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * nouveau projet sous la clé de l'ancien. Voir la garde de `handleSend`.
    */
   const selectedProjectIdRef = useRef<string | null>(null);
+  /** T-186 — projet dont les sessions sont RÉELLEMENT dans `sessionsRef` (posé par `loadProjectStateIntoView`) ; garde de `persistProject`. */
+  const projetChargeRef = useRef<string | null>(null);
+  /** T-186 — une bascule de projet à la fois (voir `selectProject`). */
+  const [serieBascules] = useState(creerSerie);
   function setSelectedProjectId(next: string | null) {
     selectedProjectIdRef.current = next;
     setSelectedProjectIdState(next);
@@ -304,6 +315,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    *  le signal qu'une demande peut être glissée dans le tour (claude.push). */
   const injectorsRef = useRef<Map<string, (text: string, attachments?: import("./Attachments").SentAttachment[]) => void>>(new Map());
   const pushesEnCoursRef = useRef<Map<string, import("./agentTurns").PushEnCoursDeTour<import("./Attachments").DraftAttachment>[]>>(new Map());
+  const piecesARenvoyerRef = useRef<Map<string, import("./agentTurns").PushEnCoursDeTour<import("./Attachments").DraftAttachment>[]>>(new Map());
   // T-062 — étiquette de CETTE fenêtre, clé de mémoire qui en découle, registre porté par la
   // coquille : de quoi n'ouvrir un projet que dans UNE fenêtre (etude-deux-projets.md §7).
   // `lastProjectLoaded`/`fenetresOuvertes` gardent la sélection initiale tant qu'ils n'ont rien.
@@ -349,10 +361,13 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // commandes et éditions sans validation ; repasser à « Valider chaque
   // action » via le sélecteur pour retrouver les modales de permission.
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("bypassPermissions");
-  // Moteur de l'agent : `null` = Claude (abonnement), sinon l'id d'un
-  // fournisseur neutre (Ollama/OpenRouter/custom) — voir le sélecteur
-  // « Moteur » de la toolbar. Fait partie de l'état PAR PROJET (persisté).
+  // Moteur : `null` = Claude, sinon l'id d'un fournisseur neutre (sélecteur « Moteur », état PAR SESSION persisté).
+  // Compte Claude : `compteChoisi` = choix explicite de la session (`null` = défaut du projet, sinon perso).
   const [engineProviderId, setEngineProviderId] = useState<string | null>(null);
+  const [compteChoisi, setCompteChoisi] = useState<CompteClaude | null>(null);
+  const comptes = useComptesClaude();
+  const defautProjet = defautDeProjet(projects.find((p) => p.id === selectedProjectId));
+  const { compte: compteClaude, attente: compteAttente } = useCompteSession({ choisi: compteChoisi, defautProjet, projetId: selectedProjectId, comptes, visible: pageVisible });
   const [model, setModel] = useState("");
   // Effort de raisonnement : simple état de la page (comme le moteur et le mode
   // de permission), pas par session. "" = Défaut. Retombe sur Défaut dès que le
@@ -522,11 +537,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   }
   /** File d'attente de la conversation ACTIVE : retire le message à l'index donné (pastille d'annulation). */
   function removeQueuedPrompt(index: number) {
-    if (activeSessionId)
-      updateRuntime(activeSessionId, (r) => ({
-        ...r,
-        queuedPrompts: r.queuedPrompts.filter((_, i) => i !== index),
-      }));
+    if (!activeSessionId) return;
+    reposerPiecesOrphelines(activeSessionId, [getRuntime(activeSessionId).queuedPrompts[index] ?? ""], "Message retiré de la file");
+    updateRuntime(activeSessionId, (r) => ({ ...r, queuedPrompts: r.queuedPrompts.filter((_, i) => i !== index) }));
   }
 
   // Menu « / » du composeur (slash-commands/skills du projet) : la référence
@@ -537,7 +550,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // valeur du textarea, voir l'effet juste après `applySlashCommand`).
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingCursorRef = useRef<number | null>(null);
-  const [slashMenu, setSlashMenu] = useState<{ open: boolean; fragment: string; start: number; selected: number }>({
+  const [slashMenu, setSlashMenu] = useState<EtatMenuSlash>({
     open: false,
     fragment: "",
     start: 0,
@@ -574,7 +587,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // clavier (envoi, nouvelle session…) : un texte vide ne commence jamais
   // par « / », le menu doit donc se refermer même sans passer par `onChange`.
   useEffect(() => {
-    if (draft === "") setSlashMenu((m) => (m.open ? { ...m, open: false } : m));
+    if (draft === "") setSlashMenu(menuFerme);
   }, [draft]);
 
   // Pièces jointes du composeur (voir Attachments.tsx) : le contrat sidecar
@@ -615,7 +628,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   const sessionTitleSkipBlurRef = useRef(false);
   const [confirmDeleteSessionId, setConfirmDeleteSessionId] = useState<string | null>(null);
 
-  const [permissionQueue, setPermissionQueue] = useState<PermissionRequestItem[]>([]);
   // Outils auto-autorisés (« ne plus demander ») — durée de vie : la session
   // de l'application, tous projets confondus.
   const autoAllowToolsRef = useRef<Set<string>>(new Set());
@@ -624,6 +636,19 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   const [activeTab, setActiveTab] = useState<string>(EMPTY_TAB);
   const [openFiles, setOpenFiles] = useState<OpenFileState[]>([]);
   const [openFilesNotice, setOpenFilesNotice] = useState<string | null>(null);
+  // T-181 — file des questions/permissions en attente : survit au changement
+  // de projet et au vidage (le tour attend toujours côté sidecar).
+  const demandes = useDemandesEnAttente({
+    projetCourantId: selectedProjectId,
+    projets: projects,
+    sessionsCourantes: sessions,
+    sessionsDe: (id) => projectStatesRef.current.get(id)?.sessions,
+    conversationActiveId: activeSessionId,
+    autoAllowToolsRef,
+    selectProject: (id) => selectProject(id),
+    selectSession: (id) => selectSession(id),
+    avertir: setOpenFilesNotice,
+  });
   /** Conversations ouvertes en onglet, dans l'ordre d'affichage de la barre. */
   const [openConversationIds, setOpenConversationIdsState] = useState<string[]>([]);
   const openConversationIdsRef = useRef(openConversationIds);
@@ -763,141 +788,89 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     reecrirePins,
   } = useConnaissances(selectedProjectId, cwd);
 
-  // Connaissances AUTOMATIQUES (piste 1 « flexibilité », docs/plan.md) :
-  // tout fichier posé dans `.iaction/connaissances/` (pas de récursion,
-  // fichiers seulement) rejoint les épinglées comme connaissance injectée au
-  // 1er tour (voir `injectedKnowledge` ci-dessous) — groupe « Automatiques »
-  // du panneau. Rechargé à chaque changement de projet ; dossier absent ou
-  // illisible → liste vide, jamais d'erreur affichée (même esprit que la
-  // lecture de `.mcp.json` ci-dessus).
-  const [autoKnowledgeFiles, setAutoKnowledgeFiles] = useState<DirEntry[]>([]);
-  /**
-   * Relit la liste quand elle a pu changer sous nos pieds : le sidecar dépose
-   * `iaction.md` (guide d'intégration) et un tour peut écrire dans
-   * `connaissances/`. Sans cette relecture, un projet neuf gardait une liste
-   * vide toute la session — ni affichage, ni injection (constaté le
-   * 2026-08-03). Bumpé après `knowledge.status` et en fin de tour.
-   */
-  const [autoKnowledgeTick, setAutoKnowledgeTick] = useState(0);
-  const autoKnowledgeCwdRef = useRef<string>("");
-  useEffect(() => {
-    // Vidage réservé au CHANGEMENT DE PROJET : sur une simple relecture, garder
-    // la liste courante — la vider ouvrirait une fenêtre où un tour parti à cet
-    // instant n'injecterait aucune connaissance.
-    if (autoKnowledgeCwdRef.current !== cwd) {
-      autoKnowledgeCwdRef.current = cwd;
-      setAutoKnowledgeFiles([]);
-    }
-    if (!cwd) return;
-    let cancelled = false;
-    // Dépôt du guide d'intégration AVANT le scan (best effort) : c'est ce qui
-    // garantit qu'un projet neuf a sa connaissance dès le premier tour. Un
-    // échec (sidecar pas prêt, projet en lecture seule) ne doit rien empêcher :
-    // on scanne quand même.
-    projectEnsureDoc(cwd)
-      .catch(() => {})
-      .then(() => fsListDir(`${cwd}/.iaction/connaissances`))
-      .then((entries) => {
-        if (!cancelled) setAutoKnowledgeFiles(entries.filter((e) => !e.isDir));
-      })
-      .catch(() => {
-        // dossier absent/illisible : aucune connaissance automatique, état par défaut déjà posé ci-dessus
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [cwd, autoKnowledgeTick]);
+  // Connaissances AUTOMATIQUES (`.iaction/connaissances/`) et mémoire Claude
+  // Code détectée (`.claude/memory/`) — voir useConnaissancesDetectees.ts.
+  const { autoKnowledgeFiles, relireAutoKnowledge, claudeMemoryFiles } = useConnaissancesDetectees(cwd);
 
-  // Mémoire Claude Code détectée (`.claude/memory/*.md`, groupe « Détectées »
-  // du panneau, aux côtés de CLAUDE.md — voir `projectBadges.claudeMdPath`
-  // plus bas) : purement informatif, JAMAIS injectée d'office (seulement si
-  // l'utilisateur clique « Épingler », voir le rendu de la section
-  // « Connaissances »). Même politique best effort que ci-dessus.
-  const [claudeMemoryFiles, setClaudeMemoryFiles] = useState<DirEntry[]>([]);
-  useEffect(() => {
-    setClaudeMemoryFiles([]);
-    if (!cwd) return;
-    let cancelled = false;
-    fsListDir(`${cwd}/.claude/memory`)
-      .then((entries) => {
-        if (!cancelled) setClaudeMemoryFiles(entries.filter((e) => !e.isDir && e.name.endsWith(".md")));
-      })
-      .catch(() => {
-        // dossier absent/illisible : aucune mémoire Claude Code détectée
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [cwd]);
-
-  // Commandes/skills du projet (`claude.commands`, menu « / » du composeur) :
-  // best effort — échec (auth, cwd invalide) → liste vide, jamais de message
-  // d'erreur bloquant (voir docs/protocol.md). Mémorisées par `cwd` le temps
-  // de la session (pas de persistance disque, juste évite un aller-retour
-  // sidecar à chaque va-et-vient entre projets déjà visités).
-  const slashCommandsCacheRef = useRef<Map<string, SlashCommandInfo[]>>(new Map());
-  const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
-  useEffect(() => {
-    setSlashMenu((m) => (m.open ? { ...m, open: false } : m));
-    if (!cwd) {
-      setSlashCommands([]);
-      return;
-    }
-    const cached = slashCommandsCacheRef.current.get(cwd);
-    if (cached) {
-      setSlashCommands(cached);
-      return;
-    }
-    setSlashCommands([]);
-    let cancelled = false;
-    claudeCommands(cwd)
-      .then((commands) => {
-        slashCommandsCacheRef.current.set(cwd, commands);
-        if (!cancelled) setSlashCommands(commands);
-      })
-      .catch(() => {
-        // échec d'initialisation SDK (auth, cwd invalide) : menu vide, aucun blocage de la saisie
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [cwd]);
+  // Commandes/skills du projet ET du compte du tour (menu « / ») — voir useCommandesSlash.ts.
+  const slashCommands = useCommandesSlash(cwd, compteClaude, () => setSlashMenu(menuFerme));
 
   /*
-   * Titres courts du panneau « Sessions ». Le CLI calcule déjà un titre IA
-   * par session (« Organiser tâches sprint 2 et études stratégiques » plutôt
-   * que les 48 premiers caractères du premier message) ; `claude.sessionTitles`
-   * le relit dans les métadonnées de session — AUCUN token consommé, aucun
-   * appel de modèle. Best effort : en cas d'échec, chaque session garde son
-   * repli local (`deriveTitleFromText`).
+   * Titres des discussions (T-197, docs/spec-titres-discussions.md).
    *
-   * Les titres personnalisés à la main (`titleCustom`) ne sont jamais
-   * écrasés ; l'appariement se fait sur `sessionId` — l'id de session CÔTÉ
-   * SERVEUR, seul connu du CLI —, donc les conversations du moteur neutre
-   * (sans session CLI) ne sont pas concernées.
+   * Le titre affiché est `titreSession` : renommage à la main, sinon `titreIA`
+   * (généré par `claude.titreDiscussion` à la fin du premier échange), sinon le
+   * repli tiré du premier message. Le CLI ne fournit plus de titre
+   * (`claude.sessionTitles` est retiré : il titrait sur le bloc de connaissances
+   * injecté).
    *
-   * T-063 — `appliquerTitresIA` (modeleProjet.ts) écarte les titres qui ne
-   * distinguent plus (sessions convergentes, reprise partageant son
-   * sessionId) : à collision, le repli local est gardé, distinctif par
-   * construction.
+   * `titrerSession` est appelée à la fin d'un tour Claude réussi. La réponse
+   * peut arriver quand l'utilisateur a changé d'onglet ou de projet :
+   * `poserTitreIAProjet` retrouve la session par son id, dans le projet
+   * d'ORIGINE, et ne touche pas à un renommage fait entre-temps. Silencieux à
+   * l'écran quoi qu'il arrive : un échec garde le repli.
    */
-  useEffect(() => {
-    if (!cwd || !selectedProjectId) return;
-    const serverIds = sessions.map((s) => s.sessionId).filter((id): id is string => id !== null);
-    if (serverIds.length === 0) return;
-    let cancelled = false;
-    void claudeSessionTitles(cwd, serverIds).then((titles) => {
-      if (cancelled || titles.size === 0) return;
-      setSessions((prev) => appliquerTitresIA(prev, titles).sessions);
-    });
-    return () => {
-      cancelled = true;
-    };
-    // Rejoué quand une session obtient son id serveur (fin du 1er tour) : le
-    // titre IA n'existe pas avant. `sessions` volontairement hors deps (le
-    // setSessions ci-dessus reboucherait), remplacé par la clé stable des ids.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, selectedProjectId, sessions.map((s) => s.sessionId ?? "").join("\u0000")]);
+  function sessionsDuProjet(projectId: string): ProjectSession[] | undefined {
+    return selectedProjectIdRef.current === projectId ? sessionsRef.current : projectStatesRef.current.get(projectId)?.sessions;
+  }
+
+  /** La session avec ses tours VIFS (le runtime est plus frais que la copie de la liste pendant une conversation ouverte). */
+  function sessionAvecToursVifs(s: ProjectSession): ProjectSession {
+    const runtime = runtimes.consulter(s.id);
+    return runtime ? { ...s, turns: runtime.turns } : s;
+  }
+
+  function poserTitreIAProjet(projectId: string, convId: string, titre: string) {
+    if (selectedProjectIdRef.current === projectId) {
+      const avant = sessionsRef.current;
+      const apres = poserTitreIA(avant, convId, titre);
+      if (apres === avant) return;
+      setSessions(apres);
+      persistProject(projectId, sessionsRef.current, activeSessionIdRef.current);
+      return;
+    }
+    // Projet quitté : on écrit dans son état mémorisé et dans son fichier, comme `persistBackgroundConversation`.
+    const stocke = projectStatesRef.current.get(projectId);
+    if (!stocke) return;
+    const apres = poserTitreIA(stocke.sessions, convId, titre);
+    if (apres === stocke.sessions) return;
+    const nextState: ProjectState = { ...stocke, sessions: apres };
+    projectStatesRef.current.set(projectId, nextState);
+    ecrireEntreeProjet(projectId, nextState);
+  }
+
+  /**
+   * Écrit l'état d'UN projet dans le document persisté et son fichier (T-061 :
+   * jamais le poste entier). Même garde d'hydratation partout : avant le
+   * chargement disque, `persistedConversationsRef` ne reflète pas le disque et
+   * écrire écraserait une conversation existante avec un état partiel.
+   */
+  function ecrireEntreeProjet(projectId: string, state: ProjectState) {
+    if (!hydrationDoneRef.current) return;
+    const next: PersistedConversations = { ...persistedConversationsRef.current, [projectId]: buildPersistedEntry(state) };
+    persistedConversationsRef.current = next;
+    void sauverProjet(IO_ETAT, projectId, next[projectId]).catch(echecEcritureProjet(projectId));
+  }
+
+  /** T-186 — un rejet de `sauverProjet` est journalisé et signalé, jamais avalé. */
+  function echecEcritureProjet(projetId: string) {
+    return (err: unknown) =>
+      signalerEchecEcritureProjet(err, projetId, {
+        journaliser: (message, fields) => logUi("error", "ui", message, { fields }),
+        avertir: setOpenFilesNotice,
+      });
+  }
+
+  async function titrerSession(projectId: string, convId: string, compte: CompteClaude) {
+    const brute = sessionsDuProjet(projectId)?.find((s) => s.id === convId);
+    if (!brute) return;
+    const session = sessionAvecToursVifs(brute);
+    const candidat = candidatTitre(session);
+    if (!doitTitrer(candidat) || !candidat.echange) return;
+    marquerTentee(convId);
+    const titre = await claudeTitreDiscussion(candidat.echange.message, candidat.echange.reponse, compte);
+    if (titre) poserTitreIAProjet(projectId, convId, titre);
+  }
 
   // Connaissances AUTOMATIQUES sous la forme `PinnedDoc` (même forme que les
   // épinglées, pour réutiliser `buildKnowledgeBlock` tel quel), et la liste
@@ -970,6 +943,42 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     return sortantes;
   }
 
+  /*
+   * T-197 — « Nommer les anciennes discussions (N) ». N = sessions vives du
+   * projet affiché + archives éligibles selon la règle de déclenchement (une
+   * archive jamais lue est comptée éligible : le compteur peut surestimer, pas
+   * sous-estimer, jusqu'au passage). Rien ne part sans le clic.
+   */
+  const rattrapageTitres = useRattrapageTitres();
+  const compteRattrapage = resoudreCompteSession(null, defautProjet, comptes).compte;
+  const vivesATitrer = sessions.filter((s) => doitTitrer(candidatTitre(sessionAvecToursVifs(s))));
+  const archivesATitrer = archivage.archives.filter((e) => e.aTitrer !== false && !e.titleCustom && !e.titreIA && !dejaTentee(e.id));
+  const nATitrer = vivesATitrer.length + archivesATitrer.length;
+
+  function lancerRattrapageTitres() {
+    const projectId = selectedProjectIdRef.current;
+    if (!projectId) return;
+    const idsArchives = new Set(archivesATitrer.map((e) => e.id));
+    void rattrapageTitres.lancer({
+      ids: [...vivesATitrer.map((s) => s.id), ...archivesATitrer.map((e) => e.id)],
+      nommer: async (id) => {
+        // Projet quitté en cours de passage : le reste est ignoré, jamais écrit dans un autre projet.
+        if (selectedProjectIdRef.current !== projectId) return undefined;
+        if (idsArchives.has(id)) return archivage.nommerUneArchive(id, compteRattrapage);
+        const brute = sessionsDuProjet(projectId)?.find((x) => x.id === id);
+        if (!brute) return undefined;
+        const session = sessionAvecToursVifs(brute);
+        const candidat = candidatTitre(session);
+        if (!doitTitrer(candidat) || !candidat.echange) return undefined;
+        marquerTentee(id);
+        return claudeTitreDiscussion(candidat.echange.message, candidat.echange.reponse, compteExplicite(session.engine) ?? compteRattrapage);
+      },
+      appliquer: (id, titre) => {
+        if (!idsArchives.has(id)) poserTitreIAProjet(projectId, id, titre);
+      },
+    });
+  }
+
   /** Clic sur une archive : relue, réinsérée dans les sessions vives, ouverte comme une session normale. */
   async function restoreArchive(id: string) {
     const projetId = selectedProjectIdRef.current;
@@ -989,6 +998,14 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     // conversation existante avec un état vide/partiel. On saute simplement
     // cette sauvegarde (rien n'est perdu en mémoire, seulement retardé).
     if (!hydrationDoneRef.current) return;
+    // T-186 — les refs lues plus bas décrivent le projet CHARGÉ : écrire sous
+    // la clé d'un autre y logerait les sessions du premier. Refus VISIBLE.
+    const verdict = jugerEcritureProjet(id, projetChargeRef.current);
+    if (!verdict.autorise) {
+      logUi("error", "ui", `écriture du projet refusée : ${verdict.raison}`, { fields: verdict.champs });
+      setOpenFilesNotice(AVIS_ECRITURE_REFUSEE);
+      return;
+    }
     const next: PersistedConversations = {
       ...persistedConversationsRef.current,
       [id]: buildPersistedEntry({
@@ -1003,10 +1020,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     };
     persistedConversationsRef.current = next;
     // T-061 — seul le fichier de CE projet est écrit, plus jamais le poste entier.
-    void sauverProjet(IO_ETAT, id, next[id]).catch(() => {
-      // best effort : une écriture ratée ne bloque pas l'UI, la prochaine
-      // sauvegarde (debounce ou fin de tour suivant) retentera.
-    });
+    // Une écriture ratée ne bloque pas l'UI (la prochaine sauvegarde retentera) mais se voit.
+    void sauverProjet(IO_ETAT, id, next[id]).catch(echecEcritureProjet(id));
     void archivage.archiverHorsPlafond(id, next[id]);
   }
 
@@ -1022,30 +1037,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     const stored = projectStatesRef.current.get(projectId);
     const runtime = runtimes.consulter(convId);
     if (!stored || !runtime) return;
-    const sessions = stored.sessions.map((s) =>
-      s.id === convId
-        ? {
-            ...s,
-            turns: runtime.turns,
-            sessionId: runtime.sessionId,
-            routedTier: runtime.routedTier,
-            routedTarget: runtime.routedTarget,
-            updatedAt: new Date().toISOString(),
-            title: s.titleCustom ? s.title : deriveSessionTitle(runtime.turns),
-          }
-        : s,
-    );
+    const maintenant = new Date().toISOString();
+    const sessions = stored.sessions.map((s) => (s.id === convId ? sessionApresTourDeFond(s, runtime, maintenant) : s));
     const nextState: ProjectState = { ...stored, sessions };
     projectStatesRef.current.set(projectId, nextState);
-    // Même garde d'hydratation que persistProject : ne jamais écraser le
-    // document disque avec un état partiel d'avant chargement.
-    if (!hydrationDoneRef.current) return;
-    const next: PersistedConversations = {
-      ...persistedConversationsRef.current,
-      [projectId]: buildPersistedEntry(nextState),
-    };
-    persistedConversationsRef.current = next;
-    void sauverProjet(IO_ETAT, projectId, next[projectId]).catch(() => {});
+    ecrireEntreeProjet(projectId, nextState);
   }
 
   /**
@@ -1065,28 +1061,13 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     return sessionsRef.current.map((s) => {
       const runtime = runtimes.consulter(s.id);
       if (!runtime) return s;
-      const merged: ProjectSession = {
-        ...s,
-        turns: runtime.turns,
-        sessionId: runtime.sessionId,
-        // R2 — l'affinité de session vit dans le runtime (posée au premier
-        // envoi routé, effacée par un override) : recopiée pour persistance.
-        routedTier: runtime.routedTier,
-        routedTarget: runtime.routedTarget,
-        // T-120 — le réveil vit aussi dans le runtime (armé/désarmé/consommé
-        // au battement) : recopié pareil pour persistance.
-        reveils: runtime.reveils,
-        reveilsHistorique: runtime.reveilsHistorique,
-        // La config LLM (moteur/modèle/agent) n'est éditable que pour la
-        // conversation active : ne l'écrase que pour celle-là (`activeId` par
-        // ref — depuis un callback tardif, l'active a pu changer, et écrire la
-        // config affichée sur l'ANCIENNE active lui volerait son moteur).
-        ...(s.id === activeId
-          ? { engine: { providerId: engineProviderId, model }, selectedAgent: selectedAgentKey }
-          : {}),
-        updatedAt: new Date().toISOString(),
-      };
-      return merged.titleCustom ? merged : { ...merged, title: deriveSessionTitle(merged.turns) };
+      // La config LLM (moteur/modèle/agent) n'est éditable que pour la
+      // conversation active : ne l'écrase que pour celle-là (`activeId` par
+      // ref — depuis un callback tardif, l'active a pu changer, et écrire la
+      // config affichée sur l'ANCIENNE active lui volerait son moteur).
+      const configActive =
+        s.id === activeId ? { engine: fusionnerMoteur(s.engine, engineProviderId, model), selectedAgent: selectedAgentKey } : null;
+      return sessionAvecRuntime(s, runtime, configActive, new Date().toISOString());
     });
   }
 
@@ -1142,7 +1123,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     if (selectedProjectId && cleaned[selectedProjectId] && turns.length === 0 && sessionId === null) {
       const restored = projectStatesRef.current.get(selectedProjectId);
       if (restored?.sessions.some((s) => s.id === restored.activeId)) {
-        loadProjectStateIntoView(restored);
+        loadProjectStateIntoView(restored, selectedProjectId);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1176,12 +1157,14 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     openFilePathsKey,
     activeTab,
     engineProviderId,
+    compteChoisi,
     model,
     selectedAgentKey,
   ]);
 
   /** Charge un `ProjectState` restauré (ou vierge) dans l'affichage — onglets ouverts, session active, liste complète. */
-  function loadProjectStateIntoView(next: ProjectState) {
+  function loadProjectStateIntoView(next: ProjectState, projetId: string) {
+    projetChargeRef.current = projetId;
     const activeSession = next.sessions.find((s) => s.id === next.activeId) ?? next.sessions[0];
     // Runtimes repartis de zéro : on change de PROJET, les conversations de
     // l'ancien tombent (leurs tours viennent d'être sauvegardés par
@@ -1207,7 +1190,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     setOpenConversationIds(next.openConversationIds);
     setOpenFiles(next.openFiles);
     setActiveTab(next.activeTab);
-    setEngineProviderId(activeSession.engine.providerId);
+    setEngineProviderId(activeSession.engine.providerId); setCompteChoisi(compteExplicite(activeSession.engine));
     setModel(modelePourSession(activeSession));
     // Résolution différée (voir le commentaire de `loadProjectAgents`) : au
     // moment d'une bascule de PROJET, `projectAgents` correspond encore à
@@ -1227,7 +1210,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     if (id === null) return; // tous les projets déclarés sont déjà ouverts ailleurs (cas rare)
     setSelectedProjectId(id);
     if (id !== remembered) rememberLastProject(id); // supprimé, ou repli sur le libre le plus utilisé
-    loadProjectStateIntoView(projectStatesRef.current.get(id) ?? emptyProjectState());
+    loadProjectStateIntoView(projectStatesRef.current.get(id) ?? emptyProjectState(), id);
     // Revendication : le registre lu plus haut n'est qu'un instantané.
     void revendiquerProjet(etiquetteFenetre, id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1247,43 +1230,54 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         void retirerProjet(IO_ETAT, selectedProjectId);
       }
       setSelectedProjectId(null);
+      projetChargeRef.current = null;
       runtimes.reinitialiser();
       setSessions([]);
       setActiveSessionId("");
       setOpenConversationIds([]);
       setOpenFiles([]);
       setActiveTab(EMPTY_TAB);
-      setPermissionQueue([]);
-      setEngineProviderId(null);
+      demandes.retirerDuProjet(selectedProjectId);
+      setEngineProviderId(null); setCompteChoisi(null);
       setModel(modeleDefaut);
       setSelectedAgentKey(null);
     }
   }, [projects, selectedProjectId]);
 
   /** T-062 — revendique AVANT de basculer : une seule fenêtre par projet (coquille indisponible : voir fenetreClient.ts). */
-  async function selectProject(id: string): Promise<boolean> {
-    if (streaming) return false;
-    if (id === selectedProjectId) return true;
+  function selectProject(id: string): Promise<boolean> {
+    if (streaming) return Promise.resolve(false);
+    return serieBascules.executer(() => basculerVersProjet(id));
+  }
+
+  /**
+   * T-186 — corps de `selectProject`, exécuté EN SÉRIE : deux bascules ne se
+   * chevauchent plus autour de l'`await`. Tout est relu par REF au moment où la
+   * tâche s'exécute (la closure du rendu d'appel serait périmée pour une
+   * bascule restée en file), et la garde « déjà sur ce projet » est rejouée.
+   */
+  async function basculerVersProjet(id: string): Promise<boolean> {
+    if (id === selectedProjectIdRef.current) return true;
     const porteur = await revendiquerProjet(etiquetteFenetre, id);
     if (porteur) {
       setOpenFilesNotice("Ce projet est déjà ouvert dans une autre fenêtre, elle vient de passer devant.");
       return false;
     }
-    if (selectedProjectId) {
+    const projetQuitte = selectedProjectIdRef.current;
+    if (projetQuitte) {
       const liveSessions = buildLiveSessions();
-      projectStatesRef.current.set(selectedProjectId, {
+      projectStatesRef.current.set(projetQuitte, {
         sessions: liveSessions,
-        activeId: activeSessionId,
-        openConversationIds,
-        openFiles,
-        activeTab,
+        activeId: activeSessionIdRef.current,
+        openConversationIds: openConversationIdsRef.current,
+        openFiles: openFilesRef.current,
+        activeTab: activeTabRef.current,
       });
-      persistProject(selectedProjectId, liveSessions, activeSessionId);
+      persistProject(projetQuitte, liveSessions, activeSessionIdRef.current);
     }
     setSelectedProjectId(id);
     rememberLastProject(id);
-    loadProjectStateIntoView(projectStatesRef.current.get(id) ?? emptyProjectState());
-    setPermissionQueue([]);
+    loadProjectStateIntoView(projectStatesRef.current.get(id) ?? emptyProjectState(), id);
     clearAttachments();
     setOpenFilesNotice(null);
     setConfirmDeleteSessionId(null);
@@ -1294,43 +1288,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     clearedBackupRef.current = null;
     return true;
   }
-
-  /**
-   * T-159 — crée dans le projet COURANT une conversation qui reprend la copie
-   * `sessionIdCopie` (son `sessionId` part en `resume` au premier envoi). Le
-   * titre est figé (`titleCustom`) : le titre calculé depuis les tours ou par le
-   * CLI écraserait sinon « Reprise — … ». Le fil reste vide à l'écran : le
-   * contexte est chez Claude, pas dans l'historique d'IAction — d'où la note.
-   */
-  function ouvrirSessionReprise(sessionIdCopie: string, titre: string) {
-    if (!selectedProjectId) return;
-    const liveSessions = buildLiveSessions();
-    const fresh: ProjectSession = { ...freshSession(), title: titre, titleCustom: true, sessionId: sessionIdCopie };
-    const nextSessions = [...liveSessions, fresh];
-    runtimes.poser(fresh.id, freshRuntime([], sessionIdCopie));
-    setSessions(nextSessions);
-    setActiveSessionId(fresh.id);
-    setOpenConversationIds((prev) => [...prev, fresh.id]);
-    setActiveTab(convTabId(fresh.id));
-    setConfirmDeleteSessionId(null);
-    setClearedNotice(false);
-    setSelectedAgentKey(null);
-    clearAttachments();
-    persistProject(selectedProjectId, nextSessions, fresh.id);
-    setOpenFilesNotice("Session reprise en COPIE : Claude en a le contexte, mais le fil affiché démarre vide.");
-    focusComposer();
-  }
-
-  /** Reprise demandée, en attente que le projet visé soit effectivement affiché (la sélection est asynchrone). */
-  const repriseEnAttenteRef = useRef<{ projectId: string; sessionIdCopie: string; titre: string } | null>(null);
-  const [repriseTick, setRepriseTick] = useState(0);
-  useEffect(() => {
-    const reprise = repriseEnAttenteRef.current;
-    if (!reprise || reprise.projectId !== selectedProjectId) return;
-    repriseEnAttenteRef.current = null;
-    ouvrirSessionReprise(reprise.sessionIdCopie, reprise.titre);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- ouvrirSessionReprise est redéfinie à chaque rendu et lit l'état courant : seuls ces deux signaux la déclenchent.
-  }, [selectedProjectId, repriseTick]);
 
   /** R2/R7 — efface plancher + cible de session de la conversation active (vestige du mode Auto retiré par T-080, voir l'en-tête de fichier). */
   function clearRoutedAffinity() {
@@ -1380,12 +1337,20 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     setSelectedAgentKey(null);
   }
 
+  /** Geste de l'utilisateur : le choix de compte est posé SUR la session active (jamais recopié depuis l'état d'affichage par une sauvegarde tardive). */
+  function choisirCompte(compte: CompteClaude | null) {
+    setCompteChoisi(compte);
+    setSessions(avecCompteMoteur(sessionsRef.current, activeSessionIdRef.current, compte));
+  }
+
   /** Bascule de moteur depuis le sélecteur toolbar : réinitialise le modèle (repris par `loadNeutralModels` si moteur neutre). */
   function handleEngineChange(value: string) {
     if (streaming || selectedAgent !== null) return;
-    const next = value === "" ? null : value;
+    const { providerId: next, compte: choix } = lireChoixMoteur(value);
+    if (choix) choisirCompte(compteAPersister(choix, resoudreCompteSession(null, defautProjet, comptes).compte));
+    // Changer de COMPTE (Claude → Claude) ne touche pas au modèle ; changer de moteur le réinitialise.
+    if (!(next === null && engineProviderId === null)) setModel(next === null ? modeleDefaut : "");
     setEngineProviderId(next);
-    setModel(next === null ? modeleDefaut : "");
     // R2 — changer de moteur = choix explicite : l'affinité de routage tombe.
     clearRoutedAffinity();
     if (next === null) {
@@ -1428,7 +1393,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       return true;
     }
     const liveSessions = buildLiveSessions();
-    const fresh: ProjectSession = { ...freshSession(), engine: { providerId: engineProviderId, model } };
+    const fresh: ProjectSession = { ...freshSession(), engine: moteurNouvelleSession(engineProviderId, model) };
+    setCompteChoisi(null); // une nouvelle session repart du défaut de son projet
     // Purge des sessions vides laissées par d'anciennes créations répétées —
     // en épargnant celles ouvertes en onglet (les fermer sous les pieds de
     // l'utilisateur serait brutal) et celles en cours de streaming.
@@ -1506,7 +1472,6 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     }));
     const liveSessions = buildLiveSessions();
     setSessions(liveSessions);
-    setPermissionQueue([]);
     setConfirmDeleteSessionId(null);
     persistProject(selectedProjectId, liveSessions, activeSessionId);
     setClearedNotice(true);
@@ -1560,7 +1525,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     setOpenConversationIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
     setActiveTab(convTabId(id));
     setOpenFilesNotice(null); // Il commente un geste, pas la conversation ouverte (T-090).
-    setEngineProviderId(target.engine.providerId);
+    setEngineProviderId(target.engine.providerId); setCompteChoisi(compteExplicite(target.engine));
     setModel(modelePourSession(target));
     // Même projet : `projectAgents` est déjà à jour, résolution immédiate.
     setSelectedAgentKey(resolveAgentSelection(target.selectedAgent, projectAgents));
@@ -1594,7 +1559,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     const liveSessions = buildLiveSessions();
     const remaining = liveSessions.filter((s) => s.id !== id);
     const finalSessions = remaining.length > 0 ? remaining : [freshSession()];
-    runtimes.oublier(id);
+    runtimes.oublier(id); archiverFilsDistants(id); // T-180 : sessions distantes sur relais
     setSessions(finalSessions);
     const nextOpen = openConversationIds.filter((c) => c !== id && finalSessions.some((s) => s.id === c));
     setOpenConversationIds(nextOpen);
@@ -1605,7 +1570,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       setActiveSessionId(nextActive.id);
       setOpenConversationIds(nextOpen.includes(nextActive.id) ? nextOpen : [...nextOpen, nextActive.id]);
       setActiveTab(convTabId(nextActive.id));
-      setEngineProviderId(nextActive.engine.providerId);
+      setEngineProviderId(nextActive.engine.providerId); setCompteChoisi(compteExplicite(nextActive.engine));
       setModel(modelePourSession(nextActive));
       setSelectedAgentKey(resolveAgentSelection(nextActive.selectedAgent, projectAgents));
       persistProject(selectedProjectId, finalSessions, nextActive.id);
@@ -1674,7 +1639,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         nextActiveId = target.id;
         setActiveSessionId(target.id);
         setActiveTab(convTabId(target.id));
-        setEngineProviderId(target.engine.providerId);
+        setEngineProviderId(target.engine.providerId); setCompteChoisi(compteExplicite(target.engine));
         setModel(modelePourSession(target));
         setSelectedAgentKey(resolveAgentSelection(target.selectedAgent, projectAgents));
       } else {
@@ -1683,7 +1648,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         // Ctrl+K, mais non destructif (les conversations fermées restent dans
         // le panneau « Sessions »). Sans cela l'utilisateur se retrouvait sans
         // conversation ET sans moyen d'en rouvrir une.
-        const fresh: ProjectSession = { ...freshSession(), engine: { providerId: engineProviderId, model } };
+        const fresh: ProjectSession = { ...freshSession(), engine: moteurNouvelleSession(engineProviderId, model) };
+        setCompteChoisi(null);
         // Purge des sessions vides au passage (celles qu'on vient de fermer si
         // elles n'avaient aucun tour), comme le fait `handleNewSession`.
         const kept = liveSessions.filter(
@@ -1744,7 +1710,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * fonctions qu'elle remplace : chaque tour capture l'état du rendu qui l'a
    * lancé, et écrit ensuite UNIQUEMENT via convId dans les runtimes.
    */
-  const { handleSend } = creerEnvoiProjet({
+  const { handleSend, reposerPiecesOrphelines } = creerEnvoiProjet({
     activeSessionId,
     cwd,
     selectedProjectId,
@@ -1756,6 +1722,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     model,
     effort,
     engineProviderId,
+    compteClaude: { courant: compteClaude, attente: compteAttente, resoudre: async () => (await compteAuDepart(compteChoisi, defautProjet)).compte },
     permissionMode,
     selectedAgent,
     attachments,
@@ -1767,11 +1734,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     updateRuntime,
     updateTurnsFor,
     autoAllowToolsRef,
-    injectorsRef, pushesEnCoursRef,
-    setPermissionQueue,
+    injectorsRef, pushesEnCoursRef, piecesARenvoyerRef,
+    setPermissionQueue: demandes.setFile,
+    appliquerChoixModele,
     fermerMenuSlash: () => setSlashMenu((m) => ({ ...m, open: false })),
     signalerMcpInit: () => setMcpReloadToken((n) => n + 1),
-    rafraichirConnaissancesAuto: () => setAutoKnowledgeTick((t) => t + 1),
+    rafraichirConnaissancesAuto: relireAutoKnowledge,
     setAttachmentsError,
     clearAttachments,
     restoreAttachments,
@@ -1780,7 +1748,23 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     setSessions,
     persistProject,
     persistBackgroundConversation,
+    titrerSession,
   });
+
+  /**
+   * T-204 — Envoi depuis le composeur (Entrée, bouton « Envoyer »). « /clear »
+   * n'est PAS transmis au CLI : en mode SDK il ne vide rien côté IAction (le
+   * tour suivant reprend la même session, transcript intact). Il déclenche
+   * le même vidage que Ctrl+K (session repartie de zéro, bandeau « Annuler »).
+   * Si le vidage est refusé (tour en cours), le brouillon reste en place.
+   */
+  function envoyerDepuisComposeur() {
+    if (getLiveDraft().trim() === "/clear") {
+      if (clearConversation()) setDraft("");
+      return;
+    }
+    void handleSend();
+  }
 
   // Fin de tour : si des messages ont été mis en file pendant que l'agent
   // travaillait, on envoie le PREMIER automatiquement — les suivants partiront
@@ -1825,6 +1809,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     if (!runtime.streaming && !runtime.activeRequestId) return;
     // Arrêter = tout stopper : on abandonne aussi les messages éventuellement en
     // file (sinon ils partiraient juste après l'interruption, effet surprenant).
+    reposerPiecesOrphelines(activeSessionId, null, "File vidée par l'arrêt"); // T-183 : pièces rangées → tiroir
     updateRuntime(activeSessionId, (r) => ({ ...r, queuedPrompts: [] }));
     // Tour encore en phase de PRÉ-ENVOI (routage Auto, lecture des
     // connaissances) : aucune requête moteur à abandonner côté sidecar — on
@@ -1848,6 +1833,45 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   /** Rendre la main pendant l'attente des tâches de fond : claude.release clôt
       le tour proprement (le done livre le résultat déjà connu) ; contrairement
       à Arrêter, les messages en file partent ensuite normalement. */
+  /**
+   * T-207 — l'agent a changé de modèle/d'effort (ou l'utilisateur annule) : les
+   * sélecteurs de la conversation `convId` prennent `choix`, comme un choix
+   * manuel (persisté de même). Conversation en arrière-plan : seule la config
+   * persistée de SA session bouge — les sélecteurs affichés sont ceux d'une
+   * autre, et l'effort n'est pas un état par session.
+   */
+  function appliquerChoixModele(convId: string, choix: ChoixModele) {
+    if (convId === activeSessionIdRef.current) {
+      setModel(choix.model);
+      setEffort(choix.effort);
+      return;
+    }
+    setSessions((prev) =>
+      prev.map((s) => (s.id === convId ? { ...s, engine: fusionnerMoteur(s.engine, s.engine.providerId, choix.model) } : s)),
+    );
+  }
+
+  /**
+   * T-207 — « Annuler » du bandeau de changement de modèle : remet modèle et
+   * effort d'AVANT dans les sélecteurs, et, si le tour tourne encore, rappelle
+   * aussi le moteur (`claude.setModel`) — sinon l'effet est pour le prochain tour.
+   */
+  async function annulerChangementModele(turnId: string) {
+    const convId = activeSessionIdRef.current;
+    const changement = turnsRef.current.find((t) => t.id === turnId)?.changementModele;
+    if (!changement || changement.annule) return;
+    appliquerChoixModele(convId, choixApresAnnulation(changement));
+    updateTurnsFor(convId, (prev) => withChangementAnnule(prev, turnId));
+    const requestId = getRuntime(convId).activeRequestId;
+    if (!requestId) return;
+    try {
+      const applique = await claudeSetModel(requestId, changement.from, effortPourAnnulation(changement));
+      if (!applique) return; // le tour s'est fini entre-temps : le sélecteur vaut pour le prochain
+    } catch (err) {
+      setOpenFilesNotice(`Annulation du changement de modèle : le moteur a refusé (${err instanceof Error ? err.message : String(err)}). Le sélecteur est revenu en arrière, pas le tour en cours.`);
+    }
+  }
+
   async function handleReleaseBackground() {
     if (!activeSessionId) return;
     const runtime = getRuntime(activeSessionId);
@@ -1878,22 +1902,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     send: (text) => handleSend(text),
     isBusy: () => streaming,
     turnCount: () => turnsRef.current.length,
-    lastReplyText: () => {
-      const list = turnsRef.current;
-      const last = list[list.length - 1];
-      if (!last || last.role !== "assistant" || last.status !== "done") return null;
-      return spokenTextOfTurn(last) || null;
-    },
+    lastReplyText: () => texteLuDuDernierTour(turnsRef.current, "done"),
     // Tour EN COURS d'écriture : `turnsRef` est tenu à jour de façon synchrone
     // par `updateTurns`, on lit donc le tour en construction sans rendu ni effet
     // supplémentaire. Même règle qu'à la fin (`spokenTextOfTurn`) : seuls les
     // blocs de texte sont lus, jamais les appels d'outils ni le raisonnement.
-    streamingReplyText: () => {
-      const list = turnsRef.current;
-      const last = list[list.length - 1];
-      if (!last || last.role !== "assistant" || last.status !== "streaming") return null;
-      return spokenTextOfTurn(last) || null;
-    },
+    streamingReplyText: () => texteLuDuDernierTour(turnsRef.current, "streaming"),
     notSentNotice: "Message non envoyé : vérifiez le projet sélectionné.",
     appendToDraft: (text) => {
       if (activeSessionId) {
@@ -1902,7 +1916,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       // Le menu « / » n'est piloté que par la saisie clavier (`updateSlashMenu`) :
       // un texte dicté ne doit ni l'ouvrir, ni le laisser ouvert sur un
       // fragment devenu caduc.
-      setSlashMenu((m) => (m.open ? { ...m, open: false } : m));
+      setSlashMenu(menuFerme);
     },
     // Envoi par mot-clé : le brouillon rendu est celui que l'utilisateur voit
     // (dicté ET tapé), et il est vidé — c'est lui qui part.
@@ -1915,90 +1929,19 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     focusComposer: () => focusComposer(),
   });
 
-  async function handlePermissionDecision(decision: "allow" | "deny", message: string, rememberTool: boolean) {
-    const current = permissionQueue[0];
-    if (!current) return;
-    const respond = (item: PermissionRequestItem, dec: "allow" | "deny", msg?: string) =>
-      item.engine === "neutral"
-        ? neutralPermission(item.targetId, item.permissionId, dec, msg)
-        : claudePermission(item.targetId, item.permissionId, dec, msg);
-    if (decision === "allow" && rememberTool) {
-      // Étape 11 — clé PAR PROJET du tour (voir permissions.ts) : un Bash
-      // autorisé ici ne s'applique plus en silence aux autres projets.
-      autoAllowToolsRef.current.add(cleAutoAllow(current.projectId ?? null, current.toolName));
-      // Autorise aussi d'un coup les demandes déjà en file pour le même outil.
-      for (const item of permissionQueue.slice(1)) {
-        if (item.toolName === current.toolName) {
-          void respond(item, "allow");
-        }
-      }
-    }
-    try {
-      await respond(current, decision, message || undefined);
-    } catch {
-      // best effort : la file est purgée dans tous les cas côté UI
-    }
-    setPermissionQueue((prev) =>
-      decision === "allow" && rememberTool
-        ? prev.filter((p, i) => i !== 0 && p.toolName !== current.toolName)
-        : prev.slice(1),
-    );
-  }
-
   /* ---------- Menu « / » du composeur (slash-commands/skills du projet) ---------- */
-
-  /**
-   * Détecte un token « /frag » sous le curseur, SEULEMENT s'il démarre la
-   * ligne courante (début du texte ou juste après un saut de ligne) — un
-   * « / » au milieu d'un mot (ex. « et/ou ») ne matche jamais. Le fragment ne
-   * doit contenir ni espace ni saut de ligne (dès qu'un espace suit le nom de
-   * la commande, on considère que l'utilisateur tape ses arguments : plus de
-   * détection).
-   */
-  function detectSlashToken(text: string, cursor: number): { start: number; fragment: string } | null {
-    const lineStart = text.lastIndexOf("\n", cursor - 1) + 1;
-    if (text[lineStart] !== "/") return null;
-    const token = text.slice(lineStart, cursor);
-    if (!/^\/\S*$/.test(token)) return null;
-    return { start: lineStart, fragment: token.slice(1) };
-  }
-
-  /** Commandes dont le nom OU un alias matche `fragment` — préfixe prioritaire, puis sous-chaîne, insensible à la casse. */
-  function matchSlashCommands(commands: SlashCommandInfo[], fragment: string): SlashCommandInfo[] {
-    const needle = fragment.toLowerCase();
-    const prefix: SlashCommandInfo[] = [];
-    const substring: SlashCommandInfo[] = [];
-    for (const cmd of commands) {
-      const names = [cmd.name, ...(cmd.aliases ?? [])].map((n) => n.toLowerCase());
-      if (names.some((n) => n.startsWith(needle))) prefix.push(cmd);
-      else if (names.some((n) => n.includes(needle))) substring.push(cmd);
-    }
-    return [...prefix, ...substring];
-  }
 
   /** Recalcule l'état du menu « / » à partir du texte et de la position du curseur (appelé à chaque frappe). */
   function updateSlashMenu(text: string, cursor: number) {
-    const token = detectSlashToken(text, cursor);
-    if (!token || slashCommands.length === 0) {
-      setSlashMenu((m) => (m.open ? { ...m, open: false } : m));
-      return;
-    }
-    if (matchSlashCommands(slashCommands, token.fragment).length === 0) {
-      setSlashMenu((m) => (m.open ? { ...m, open: false } : m));
-      return;
-    }
-    setSlashMenu({ open: true, fragment: token.fragment, start: token.start, selected: 0 });
+    setSlashMenu((m) => menuApresFrappe(m, slashCommands, text, cursor));
   }
 
   /** Insère « /name » (remplace le fragment « /frag » courant), ferme le menu, replace le curseur juste après l'espace. */
   function applySlashCommand(cmd: SlashCommandInfo) {
-    const insertion = `/${cmd.name} `;
     // Brouillon vif : le menu se pilote à la frappe, dont le rendu retarde.
-    const current = getLiveDraft();
-    const before = current.slice(0, slashMenu.start);
-    const after = current.slice(slashMenu.start + 1 + slashMenu.fragment.length);
-    pendingCursorRef.current = before.length + insertion.length;
-    setDraft(`${before}${insertion}${after}`);
+    const { texte, curseur } = insererCommandeSlash(getLiveDraft(), slashMenu, cmd);
+    pendingCursorRef.current = curseur;
+    setDraft(texte);
     setSlashMenu((m) => ({ ...m, open: false }));
   }
 
@@ -2031,7 +1974,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      void handleSend();
+      envoyerDepuisComposeur();
     }
   }
 
@@ -2039,15 +1982,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
 
   function loadFileInto(path: string, opts?: { onErrorCloseTab?: boolean }) {
     fsReadFile(path)
-      .then((fc) =>
-        setOpenFiles((prev) =>
-          prev.map((f) =>
-            f.path === path
-              ? { ...f, kind: fc.kind, content: fc.text ?? "", base64: fc.base64 ?? "", size: fc.size, truncated: fc.truncated, dirty: false }
-              : f,
-          ),
-        ),
-      )
+      .then((fc) => setOpenFiles((prev) => ongletLu(prev, path, fc)))
       .catch((err: unknown) => {
         if (opts?.onErrorCloseTab) {
           // Onglet restauré (Lot 3, relecture paresseuse) dont le fichier
@@ -2060,7 +1995,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
           return;
         }
         const message = err instanceof Error ? err.message : String(err);
-        setOpenFiles((prev) => prev.map((f) => (f.path === path ? { ...f, kind: "error", errorMessage: message } : f)));
+        setOpenFiles((prev) => ongletModifie(prev, path, { kind: "error", errorMessage: message }));
       });
   }
 
@@ -2130,19 +2065,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
       }
       files = files.filter((_, i) => i !== evictIdx);
     }
-    const loadingEntry: OpenFileState = {
-      path,
-      name,
-      kind: "loading",
-      content: "",
-      base64: "",
-      size: 0,
-      truncated: false,
-      dirty: false,
-      saving: false,
-      saveError: null,
-      errorMessage: null,
-    };
+    const loadingEntry = ongletEnChargement(path, name);
     setOpenFiles([...files, loadingEntry]);
     setActiveTab(path);
     loadFileInto(path);
@@ -2158,6 +2081,12 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   const releaseBackgroundImpl = useRef<() => void>(() => {});
   releaseBackgroundImpl.current = () => void handleReleaseBackground();
   const stableReleaseBackground = useCallback(() => releaseBackgroundImpl.current(), []);
+  const annulerChangementModeleImpl = useRef<(turnId: string) => void>(() => {});
+  annulerChangementModeleImpl.current = (turnId) => void annulerChangementModele(turnId);
+  const stableAnnulerChangementModele = useCallback((turnId: string) => annulerChangementModeleImpl.current(turnId), []);
+  const annulerCompactionImpl = useRef<(turnId: string) => void>(() => {}); // T-216 — « Annuler » de l'avis de compactage
+  annulerCompactionImpl.current = (turnId) => updateRuntime(activeSessionIdRef.current, (r) => annulerCompactionDemandee(r, turnId));
+  const stableAnnulerCompaction = useCallback((turnId: string) => annulerCompactionImpl.current(turnId), []);
 
   /*
    * Clic sur une référence citée dans la transcription. Toute la décision vit
@@ -2181,9 +2110,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   }
 
   /** Fermeture unitaire d'un onglet de fichier (« × », clic milieu, item « Fermer »). */
-  function closeFileTab(path: string) {
+  async function closeFileTab(path: string) {
     const file = openFiles.find((f) => f.path === path);
-    if (file?.dirty && !window.confirm(`Fermer ${file.name} sans enregistrer les modifications ?`)) return;
+    if (file?.dirty && !(await confirmer(`Fermer ${file.name} sans enregistrer les modifications ?`))) return;
     closeFileTabs([path], { forcerModifie: true });
   }
 
@@ -2224,13 +2153,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * dossier contenant des fichiers ouverts/épinglés).
    */
   function handleFileRenamed(oldPath: string, newPath: string) {
-    setOpenFiles((prev) =>
-      prev.map((f) => {
-        const path = renamedPath(f.path, oldPath, newPath);
-        if (path === f.path) return f;
-        return { ...f, path, name: path.slice(path.lastIndexOf("/") + 1) || path };
-      }),
-    );
+    setOpenFiles((prev) => ongletsRenommes(prev, oldPath, newPath));
     setActiveTab((prev) => renamedPath(prev, oldPath, newPath));
     reecrirePins((list) => {
       let changed = false;
@@ -2250,7 +2173,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
    * correspond à `path` OU en est un descendant.
    */
   function handleFileDeleted(path: string) {
-    setOpenFiles((prev) => prev.filter((f) => !isUnderPath(f.path, path)));
+    setOpenFiles((prev) => ongletsSansChemin(prev, path));
     setActiveTab((prev) => (isUnderPath(prev, path) ? "conversation" : prev));
     reecrirePins((list) => {
       const nextList = list.filter((d) => !isUnderPath(d.path, path));
@@ -2259,27 +2182,27 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   }
 
   function handleFileContentChange(path: string, content: string) {
-    setOpenFiles((prev) => prev.map((f) => (f.path === path ? { ...f, content, dirty: true } : f)));
+    setOpenFiles((prev) => ongletModifie(prev, path, { content, dirty: true }));
   }
 
   async function handleSaveFile(path: string) {
     const file = openFiles.find((f) => f.path === path);
     if (!file || file.kind !== "text" || file.truncated || file.saving) return;
-    setOpenFiles((prev) => prev.map((f) => (f.path === path ? { ...f, saving: true, saveError: null } : f)));
+    setOpenFiles((prev) => ongletModifie(prev, path, { saving: true, saveError: null }));
     try {
       await fsWriteFile(path, file.content);
-      setOpenFiles((prev) => prev.map((f) => (f.path === path ? { ...f, saving: false, dirty: false } : f)));
+      setOpenFiles((prev) => ongletModifie(prev, path, { saving: false, dirty: false }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setOpenFiles((prev) => prev.map((f) => (f.path === path ? { ...f, saving: false, saveError: message } : f)));
+      setOpenFiles((prev) => ongletModifie(prev, path, { saving: false, saveError: message }));
     }
   }
 
-  function handleReloadFile(path: string) {
+  async function handleReloadFile(path: string) {
     const file = openFiles.find((f) => f.path === path);
     if (!file) return;
-    if (file.dirty && !window.confirm(`Recharger ${file.name} et perdre les modifications non enregistrées ?`)) return;
-    setOpenFiles((prev) => prev.map((f) => (f.path === path ? { ...f, kind: "loading", saveError: null } : f)));
+    if (file.dirty && !(await confirmer(`Recharger ${file.name} et perdre les modifications non enregistrées ?`))) return;
+    setOpenFiles((prev) => ongletModifie(prev, path, { kind: "loading", saveError: null }));
     loadFileInto(path);
   }
 
@@ -2344,20 +2267,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
     clearConversation: () => clearConversation(),
     isStreaming: () => streaming,
     focusComposer: () => focusComposer(),
-    reprendreSession: async (projectId, sessionIdCopie, titre) => {
-      if (!projects.some((p) => p.id === projectId)) return "projet-inconnu";
-      if (streaming) return "tour-en-cours";
-      repriseEnAttenteRef.current = { projectId, sessionIdCopie, titre };
-      if (!(await selectProject(projectId))) {
-        repriseEnAttenteRef.current = null;
-        return "autre-fenetre"; // streaming exclu ci-dessus : seul le refus de revendication reste
-      }
-      setRepriseTick((t) => t + 1); // déjà sur ce projet : on déclenche l'effet à la main
-      return "ok";
-    },
   }));
 
-  const currentPermission = permissionQueue[0] ?? null;
   const activeFile = isConvTab(activeTab) ? null : (openFiles.find((f) => f.path === activeTab) ?? null);
 
   // Roving tabindex (WAI-ARIA APG) : liste de sessions (↑/↓). Un seul élément
@@ -2402,18 +2313,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // enregistré doit rester frais sans re-notifier le bus en boucle.
   const compactSendRef = useRef<() => void>(() => {});
   compactSendRef.current = () => {
-    if (!streaming) {
-      void handleSend("/compact");
-      return;
-    }
     // Tour en cours : « /compact » part en FILE (jamais handleSend avec
     // argument ici — ce chemin contourne la file et lancerait un envoi
-    // concurrent). Dédoublonné : un seul /compact en attente à la fois.
-    const convId = activeSessionId;
-    if (!convId) return;
-    updateRuntime(convId, (r) =>
-      r.queuedPrompts.includes("/compact") ? r : { ...r, queuedPrompts: [...r.queuedPrompts, "/compact"] },
-    );
+    // concurrent). Dédoublonné, et partagé avec l'outil `compacter` (T-216).
+    if (!streaming) void handleSend(COMMANDE_COMPACT);
+    else if (activeSessionId) updateRuntime(activeSessionId, avecCompactEnFile);
   };
   useEffect(() => {
     const available = Boolean(activeSessionId) && engineProviderId === null;
@@ -2450,11 +2354,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
             <div className="field">
               <label htmlFor="agent-project">Projet</label>
               <div className="sidebar-project-row">
-                <select
+                <Deroulant
                   id="agent-project"
                   value={selectedProjectId ?? ""}
                   disabled={streaming || projects.length === 0}
-                  onChange={(e) => void selectProject(e.currentTarget.value)}
+                  onChange={(v) => void selectProject(v)}
                 >
                   {projects.length === 0 && <option value="">Aucun projet</option>}
                   {projects.map((p) => (
@@ -2462,7 +2366,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                       {p.name}
                     </option>
                   ))}
-                </select>
+                </Deroulant>
                 <button
                   type="button"
                   className="btn btn--ghost"
@@ -2508,7 +2412,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
               <VoiceButtons voice={voice} disabled={!cwd || !isConvTab(activeTab)} />
               <BoutonArret streaming={streaming} onArreter={() => void handleAbort()} />
               <ReveilControl
-                reveils={activeReveils}
+                reveils={activeReveils} compte={compteClaude}
                 historique={activeRuntime.reveilsHistorique}
                 brouillon={draft}
                 onEnregistrer={enregistrerReveil}
@@ -2569,6 +2473,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                     onFileRef={stableFileRef}
                     cwd={cwd}
                     onReleaseBackground={stableReleaseBackground}
+                    onAnnulerChangementModele={stableAnnulerChangementModele}
+                    onAnnulerCompaction={queuedPrompts.includes(COMMANDE_COMPACT) ? stableAnnulerCompaction : undefined}
                   />
                 </div>
 
@@ -2717,7 +2623,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
                           ? "Glisser la demande dans le tour en cours (prise en compte au prochain outil)"
                           : "Mettre en file : envoyé automatiquement à la fin du tour en cours"
                       }
-                      onEnvoyer={() => void handleSend()}
+                      onEnvoyer={envoyerDepuisComposeur}
                       onAllerEnBas={descendreEnBas}
                     />
                   </div>
@@ -2793,7 +2699,11 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
             archives={archivage.archives}
             restoreArchive={restoreArchive}
             trashArchive={archivage.retirerUneArchive}
+            texteDe={(s) => texteRecherchable(sessionAvecToursVifs(s).turns)}
+            rattrapage={{ n: nATitrer, etat: rattrapageTitres.etat, lancer: lancerRattrapageTitres, arreter: rattrapageTitres.arreter }}
           />
+
+          <EnAttenteSection lignes={demandes.lignes} onOuvrir={(item) => void demandes.ouvrir(item)} />
 
           <LlmSection
             selectedAgentKey={selectedAgentKey}
@@ -2802,7 +2712,7 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
             selectedAgent={selectedAgent}
             clearAgentSelection={clearAgentSelection}
             streaming={streaming}
-            engineProviderId={engineProviderId}
+            engineProviderId={engineProviderId} comptes={comptes} compteClaude={compteClaude}
             providers={providers}
             handleEngineChange={handleEngineChange}
             permissionMode={permissionMode}
@@ -2857,12 +2767,14 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
         </PanneauLateral>
       </div>
 
-      {currentPermission && (
+      {demandes.courante && (
         <PermissionModal
-          item={currentPermission}
-          extraCount={permissionQueue.length - 1}
+          item={demandes.courante.item}
+          extraCount={demandes.courante.autres}
+          replie={demandes.courante.replie}
+          onMettreDeCote={demandes.mettreDeCote}
           onDecide={(decision, message, rememberTool) =>
-            void handlePermissionDecision(decision, message, rememberTool)
+            void demandes.decider(decision, message, rememberTool)
           }
         />
       )}

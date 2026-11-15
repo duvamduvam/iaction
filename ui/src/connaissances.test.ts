@@ -7,8 +7,11 @@
  * produit ([… tronqué], [non injecté : budget dépassé], [illisible]).
  */
 import { describe, expect, it } from "vitest";
+import type { DirEntry } from "./fsClient";
 import {
   buildKnowledgeBlock,
+  fichiersConnaissanceAuto,
+  fichiersMemoireClaude,
   dedupDocsByPath,
   KNOWLEDGE_DOC_MAX_CHARS,
   KNOWLEDGE_TOTAL_MAX_CHARS,
@@ -192,5 +195,19 @@ describe("autoIndexerConnaissances — un échec reste DISCRET", () => {
     expect(ok).toBe(false);
     expect(journaux).toHaveLength(1);
     expect(journaux[0].fields).toMatchObject({ cwd: "/p", erreur: "fetch failed" });
+  });
+});
+
+describe("connaissances détectées sur disque", () => {
+  const entree = (name: string, isDir = false) => ({ name, path: `/p/${name}`, isDir }) as DirEntry;
+
+  it("fichiersConnaissanceAuto écarte les dossiers", () => {
+    const r = fichiersConnaissanceAuto([entree("a.md"), entree("sous", true), entree("b.txt")]);
+    expect(r.map((e) => e.name)).toEqual(["a.md", "b.txt"]);
+  });
+
+  it("fichiersMemoireClaude ne garde que les fichiers .md", () => {
+    const r = fichiersMemoireClaude([entree("a.md"), entree("b.txt"), entree("x.md", true)]);
+    expect(r.map((e) => e.name)).toEqual(["a.md"]);
   });
 });

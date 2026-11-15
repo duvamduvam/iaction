@@ -6,6 +6,7 @@
  */
 import { request } from "./sidecar";
 import type { TourPourEscalade } from "./escaladeSignal";
+import type { CompteClaude } from "./comptesClaude";
 
 export type UsageBucketKind = "day" | "week" | "month";
 
@@ -354,8 +355,14 @@ function parseEscaladeTours(value: unknown): TourPourEscalade[] | null {
  * Statistiques agrégées sur une plage (`from`/`to` dates locales `YYYY-MM-DD`
  * incluses, `bucket` = granularité du regroupement). Voir `usage.stats`.
  */
-export async function usageStats(from: string, to: string, bucket: UsageBucketKind): Promise<UsageStats> {
-  const { done } = request("usage.stats", { from, to, bucket });
+export async function usageStats(
+  from: string,
+  to: string,
+  bucket: UsageBucketKind,
+  compte: CompteClaude = "perso",
+): Promise<UsageStats> {
+  // T-191 — `perso` est le défaut côté sidecar : on ne l'envoie pas (sidecar plus ancien compris).
+  const { done } = request("usage.stats", compte === "perso" ? { from, to, bucket } : { from, to, bucket, compte });
   const data = await done;
   const buckets = Array.isArray(data.buckets) ? data.buckets.map(parseBucket).filter((b): b is UsageBucket => b !== null) : [];
   const models = Array.isArray(data.models)

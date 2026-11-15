@@ -39,6 +39,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { openExternal, useApps, type AppEntry } from "./appsAdmin";
+import { copierTexte } from "./copierTexte";
 import { sondesDisque } from "./fsClient";
 import { useDossierPersonnel } from "./dossierPersonnel";
 import {
@@ -245,14 +246,9 @@ export function MenuReference({
   const items = resolution ? itemsDuMenu(resolution, apps) : [];
 
   async function copier(texte: string) {
-    try {
-      await navigator.clipboard.writeText(texte);
-      fermerMenuReference();
-    } catch {
-      // Presse-papier refusé (contexte non sécurisé, permission) — on le dit,
-      // jamais d'échec muet (même geste que SystemPage.tsx `handleCopier`).
-      setErreurAction("Copie impossible : presse-papier inaccessible.");
-    }
+    // T-214 : replis et journal dans copierTexte.
+    if (await copierTexte(texte)) fermerMenuReference();
+    else setErreurAction("Copie impossible : presse-papier inaccessible.");
   }
 
   /** `chemin` est ouvert TEL QUEL : l'appelant a déjà choisi le dossier visé. */

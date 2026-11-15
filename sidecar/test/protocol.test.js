@@ -1250,7 +1250,7 @@ async function main() {
     );
     assert(
       JSON.stringify(doneRr1.data.target) ===
-        JSON.stringify({ engine: "claude", model: "claude-haiku-4-5" }),
+        JSON.stringify({ engine: "claude", model: "claude-haiku-5-5" }),
       `router.route rr1 : cible par défaut du tier trivial attendue, reçu ${JSON.stringify(doneRr1.data.target)}`,
     );
 
@@ -1524,7 +1524,7 @@ async function main() {
       const doneRrProj3 = await waitFor((e) => e.id === "rr-proj3" && e.event === "done", 3000, "router.route rr-proj3");
       assert(
         JSON.stringify(doneRrProj3.data.target) ===
-          JSON.stringify({ engine: "claude", model: "claude-haiku-4-5" }),
+          JSON.stringify({ engine: "claude", model: "claude-haiku-5-5" }),
         `router.route rr-proj3 : YAML invalide doit retomber sur la table globale, reçu ${JSON.stringify(doneRrProj3.data.target)}`,
       );
       assert(
