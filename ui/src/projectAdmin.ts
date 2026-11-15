@@ -12,6 +12,8 @@
 import { readConfig, writeConfig } from "./appConfig";
 import { fsWriteFile } from "./fsClient";
 import { fsMkdir } from "./stateClient";
+import { estCompteClaude, type CompteClaude } from "./comptesClaude";
+import { logWarn } from "./journal";
 
 /** R5 — mode connaissances d'un projet : injection intégrale au 1er tour (défaut,
  * comportement historique) ou RAG via l'outil `search_knowledge` (docs/spec-r5-rag.md §4). */
@@ -23,6 +25,12 @@ export interface ProjectConfig {
   path: string;
   /** R5 — absent = "injection" (comportement historique strictement inchangé). */
   connaissancesMode?: KnowledgeMode;
+  /**
+   * Compte Claude par défaut des sessions du projet (docs/spec-deux-comptes.md) :
+   * absent = `perso`. Se règle dans la config du poste, sans écran ; les
+   * réécritures de la liste (renommage, mode connaissances…) conservent le champ.
+   */
+  compteClaude?: CompteClaude;
 }
 
 function isProjectConfig(value: unknown): value is ProjectConfig {
@@ -36,7 +44,28 @@ export async function readProjects(): Promise<ProjectConfig[]> {
   const raw = await readConfig();
   const projects = raw.projects;
   if (!Array.isArray(projects)) return [];
-  return projects.filter(isProjectConfig);
+  const valides = projects.filter(isProjectConfig);
+  for (const p of valides) signalerCompteInvalide(p);
+  return valides;
+}
+
+/** Valeurs invalides déjà signalées (id + valeur) : un `warn` par faute, pas un par lecture. */
+const comptesInvalidesSignales = new Set<string>();
+
+/**
+ * `compteClaude` illisible (« team », « Teams »…) : `warn` au journal, et le champ
+ * est IGNORÉ à la résolution (`defautDeProjet`) — jamais réécrit ni deviné, la
+ * config du poste reste telle que l'utilisateur l'a tapée.
+ */
+function signalerCompteInvalide(p: ProjectConfig): void {
+  const brut: unknown = p.compteClaude;
+  if (brut === undefined || estCompteClaude(brut)) return;
+  const cle = `${p.id}:${String(brut)}`;
+  if (comptesInvalidesSignales.has(cle)) return;
+  comptesInvalidesSignales.add(cle);
+  logWarn("claude", "compteClaude invalide dans la config du projet : ignoré (attendu « perso » ou « teams »)", {
+    fields: { projet: p.id, valeur: typeof brut === "string" ? brut : typeof brut },
+  });
 }
 
 /** Écrit la liste des projets dans la config non-secrète (fusion racine, cf. appConfig.ts). */

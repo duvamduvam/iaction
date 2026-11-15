@@ -18,13 +18,11 @@
  * `convId`), puis n'écrit plus QUE dans les runtimes via `convId`. Aucun
  * état propre, aucun hook : rien à mémoïser, rien à désynchroniser.
  *
- * Ce module est du CÂBLAGE : il importe les clients sidecar en valeur, donc
- * il n'est pas testable unitairement (sidecar.ts s'abonne à Tauri au
- * chargement). La logique qui se teste vit dans les feuilles qu'il appelle :
- * routageAuto.ts, gardesRoutage.ts, connaissances.ts, agentTurns.ts,
- * debordNotice.ts.
+ * Ce module est du CÂBLAGE (non testable unitairement) : la logique qui se teste vit dans
+ * ses feuilles — routageAuto.ts, gardesRoutage.ts, connaissances.ts, agentTurns.ts, debordNotice.ts.
  */
 
+import type { CompteClaude } from "./comptesClaude";
 import { toContractAttachments, toSentAttachments, type DraftAttachment, type SentAttachment } from "./Attachments";
 import {
   addToolBlock,
@@ -32,8 +30,10 @@ import {
   buildNeutralMessages,
   mcpServerFromToolName,
   nextId,
+  rangerPiecesARenvoyer,
   retirerPushCorrespondant,
   setToolResult,
+  spokenTextOfTurn,
   withAgentSystemPrompt,
   withBlocks,
   withPushPerdu,
@@ -43,7 +43,10 @@ import {
   type AgentTurn,
   type PushEnCoursDeTour,
 } from "./agentTurns";
-import { buildKnowledgeBlock, RAG_SYSTEM_LINE, type PinnedDoc } from "./connaissances";
+import { changementDepuisChunk, choixApresChangement, withChangementModele, type ChoixModele } from "./changementModele";
+import { avecCompactionDemandee } from "./compactionDemandee";
+import { buildKnowledgeBlock, instructionsSysteme, type PinnedDoc } from "./connaissances";
+import { rangerPushPerdu, retirerPiecesOrphelines } from "./pushPerdu";
 import { recordModelUsage } from "./fableUsage";
 import { fsReadFile } from "./fsClient";
 import type { ConvRuntime, ProjectSession } from "./modeleProjet";
@@ -52,6 +55,7 @@ import type { AgentInfo } from "./orchestrationClient";
 import type { KnowledgeMode } from "./projectAdmin";
 import { cleAutoAllow, normaliserModePourMoteur } from "./permissions";
 import type { PermissionRequestItem } from "./questionsAgent";
+import { sansDemandesDuTour } from "./demandesEnAttente";
 import {
   claudePermission,
   claudePush,
@@ -67,6 +71,7 @@ import {
 } from "./sidecar";
 import { notifyUsageChanged } from "./usageBus";
 import { avecConsigneTachesDeFond } from "./consigneTachesDeFond";
+import { promptAvecRecapitulatif } from "./sessionPerdue";
 
 /**
  * Tout ce que le chemin chaud lit ou écrit dans la page. La taille de cette
@@ -89,6 +94,8 @@ export interface DepsEnvoiProjet {
   /** Effort choisi (`""` = Défaut, rien envoyé) — ignoré si le modèle du tour ne le supporte pas. */
   effort: EffortLevel | "";
   engineProviderId: string | null;
+  /** Compte résolu de la session ; `attente` : liste des comptes inconnue, `resoudre` l'attend (docs/spec-deux-comptes.md). */
+  compteClaude: { courant: "perso" | "teams"; attente: boolean; resoudre: () => Promise<"perso" | "teams"> };
   permissionMode: PermissionMode;
   selectedAgent: AgentInfo | null;
   attachments: DraftAttachment[];
@@ -110,8 +117,17 @@ export interface DepsEnvoiProjet {
    * été vu par le modèle ; jetée dès que le tour se clôt (voir `finally`).
    */
   pushesEnCoursRef: { readonly current: Map<string, PushEnCoursDeTour<DraftAttachment>[]> };
+  /**
+   * T-183 — pièces d'un push PERDU, par conversation, rangées en attendant le
+   * renvoi automatique de fin de tour (le texte, lui, est dans `queuedPrompts`).
+   * Consommées par `handleSend` (chemin file) ; reposées dans le tiroir si le
+   * message est retiré de la file avant de partir (voir AgentPage).
+   */
+  piecesARenvoyerRef: { readonly current: Map<string, PushEnCoursDeTour<DraftAttachment>[]> };
   setPermissionQueue: (updater: (prev: PermissionRequestItem[]) => PermissionRequestItem[]) => void;
   /* ── signaux vers le reste de la page ── */
+  /** T-207 — l'agent a changé de modèle/d'effort : les sélecteurs de la conversation `convId` prennent ces valeurs (même état qu'un choix manuel, donc persisté de même). */
+  appliquerChoixModele: (convId: string, choix: ChoixModele) => void;
   fermerMenuSlash: () => void;
   signalerMcpInit: () => void;
   rafraichirConnaissancesAuto: () => void;
@@ -124,10 +140,13 @@ export interface DepsEnvoiProjet {
   setSessions: (sessions: ProjectSession[]) => void;
   persistProject: (id: string, liveSessions: ProjectSession[]) => void;
   persistBackgroundConversation: (projectId: string, convId: string) => void;
+  /** T-197 — fin d'un tour Claude réussi : la page décide s'il faut titrer la discussion (jamais bloquant, jamais d'erreur à l'écran). */
+  titrerSession: (projectId: string, convId: string, compte: CompteClaude) => Promise<void>;
 }
 
 export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
   handleSend: (overrideContent?: string) => Promise<void>;
+  reposerPiecesOrphelines: (convId: string, contenus: string[] | null, motif: string) => void;
 } {
   const {
     activeSessionId,
@@ -140,6 +159,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     model,
     effort,
     engineProviderId,
+    compteClaude,
     permissionMode,
     selectedAgent,
     attachments,
@@ -153,7 +173,9 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     autoAllowToolsRef,
     injectorsRef,
     pushesEnCoursRef,
+    piecesARenvoyerRef,
     setPermissionQueue,
+    appliquerChoixModele,
     fermerMenuSlash,
     signalerMcpInit,
     rafraichirConnaissancesAuto,
@@ -165,6 +187,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     setSessions,
     persistProject,
     persistBackgroundConversation,
+    titrerSession,
   } = deps;
 
   /**
@@ -177,6 +200,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
   function gererDemandePermission(
     engine: "claude" | "neutral",
     targetId: string,
+    convId: string,
     permissionId: string,
     toolName: string,
     toolInput: unknown,
@@ -187,7 +211,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     }
     setPermissionQueue((prev) => [
       ...prev,
-      { targetId, permissionId, toolName, toolInput, engine, projectId: selectedProjectId },
+      { targetId, permissionId, toolName, toolInput, engine, projectId: selectedProjectId, convId },
     ]);
   }
 
@@ -196,43 +220,35 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
    * le modèle : la bulle qui affirmait « message parti » cesse de mentir
    * (`withPushPerdu`), et `contenu` est reposé en file — le chemin d'auto-envoi
    * de fin de tour existe déjà et le renverra tout seul. T-064 — s'il portait
-   * des pièces jointes, la copie locale gardée par `pushesEnCoursRef` permet
-   * de les restaurer dans le tiroir ; introuvable (état déjà purgé), un avis
-   * EXPLICITE le dit plutôt que de les perdre en silence.
+   * des pièces jointes, la copie locale gardée par `pushesEnCoursRef` est
+   * rangée dans `piecesARenvoyerRef` (T-183) : le renvoi de fin de tour les
+   * joint au message, au lieu de les laisser dans le tiroir — le message
+   * repartait sans elles. Introuvable (état déjà purgé), un avis EXPLICITE le
+   * dit plutôt que de les perdre en silence.
    */
   function gererPushPerdu(convId: string, contenu: string, avaitPieces: boolean) {
     updateTurnsFor(convId, (prev) => withPushPerdu(prev, contenu));
     updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, contenu] }));
-    if (!avaitPieces) return;
-    const { trouve, reste } = retirerPushCorrespondant(pushesEnCoursRef.current.get(convId) ?? [], contenu);
-    pushesEnCoursRef.current.set(convId, reste);
-    if (trouve && trouve.attachments.length > 0) {
-      restoreAttachments(trouve.attachments);
-      setAttachmentsError(
-        "Pièces jointes restaurées : le message glissé pendant le tour n'a jamais été vu par l'agent — il repart avec elles au prochain envoi.",
-      );
-    } else {
-      setAttachmentsError(
-        "Une pièce jointe envoyée pendant le tour n'a pas été vue par l'agent et n'a pas pu être restaurée automatiquement : à rejoindre à la main.",
-      );
-    }
+    const avis = rangerPushPerdu(pushesEnCoursRef.current, piecesARenvoyerRef.current, convId, contenu, avaitPieces);
+    if (avis) setAttachmentsError(avis);
   }
 
   /**
-   * R5 — instructions système effectives du tour : celles de l'agent
-   * sélectionné, plus la ligne RAG quand le mode connaissances du projet est
-   * `rag` (voir RAG_SYSTEM_LINE — remplace l'injection intégrale au 1er tour).
-   * `undefined` = aucune instruction (comportement historique inchangé).
+   * T-183 — des messages quittent la file sans partir (pastille retirée, file
+   * vidée par « Arrêter ») : les pièces rangées pour eux (push perdu)
+   * retournent dans le tiroir, avec un avis — jamais perdues en silence.
+   * `contenus` null = tout ce qui est rangé pour la conversation.
    */
+  function reposerPiecesOrphelines(convId: string, contenus: string[] | null, motif: string) {
+    const r = retirerPiecesOrphelines(piecesARenvoyerRef.current, convId, contenus, motif);
+    if (!r) return;
+    restoreAttachments(r.pieces);
+    setAttachmentsError(r.avis);
+  }
+
+  /** R5 — instructions système du tour : agent sélectionné + ligne RAG si l'index existe (voir `instructionsSysteme`). */
   function composeSystemInstructions(): string | undefined {
-    const parts = [
-      selectedAgent?.instructions,
-      // La ligne RAG n'est injectée que si l'index EXISTE réellement
-      // (`knowledge.status`) : sans index, promettre `search_knowledge` au
-      // modèle ne mènerait qu'à des appels d'outil vides.
-      knowledgeMode === "rag" && indexConnaissancesPret ? RAG_SYSTEM_LINE : undefined,
-    ].filter((p): p is string => typeof p === "string" && p.length > 0);
-    return parts.length > 0 ? parts.join("\n\n") : undefined;
+    return instructionsSysteme(selectedAgent?.instructions, knowledgeMode === "rag" && indexConnaissancesPret);
   }
 
   /** Lance le tour via le moteur Claude (Agent SDK) — `systemPrompt` armé par l'agent sélectionné, s'il y en a un.
@@ -255,6 +271,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     convId: string,
     modelId: string | null,
     meta: RequestMeta,
+    compte: "perso" | "teams",
   ) {
     const handle = claudeStart(
       {
@@ -269,12 +286,16 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
         // Page ouverte devant l'utilisateur : l'agent peut poser ses questions
         // dans une modale à choix cliquables (outil mcp__studio__ask_user).
         interactive: true,
+        // T-207 — modèle fixé par l'agent préréglé (sélecteur grisé) : l'agent
+        // ne reçoit pas l'outil `changer_modele`, pas de faux espoir.
+        modeleVerrouille: selectedAgent !== null && selectedAgent.model !== null,
         // R5 — instructions de l'agent + ligne RAG éventuelle (mode `rag`).
         systemPrompt: avecConsigneTachesDeFond(composeSystemInstructions()),
         // T-003 — allowlist `tools:` de l'agent (voir sendViaNeutralEngine).
         tools: selectedAgent?.tools ?? null,
         attachments,
         meta,
+        compte,
       },
       {
         onInit: (sid) => updateRuntime(convId, (r) => ({ ...r, sessionId: sid })),
@@ -320,8 +341,17 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
             prev.map((t) => (t.id === target.id ? { ...t, compacted: { trigger, preTokens } } : t)),
           ),
         onPermissionRequest: (permissionId, toolName, toolInput) =>
-          gererDemandePermission("claude", handle.id, permissionId, toolName, toolInput),
+          gererDemandePermission("claude", handle.id, convId, permissionId, toolName, toolInput),
         onPushPerdu: (contenu, avaitPieces) => gererPushPerdu(convId, contenu, avaitPieces),
+        // T-207 — bandeau « L'agent est passé à … » sur la bulle qui reçoit le flux, et sélecteurs alignés.
+        onModelChange: (chunk) => {
+          const changement = changementDepuisChunk(chunk, modelId);
+          if (!changement) return;
+          updateTurnsFor(convId, (prev) => withChangementModele(prev, target.id, changement));
+          appliquerChoixModele(convId, choixApresChangement(changement));
+        },
+        // T-216 — comme le bouton « Compacter » pendant un tour : « /compact » en file (une fois), avis sur la bulle.
+        onCompactionDemandee: (raison) => updateRuntime(convId, (r) => avecCompactionDemandee(r, target.id, raison)),
       },
     );
     return handle;
@@ -339,6 +369,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     },
     modelId: string,
     meta: RequestMeta,
+    convId: string,
   ) {
     // Repli du registre (permissions.ts) : « plan » n'existe pas côté neutre
     // (le sélecteur l'empêche déjà, mais un état résiduel est possible).
@@ -362,18 +393,13 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
         onToolUse: common.onToolUse,
         onToolResult: common.onToolResult,
         onPermissionRequest: (permissionId, toolName, toolInput) =>
-          gererDemandePermission("neutral", handle.id, permissionId, toolName, toolInput),
+          gererDemandePermission("neutral", handle.id, convId, permissionId, toolName, toolInput),
       },
     );
     return handle;
   }
 
-  /*
-   * T-080 — le bandeau de débord a disparu avec le mode Auto : le débord
-   * était produit par la résolution de route, et les Projets ne routent plus.
-   * Il reste vivant côté Chat (stratégie montante), d'où `debordNotice.ts`
-   * conservé. Un bandeau hérité d'avant la bascule s'efface au premier tour.
-   */
+  // T-080 — plus de bandeau de débord ici (les Projets ne routent plus) ; il reste côté Chat (`debordNotice.ts`).
 
   async function handleSend(overrideContent?: string) {
     // Conversation À LAQUELLE ce tour appartient, figée ici : tout ce qui suit
@@ -400,6 +426,12 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     if (streaming && overrideContent === undefined) {
       const pending = liveDraft.trim();
       if (!pending) return;
+      // Image collée encore en cours d'encodage : comme l'envoi normal, on
+      // attend (sinon elle partirait avec des données vides). Brouillon conservé.
+      if (attachmentsPending) {
+        setAttachmentsError("Image en cours de chargement… réessayez dans un instant.");
+        return;
+      }
       fermerMenuSlash();
       const runtime = getRuntime(convId);
       const inject = injectorsRef.current.get(convId);
@@ -422,13 +454,16 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
           inject(pending, toSentAttachments(pushDrafts));
           return;
         }
-        // Course avec la fin du tour : le sidecar a refusé le dépôt. La file
-        // d'attente reste TEXTE SEUL (T-064 point 4) — les pièces reviennent
-        // dans le composeur plutôt que de partir en fumée.
+        // Course avec la fin du tour : le sidecar a refusé le dépôt. Le texte
+        // est mis en file ; ses pièces sont rangées pour repartir AVEC lui au
+        // renvoi de fin de tour (T-183), pas laissées dans le tiroir.
         if (pushDrafts.length > 0) {
-          restoreAttachments(pushDrafts);
+          piecesARenvoyerRef.current.set(
+            convId,
+            rangerPiecesARenvoyer(piecesARenvoyerRef.current.get(convId) ?? [], pending, pushDrafts),
+          );
           setAttachmentsError(
-            "Pièces jointes conservées : le tour s'est terminé avant l'envoi — elles seront jointes à votre prochain message complet.",
+            "Le tour s'est terminé avant l'envoi : le message part automatiquement avec ses pièces jointes.",
           );
         }
         updateRuntime(convId, (r) => ({ ...r, queuedPrompts: [...r.queuedPrompts, pending] }));
@@ -445,7 +480,9 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
       return;
     }
 
-    // Chemin « file » (overrideContent) : texte seul, pas de pièces jointes.
+    // Chemin « file » (overrideContent) : le tiroir du composeur n'est jamais
+    // lu ni vidé ; seules les pièces d'un push perdu (T-183) repartent, rangées
+    // dans `piecesARenvoyerRef`.
     const usesComposer = overrideContent === undefined;
     const rawContent = (overrideContent ?? liveDraft).trim();
     if ((!rawContent && (!usesComposer || attachments.length === 0)) || streaming || !cwd) return;
@@ -457,18 +494,42 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     }
 
     const engineSelected: "claude" | "neutral" = engineProviderId !== null ? "neutral" : "claude";
+    // Liste des comptes inconnue + défaut « teams » : on attend, jamais de départ sur perso par défaut.
+    let compteTour = compteClaude.courant;
+    if (engineSelected === "claude" && compteClaude.attente) {
+      try { compteTour = await compteClaude.resoudre(); } catch (err) { setAttachmentsError(err instanceof Error ? err.message : String(err)); return; }
+      if (getRuntime(convId).streaming) return; // un autre envoi est parti pendant l'attente
+    }
     // R2 — tour « Auto (routeur) » : le moteur/modèle réels ne sont connus
     // qu'après résolution de la cible, juste en dessous.
     // Pièces jointes : non supportées par `neutral.start` (voir le contrat).
     // Capturées avant
     // tout envoi : le brouillon n'est purgé qu'en cas de succès (voir le
     // `try`/`catch` plus bas).
-    const attachmentsAllowed = usesComposer && engineSelected === "claude";
-    const contractAttachments = attachmentsAllowed ? toContractAttachments(attachments) : [];
-    const sentAttachments = attachmentsAllowed ? toSentAttachments(attachments) : [];
+    // T-183 — chemin file : les pièces du push perdu rangées pour CE message
+    // remplacent celles du composeur. Retirées de la ref dès maintenant.
+    let piecesRenvoyees: DraftAttachment[] = [];
+    if (!usesComposer) {
+      const { trouve, reste } = retirerPushCorrespondant(piecesARenvoyerRef.current.get(convId) ?? [], rawContent);
+      piecesARenvoyerRef.current.set(convId, reste);
+      piecesRenvoyees = trouve?.attachments ?? [];
+      // Moteur neutre : pas de pièces possibles (voir le contrat). Elles
+      // retournent dans le tiroir avec un avis explicite plutôt que d'être perdues.
+      if (piecesRenvoyees.length > 0 && engineSelected !== "claude") {
+        restoreAttachments(piecesRenvoyees);
+        setAttachmentsError(
+          "Pièces jointes conservées dans le composeur : le moteur actuel ne les accepte pas, le message est parti sans elles.",
+        );
+        piecesRenvoyees = [];
+      }
+    }
+    const attachmentsAllowed = engineSelected === "claude";
+    const piecesDuTour = usesComposer ? attachments : piecesRenvoyees;
+    const contractAttachments = attachmentsAllowed ? toContractAttachments(piecesDuTour) : [];
+    const sentAttachments = attachmentsAllowed ? toSentAttachments(piecesDuTour) : [];
     // Brouillons d'origine, gardés pour les reposer si le tour échoue (voir le
-    // `catch`) : le tiroir, lui, est vidé dès l'envoi.
-    const sentDrafts = attachmentsAllowed ? attachments : [];
+    // `catch`) : le tiroir, lui, est vidé dès l'envoi (chemin composeur seulement).
+    const sentDrafts = attachmentsAllowed ? piecesDuTour : [];
 
     // Verrouille l'envoi tout de suite (avant les résolutions asynchrones
     // ci-dessous — routage Auto, lecture des documents épinglés) : sans ça, un
@@ -527,6 +588,8 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
         preSendAbort: false,
         draft: r.draft ? `${rawContent}\n${r.draft}` : rawContent,
       }));
+      // Chemin file : les pièces rangées n'ont pas quitté le tiroir, elles y reviennent.
+      restoreAttachments(piecesRenvoyees);
       return;
     }
 
@@ -546,7 +609,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     // par le `catch` si le tour échoue. Vidage conditionné à ce qui est
     // RÉELLEMENT parti : rien n'est retiré si le moteur n'en accepte pas
     // (neutre, mode Auto), où le tiroir n'a de toute façon pas à être touché.
-    if (sentDrafts.length > 0) clearAttachments();
+    if (usesComposer && sentDrafts.length > 0) clearAttachments();
     // S3 — bulle assistant courante du tour (voir sendViaClaudeEngine) :
     // remplacée à chaque demande injectée pour préserver l'ordre de lecture.
     const streamTarget = { id: assistantId };
@@ -590,10 +653,13 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     if (selectedProjectId) meta.projectId = selectedProjectId;
     if (cwd) meta.projectPath = cwd;
 
-    const { id, done } =
+    const { id: idInitial, done } =
       engine === "neutral"
-        ? sendViaNeutralEngine(turnProviderId as string, historyMessages, common, turnModel, meta)
-        : sendViaClaudeEngine(sentContent, streamTarget, common, contractAttachments, convId, turnModel || null, meta);
+        ? sendViaNeutralEngine(turnProviderId as string, historyMessages, common, turnModel, meta, convId)
+        : sendViaClaudeEngine(sentContent, streamTarget, common, contractAttachments, convId, turnModel || null, meta, compteTour);
+    // `let` : une relance sur nouvelle session (T-187) change l'id du tour, et
+    // le `finally` doit purger les permissions de CELUI-LÀ aussi.
+    let id = idInitial;
     updateRuntime(convId, (r) => ({ ...r, activeRequestId: id }));
 
     // S3 — injecteur de CE tour : appelé par le composeur quand le sidecar a
@@ -631,9 +697,39 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
       });
     }
 
+    let tourClaudeReussi = false;
     try {
       const data = await done;
-      const parsed = engine === "neutral" ? parseNeutralDone(data) : parseClaudeDone(data);
+      let parsed = engine === "neutral" ? parseNeutralDone(data) : parseClaudeDone(data);
+      // T-187 — la session à reprendre n'existe plus (transcript purgé) : on
+      // l'oublie AVANT la relance (le `sessionId` de `parsed` est l'ancien, il
+      // n'est jamais réécrit), puis UNE seule relance sur une nouvelle session
+      // dont le prompt porte un récapitulatif des tours gardés par l'application.
+      if ("sessionPerdue" in parsed && parsed.sessionPerdue) {
+        updateRuntime(convId, (r) => ({ ...r, sessionId: null }));
+        const tousLesTours = getRuntime(convId).turns;
+        const rang = tousLesTours.findIndex((t) => t.id === userTurn.id);
+        const recap = (rang >= 0 ? tousLesTours.slice(0, rang) : [])
+          .map((t) => ({
+            role: t.role,
+            texte: t.role === "user" ? (t.displayContent ?? t.content ?? "") : spokenTextOfTurn(t),
+          }));
+        const relance = sendViaClaudeEngine(
+          promptAvecRecapitulatif(recap, sentContent),
+          streamTarget,
+          common,
+          contractAttachments,
+          convId,
+          turnModel || null,
+          meta,
+          compteTour,
+        );
+        id = relance.id;
+        updateRuntime(convId, (r) => ({ ...r, activeRequestId: id }));
+        const cibleId = streamTarget.id;
+        updateTurnsFor(convId, (prev) => prev.map((t) => (t.id === cibleId ? { ...t, sessionReprise: true } : t)));
+        parsed = parseClaudeDone(await relance.done);
+      }
       if (engine === "claude" && parsed.sessionId) {
         updateRuntime(convId, (r) => ({ ...r, sessionId: parsed.sessionId }));
       }
@@ -644,6 +740,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
         await recordModelUsage(turnModel, parsed.usage);
       }
       updateTurnsFor(convId, (prev) => withTurnDone(prev, streamTarget.id, parsed));
+      tourClaudeReussi = engine === "claude" && "subtype" in parsed && parsed.subtype === "success";
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       updateTurnsFor(convId, (prev) => withTurnError(prev, streamTarget.id, message));
@@ -668,7 +765,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
       updateRuntime(convId, (r) => ({ ...r, streaming: false, activeRequestId: null }));
       // Sécurité : purge les demandes de permission orphelines de ce tour
       // (le sidecar les refuse déjà normalement à l'abort/fin de tour).
-      setPermissionQueue((prev) => prev.filter((p) => p.targetId !== id));
+      setPermissionQueue((prev) => sansDemandesDuTour(prev, id));
       // Fin de tour : la conso a pu changer (Claude uniquement pour l'instant).
       notifyUsageChanged();
       // Fin de tour : sauvegarde immédiate (pas d'attente du debounce). Les
@@ -691,8 +788,10 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
           persistBackgroundConversation(selectedProjectId, convId);
         }
       }
+      // T-197 — après la sauvegarde, sans l'attendre : le titre arrive quand il arrive.
+      if (tourClaudeReussi && selectedProjectId) void titrerSession(selectedProjectId, convId, compteTour).catch(() => {});
     }
   }
 
-  return { handleSend };
+  return { handleSend, reposerPiecesOrphelines };
 }

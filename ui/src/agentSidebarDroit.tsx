@@ -1,5 +1,5 @@
 /*
- * Barre latérale droite de la page Projets — Sessions, LLM, Connaissances.
+ * Barre latérale droite de la page Projets — Sessions, LLM (Connaissances : agentSidebarConnaissances.tsx).
  *
  * Trois sections de rendu pur sorties d'AgentPage.tsx (dernière tranche de
  * l'étape 8). Comme pour envoiProjet.ts, la taille des interfaces de props
@@ -7,7 +7,8 @@
  * section, rendue visible — l'état, lui, reste la propriété de la page.
  */
 
-import { useState, type FocusEvent, type KeyboardEvent, type RefObject } from "react";
+import { useMemo, useState, type FocusEvent, type KeyboardEvent, type RefObject } from "react";
+import { ArchivesGroupe } from "./ArchivesGroupe";
 import type { EntreeArchive } from "./archivesSessions";
 import { effortsPour, MODELES_ABONNEMENT_CLAUDE, type EffortLevel } from "./modelesAbonnementClaude";
 import { agentOptionValue, type AgentSelection, type ProjectSession } from "./modeleProjet";
@@ -15,16 +16,17 @@ import { OllamaPanel } from "./OllamaPanel";
 import { PERMISSION_MODE_OPTIONS } from "./permissions";
 import { SidebarSection } from "./SidebarSection";
 import { formatRelativeDate } from "./sessionStore";
+import { filtrerSessions } from "./titresDiscussions";
+import { RattrapageTitres, RechercheSessions } from "./RechercheEtRattrapage";
+import type { EtatRattrapage } from "./useRattrapageTitres";
 import type { AgentInfo } from "./orchestrationClient";
 import type { ProviderConfig } from "./providerAdmin";
-import type { DirEntry } from "./fsClient";
-import type { KnowledgeMode } from "./projectAdmin";
-import type { PinnedDoc } from "./connaissances";
 import { ModelPicker, type OptionEpinglee } from "./ModelPicker";
-import { modeleSousAgentDeclare, sousAgentsVifs, type AgentTurn, type SousAgentVu } from "./agentTurns";
+import { modeleSousAgentDeclare, sousAgentsVifs, tachesDeFondHorsSousAgents, type AgentTurn, type SousAgentVu } from "./agentTurns";
 import { useSousAgentsRecents } from "./useSousAgentsRecents";
 import type { ModelDetail, PermissionMode } from "./sidecar";
-import type { KnowledgeStatus } from "./connaissancesClient";
+import { libelleCompte, optionsMoteurClaude, secondCompteDispo, VALEUR_MOTEUR_TEAMS, type CompteClaude, type CompteDecrit } from "./comptesClaude";
+import { Deroulant } from "./Deroulant";
 
 /*
  * Modèles de l'abonnement Claude : ils ne viennent d'aucun catalogue
@@ -38,12 +40,10 @@ const MODEL_OPTIONS: OptionEpinglee[] = MODELES_ABONNEMENT_CLAUDE.map((m) => ({
 }));
 
 /*
- * T-080 — plus de sentinelle « Auto (descendant) », ni d'option « (défaut) »
- * muette. Les deux disaient la même chose — « quelqu'un d'autre choisira » —
- * et ce quelqu'un ne choisissait rien : le mode Auto imposait le sommet de la
- * table sans lire le prompt (T-079), et « (défaut) » laissait simplement le
- * CLI décider sans que l'application sache dire quoi. Une session part
- * désormais sur le modèle réglé dans Configuration, affiché en clair ici.
+ * T-080 — plus de sentinelle « Auto (descendant) » ni d'option « (défaut) »
+ * muette : toutes deux disaient « quelqu'un d'autre choisira », et personne ne
+ * choisissait (le mode Auto imposait le sommet de la table sans lire le prompt,
+ * T-079). Une session part sur le modèle réglé dans Configuration, affiché en clair.
  */
 
 export interface SessionsSectionProps {
@@ -76,58 +76,10 @@ export interface SessionsSectionProps {
   restoreArchive: (id: string) => void;
   /** Corbeille d'une archive : mise de côté, pas destruction. */
   trashArchive: (id: string) => void;
-}
-
-/**
- * Groupe repliable « Archives (n) », replié par défaut, absent si n = 0.
- * Mêmes classes que la liste des sessions ; le clic restaure, la corbeille met
- * de côté (aucune confirmation : rien n'est détruit).
- */
-function ArchivesGroupe({
-  archives,
-  restoreArchive,
-  trashArchive,
-}: Readonly<Pick<SessionsSectionProps, "archives" | "restoreArchive" | "trashArchive">>) {
-  const [ouvert, setOuvert] = useState(false);
-  if (archives.length === 0) return null;
-  return (
-    <>
-      <button
-        type="button"
-        className="btn btn--ghost session-list__new"
-        aria-expanded={ouvert}
-        onClick={() => setOuvert((v) => !v)}
-      >
-        {ouvert ? "▾" : "▸"} Archives ({archives.length})
-      </button>
-      {ouvert && (
-        <ul className="session-list">
-          {archives.map((a) => (
-            <li key={a.id} className="session-item">
-              <button type="button" className="session-item__title" title={`Restaurer : ${a.title}`} onClick={() => restoreArchive(a.id)}>
-                {a.title}
-              </button>
-              <div className="session-item__meta">
-                <span className="session-item__date">{formatRelativeDate(a.updatedAt)}</span>
-                <span className="session-item__engine">{a.nbTours} tours</span>
-              </div>
-              <div className="session-item__actions">
-                <button
-                  type="button"
-                  className="session-item__action"
-                  title="Mettre de côté (non détruite)"
-                  aria-label={`Mettre de côté ${a.title}`}
-                  onClick={() => trashArchive(a.id)}
-                >
-                  🗑
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </>
-  );
+  /** T-197 — texte des tours d'une session vive, pour la recherche (les archives n'ont que leur titre en mémoire). */
+  texteDe: (session: ProjectSession) => string;
+  /** T-197 — rattrapage « Nommer les anciennes discussions (N) » : N, état du passage, gestes. */
+  rattrapage: { n: number; etat: EtatRattrapage; lancer: () => void; arreter: () => void };
 }
 
 export function SessionsSection(props: Readonly<SessionsSectionProps>) {
@@ -153,7 +105,22 @@ export function SessionsSection(props: Readonly<SessionsSectionProps>) {
     archives,
     restoreArchive,
     trashArchive,
+    texteDe,
+    rattrapage,
   } = props;
+  // T-197 — recherche : titre affiché puis texte des tours pour les sessions vives, titre seul pour les archives.
+  const [requete, setRequete] = useState("");
+  const rechercheActive = requete.trim() !== "";
+  const visibles = useMemo(
+    () => (rechercheActive ? filtrerSessions(sortedSessions, requete, texteDe) : sortedSessions),
+    // `texteDe` est recréée à chaque rendu : seules la requête et les sessions comptent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rechercheActive, requete, sortedSessions],
+  );
+  const archivesVisibles = useMemo(
+    () => (rechercheActive ? filtrerSessions(archives, requete) : archives),
+    [rechercheActive, requete, archives],
+  );
   return (
     <SidebarSection
       id="sessions"
@@ -172,8 +139,13 @@ export function SessionsSection(props: Readonly<SessionsSectionProps>) {
       >
         + Nouvelle session
       </button>
+      {(sessions.length > 0 || archives.length > 0) && (
+        <RechercheSessions id="sessions-recherche" valeur={requete} onChange={setRequete} />
+      )}
       {sessions.length === 0 ? (
         <p className="empty-hint">Aucune session.</p>
+      ) : rechercheActive && visibles.length === 0 && archivesVisibles.length === 0 ? (
+        <p className="empty-hint">Aucune discussion ne correspond.</p>
       ) : (
         <ul
           className="session-list"
@@ -181,7 +153,7 @@ export function SessionsSection(props: Readonly<SessionsSectionProps>) {
           onKeyDown={sessionsRoving.onKeyDown}
           onFocus={sessionsRoving.onFocus}
         >
-          {sortedSessions.map((s) => (
+          {visibles.map((s) => (
             <li key={s.id} className={`session-item${s.id === activeSessionId ? " session-item--active" : ""}`}>
               {editingSessionId === s.id ? (
                 <input
@@ -216,7 +188,7 @@ export function SessionsSection(props: Readonly<SessionsSectionProps>) {
               <div className="session-item__meta">
                 <span className="session-item__date">{formatRelativeDate(s.updatedAt)}</span>
                 <span className="session-item__engine">
-                  {s.engine.providerId ? (providers.find((p) => p.id === s.engine.providerId)?.label ?? s.engine.providerId) : "Claude"}
+                  {s.engine.providerId ? (providers.find((p) => p.id === s.engine.providerId)?.label ?? s.engine.providerId) : s.engine.compte === "teams" ? "Claude Teams" : "Claude"}
                 </span>
               </div>
               {confirmDeleteSessionId === s.id ? (
@@ -263,7 +235,13 @@ export function SessionsSection(props: Readonly<SessionsSectionProps>) {
           ))}
         </ul>
       )}
-      <ArchivesGroupe archives={archives} restoreArchive={restoreArchive} trashArchive={trashArchive} />
+      <ArchivesGroupe
+        archives={archivesVisibles}
+        restoreArchive={restoreArchive}
+        trashArchive={trashArchive}
+        rechercheActive={rechercheActive}
+      />
+      <RattrapageTitres n={rattrapage.n} etat={rattrapage.etat} onLancer={rattrapage.lancer} onArreter={rattrapage.arreter} />
     </SidebarSection>
   );
 }
@@ -276,6 +254,7 @@ export interface LlmSectionProps {
   clearAgentSelection: () => void;
   streaming: boolean;
   engineProviderId: string | null;
+  comptes: CompteDecrit[] | null; compteClaude: CompteClaude; // comptes Claude proposés et compte effectif (docs/spec-deux-comptes.md)
   providers: ProviderConfig[];
   handleEngineChange: (value: string) => void;
   permissionMode: PermissionMode;
@@ -331,7 +310,7 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
     selectedAgent,
     clearAgentSelection,
     streaming,
-    engineProviderId,
+    engineProviderId, comptes, compteClaude,
     providers,
     handleEngineChange,
     permissionMode,
@@ -353,15 +332,17 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
   const sousAgents = [...sousAgentsVifs(vif.turns)].sort((a, b) => Number(a.termine) - Number(b.termine));
   const sousAgentsActifs = sousAgents.filter((a) => !a.termine).length;
   const sousAgentsRecents = useSousAgentsRecents(vif.sessionId, streaming);
+  // T-206 — un `Bash` détaché n'est pas un sous-agent, mais il travaille aussi pour moi.
+  const tachesDeFond = tachesDeFondHorsSousAgents(vif.turns);
   return (
     <SidebarSection id="llm" title="LLM" defaultOpen={!isCompactViewport}>
       <div className="field agent-preset">
         <label htmlFor="agent-preset-select">Agent</label>
-        <select
+        <Deroulant
           id="agent-preset-select"
           value={selectedAgentKey ? agentOptionValue(selectedAgentKey) : ""}
           disabled={streaming}
-          onChange={(e) => handleAgentSelectChange(e.currentTarget.value)}
+          onChange={handleAgentSelectChange}
         >
           <option value="">Aucun (manuel)</option>
           {projectAgentsByScope.project.length > 0 && (
@@ -391,7 +372,7 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
               ))}
             </optgroup>
           )}
-        </select>
+        </Deroulant>
         {selectedAgent && (
           <div className="agent-preset__applied">
             <span>Configuré par l'agent {selectedAgent.name}</span>
@@ -411,36 +392,34 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
 
       <div className="field">
         <label htmlFor="agent-engine">Moteur</label>
-        <select
+        <Deroulant
           id="agent-engine"
-          value={engineProviderId ?? ""}
+          value={engineProviderId ?? (compteClaude === "teams" ? VALEUR_MOTEUR_TEAMS : "")}
           disabled={streaming || selectedAgent !== null}
-          onChange={(e) => handleEngineChange(e.currentTarget.value)}
+          onChange={handleEngineChange}
         >
-          <option value="">Claude (abonnement)</option>
+          {optionsMoteurClaude(comptes, "", compteClaude).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           {providers.map((p) => (
             <option key={p.id} value={p.id}>
               {p.label}
             </option>
           ))}
-        </select>
+        </Deroulant>
       </div>
 
       <div className="field">
         <label htmlFor="agent-permission-mode">Mode de permission</label>
-        <select
+        <Deroulant
           id="agent-permission-mode"
           value={permissionMode}
           disabled={selectedAgent !== null}
-          onChange={(e) => setPermissionMode(e.currentTarget.value as PermissionMode)}
+          onChange={(v) => setPermissionMode(v as PermissionMode)}
         >
           {/* Le mode « plan » n'existe pas côté moteur neutre (docs/protocol.md, Lot 6). */}
           {PERMISSION_MODE_OPTIONS.filter((o) => o.value !== "plan" || engineProviderId === null).map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
+            <option key={o.value} value={o.value}>{o.label}</option>
           ))}
-        </select>
+        </Deroulant>
       </div>
 
       {/*
@@ -451,11 +430,11 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
       {engineProviderId === null && effortsPour(model).length > 0 && (
         <div className="field">
           <label htmlFor="agent-effort">Effort</label>
-          <select
+          <Deroulant
             id="agent-effort"
             value={effort}
             disabled={streaming || (selectedAgent !== null && selectedAgent.model !== null)}
-            onChange={(e) => setEffort(e.currentTarget.value as EffortLevel | "")}
+            onChange={(v) => setEffort(v as EffortLevel | "")}
           >
             <option value="">Défaut</option>
             {effortsPour(model).map((n) => (
@@ -463,7 +442,7 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
                 {n}
               </option>
             ))}
-          </select>
+          </Deroulant>
         </div>
       )}
 
@@ -513,11 +492,14 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
               // intention, pas une mesure : le mot « déclaré » est dans
               // l'infobulle, et un type inconnu (agent intégré du SDK)
               // n'affiche rien plutôt qu'un modèle deviné.
-              const { modele, connu } = modeleSousAgentDeclare(agent.nom, projectAgentsByScope.claudeCode);
-              const libelleModele = modele ?? (connu ? "hérite du fil" : null);
-              const detailModele = libelleModele
-                ? ` · modèle déclaré : ${modele ?? "aucun, hérite du fil"}`
-                : "";
+              // T-203 — le `model` passé à l'appel prime : c'est lui qui tourne.
+              const declare = modeleSousAgentDeclare(agent.nom, projectAgentsByScope.claudeCode);
+              const libelleModele = agent.modele ?? declare.modele ?? (declare.connu ? "hérite du fil" : null);
+              const detailModele = agent.modele
+                ? ` · modèle demandé à l'appel : ${agent.modele}`
+                : libelleModele
+                  ? ` · modèle déclaré : ${declare.modele ?? "aucun, hérite du fil"}`
+                  : "";
               return (
                 <li
                   key={`${agent.nom}-${i}`}
@@ -552,6 +534,22 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
         </div>
       )}
 
+      {/* T-206 — liste VIVANTE (REPLACE côté sidecar) : vide dès que les
+          tâches ont rendu leur rapport, donc jamais de travail fini au présent. */}
+      {tachesDeFond.length > 0 && (
+        <div className="llm-vif__agents">
+          <span className="llm-vif__agents-titre">{`Tâches de fond · ${tachesDeFond.length} en cours`}</span>
+          <ul>
+            {tachesDeFond.map((d, i) => (
+              <li key={`${d}-${i}`} className="llm-vif__agent llm-vif__agent--vif" title={d}>
+                <span className="llm-vif__agent-signe" aria-hidden="true">◉</span>
+                <span className="llm-vif__agent-description">{d}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {engineProviderId !== null && (
         <OllamaPanel providerId={engineProviderId} selectedModel={model} />
       )}
@@ -568,233 +566,12 @@ export function LlmSection(props: Readonly<LlmSectionProps>) {
           className={`agent-engine-indicator${engineProviderId ? " agent-engine-indicator--neutral" : " agent-engine-indicator--claude"}`}
           title="Moteur de l'agent"
         >
-          {engineProviderId ? (providers.find((p) => p.id === engineProviderId)?.label ?? engineProviderId) : "Claude"}
+          {engineProviderId ? (providers.find((p) => p.id === engineProviderId)?.label ?? engineProviderId) : secondCompteDispo(comptes) || compteClaude === "teams" ? libelleCompte(compteClaude) : "Claude"}
         </span>
         <span className={`agent-session-indicator${vif.sessionId ? " agent-session-indicator--active" : ""}`}>
           {vif.sessionId ? `Session ${vif.sessionId.slice(0, 8)}` : "Aucune session"}
         </span>
       </div>
-    </SidebarSection>
-  );
-}
-
-export interface ConnaissancesSectionProps {
-  /** Documents réellement injectés au 1er tour (badge de la section). */
-  injectedKnowledge: PinnedDoc[];
-  knowledgeMode: KnowledgeMode;
-  changeKnowledgeMode: (mode: KnowledgeMode) => void;
-  selectedProjectId: string | null;
-  streaming: boolean;
-  knowledgeIdx: KnowledgeStatus | null;
-  cwd: string;
-  indexingKnowledge: boolean;
-  knowledgeIndexProgress: { done: number; total: number } | null;
-  knowledgeIndexError: string;
-  handleIndexKnowledge: () => Promise<void>;
-  pinnedKnowledge: PinnedDoc[];
-  autoKnowledgeDocs: PinnedDoc[];
-  /** CLAUDE.md du projet (groupe « Détectées ») — null si absent. */
-  claudeMdPath: string | null;
-  claudeMemoryFiles: DirEntry[];
-  handleOpenFile: (path: string, name: string) => void;
-  unpinKnowledge: (path: string) => void;
-  pinKnowledge: (path: string, name: string) => void;
-}
-
-export function ConnaissancesSection(props: Readonly<ConnaissancesSectionProps>) {
-  const {
-    injectedKnowledge,
-    knowledgeMode,
-    changeKnowledgeMode,
-    selectedProjectId,
-    streaming,
-    knowledgeIdx,
-    cwd,
-    indexingKnowledge,
-    knowledgeIndexProgress,
-    knowledgeIndexError,
-    handleIndexKnowledge,
-    pinnedKnowledge,
-    autoKnowledgeDocs,
-    claudeMdPath,
-    claudeMemoryFiles,
-    handleOpenFile,
-    unpinKnowledge,
-    pinKnowledge,
-  } = props;
-  return (
-    <SidebarSection
-      id="knowledge"
-      title="Connaissances"
-      defaultOpen={false}
-      badge={injectedKnowledge.length > 0 ? <span className="sidebar-section__count">{injectedKnowledge.length}</span> : undefined}
-    >
-      {/* R5 — bascule injection/RAG + index d'embeddings local (docs/spec-r5-rag.md §4). */}
-      <div className="knowledge-rag">
-        <div className="field">
-          <label htmlFor="knowledge-mode-select">Mode</label>
-          <select
-            id="knowledge-mode-select"
-            value={knowledgeMode}
-            disabled={!selectedProjectId || streaming}
-            title="Injection : documents recopiés en préambule du 1er tour. RAG : l'agent interroge l'index local via l'outil search_knowledge."
-            onChange={(e) => changeKnowledgeMode(e.currentTarget.value === "rag" ? "rag" : "injection")}
-          >
-            <option value="injection">Injection intégrale (défaut)</option>
-            <option value="rag">RAG — outil search_knowledge</option>
-          </select>
-        </div>
-        <div className="knowledge-rag__status">
-          {knowledgeIdx?.exists ? (
-            <>
-              <span>
-                Index : {knowledgeIdx.files} fichier{knowledgeIdx.files > 1 ? "s" : ""} ·{" "}
-                {knowledgeIdx.chunks} chunk{knowledgeIdx.chunks > 1 ? "s" : ""}
-                {knowledgeIdx.model ? ` · ${knowledgeIdx.model}` : ""}
-                {knowledgeIdx.builtAt ? ` · ${formatRelativeDate(knowledgeIdx.builtAt)}` : ""}
-              </span>
-              {knowledgeIdx.stale && (
-                <span
-                  className="knowledge-rag__stale"
-                  title="Un document source a changé depuis la dernière indexation — relancer « Indexer maintenant »."
-                >
-                  ⚠ index obsolète
-                </span>
-              )}
-            </>
-          ) : (
-            <span>Aucun index — indexer pour activer l'outil search_knowledge.</span>
-          )}
-        </div>
-        <button
-          type="button"
-          className="btn btn--ghost knowledge-rag__index"
-          disabled={!cwd || indexingKnowledge}
-          onClick={() => void handleIndexKnowledge()}
-        >
-          {indexingKnowledge
-            ? knowledgeIndexProgress
-              ? `Indexation… ${knowledgeIndexProgress.done}/${knowledgeIndexProgress.total}`
-              : "Indexation…"
-            : "Reconstruire l'index"}
-        </button>
-        {knowledgeIndexError && <p className="knowledge-rag__error">{knowledgeIndexError}</p>}
-      </div>
-
-      {pinnedKnowledge.length === 0 &&
-      autoKnowledgeDocs.length === 0 &&
-      !claudeMdPath &&
-      claudeMemoryFiles.length === 0 ? (
-        <p className="empty-hint">
-          Clic droit sur un fichier dans « Fichiers » → « Épingler comme connaissance », ou déposez des
-          fichiers dans .iaction/connaissances/.
-        </p>
-      ) : (
-        <>
-          {pinnedKnowledge.length > 0 && (
-            <div className="knowledge-group">
-              <p className="knowledge-group__title">Épinglées</p>
-              <ul className="knowledge-list">
-                {pinnedKnowledge.map((doc) => (
-                  <li key={doc.path} className="knowledge-item">
-                    <button
-                      type="button"
-                      className="knowledge-item__open"
-                      title={doc.path}
-                      onClick={() => handleOpenFile(doc.path, doc.name)}
-                    >
-                      {doc.name}
-                    </button>
-                    <button
-                      type="button"
-                      className="knowledge-item__remove"
-                      aria-label={`Retirer ${doc.name}`}
-                      title="Retirer"
-                      onClick={() => unpinKnowledge(doc.path)}
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {autoKnowledgeDocs.length > 0 && (
-            <div className="knowledge-group">
-              <p
-                className="knowledge-group__title"
-                title="Retirer un fichier = le supprimer du dossier .iaction/connaissances/"
-              >
-                Automatiques (.iaction/connaissances)
-              </p>
-              <ul className="knowledge-list">
-                {autoKnowledgeDocs.map((doc) => (
-                  <li key={doc.path} className="knowledge-item">
-                    <button
-                      type="button"
-                      className="knowledge-item__open"
-                      title={`${doc.path} — retrait : supprimer le fichier du dossier .iaction/connaissances/`}
-                      onClick={() => handleOpenFile(doc.path, doc.name)}
-                    >
-                      {doc.name}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {(claudeMdPath || claudeMemoryFiles.length > 0) && (
-            <div className="knowledge-group">
-              <p className="knowledge-group__title">Détectées</p>
-              <ul className="knowledge-list">
-                {claudeMdPath && (
-                  <li className="knowledge-item">
-                    <button
-                      type="button"
-                      className="knowledge-item__open"
-                      title="Instructions projet — chargée automatiquement par le moteur Claude ; non ré-injectée par iaction"
-                      onClick={() => handleOpenFile(claudeMdPath as string, "CLAUDE.md")}
-                    >
-                      CLAUDE.md
-                    </button>
-                    <span className="knowledge-item__tag">chargée par le moteur Claude</span>
-                  </li>
-                )}
-                {claudeMemoryFiles.map((f) => {
-                  const alreadyPinned = pinnedKnowledge.some((d) => d.path === f.path);
-                  return (
-                    <li key={f.path} className="knowledge-item">
-                      <button
-                        type="button"
-                        className="knowledge-item__open"
-                        title={`${f.path} — mémoire Claude Code`}
-                        onClick={() => handleOpenFile(f.path, f.name)}
-                      >
-                        {f.name}
-                      </button>
-                      <button
-                        type="button"
-                        className="knowledge-item__pin"
-                        disabled={alreadyPinned}
-                        title={
-                          alreadyPinned
-                            ? "Déjà épinglée (injectée au 1er tour)"
-                            : "Épingler comme connaissance (l'ajoute aux épinglées, injectée au 1er tour — utile pour le moteur neutre)"
-                        }
-                        onClick={() => pinKnowledge(f.path, f.name)}
-                      >
-                        {alreadyPinned ? "Épinglée" : "Épingler"}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
-        </>
-      )}
     </SidebarSection>
   );
 }

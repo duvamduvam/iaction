@@ -10,6 +10,7 @@
  * telle quelle, la section « Ouverture au survol » est nouvelle.
  */
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { confirmer } from "./confirmer";
 import {
   addApp,
   deleteApp,
@@ -218,9 +219,9 @@ function AppsSection() {
               app={app}
               onEdit={() => setEditingId(app.id)}
               onDelete={() => {
-                if (window.confirm(`Supprimer la règle « ${app.label} » ?`)) {
-                  void deleteApp(app.id).then(setApps);
-                }
+                void confirmer(`Supprimer la règle « ${app.label} » ?`).then((ok) => {
+                  if (ok) void deleteApp(app.id).then(setApps);
+                });
               }}
             />
           ),

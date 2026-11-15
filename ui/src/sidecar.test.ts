@@ -25,3 +25,22 @@ describe("messageErreurProtocole", () => {
     expect(messageErreurProtocole({ message: 42 })).toBe("Erreur inconnue");
   });
 });
+
+// T-169 — sidecar plus ancien que l'interface : l'utilisateur doit savoir quoi faire.
+describe("messageErreurProtocole — méthode inconnue (T-169)", () => {
+  it("reconnaît le message « méthode inconnue » sans code", () => {
+    const m = messageErreurProtocole({ message: "méthode inconnue: x" });
+    expect(m).toContain("méthode inconnue: x");
+    expect(m).toContain("relancez IAction");
+  });
+
+  it("reconnaît le code methode_inconnue", () => {
+    const m = messageErreurProtocole({ code: "methode_inconnue", message: "autre texte" });
+    expect(m).toContain("autre texte");
+    expect(m).toContain("relancez IAction");
+  });
+
+  it("n'ajoute rien aux autres erreurs", () => {
+    expect(messageErreurProtocole({ message: "clé API manquante" })).not.toContain("relancez");
+  });
+});

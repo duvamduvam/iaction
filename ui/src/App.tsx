@@ -5,7 +5,7 @@ import type { ChatPageHandle } from "./ChatPage";
 import { CommandPalette } from "./CommandPalette";
 // Les cinq autres pages n'arrivent qu'à leur première visite, et ne repartent
 // jamais ensuite — voir pagesParesseuses.tsx (T-029).
-import { ChatPage, OrchestrationPage, ProvidersPage, SessionsClaudePage, SlotPage, SupervisionPage, SystemPage } from "./pagesParesseuses";
+import { ChatPage, OrchestrationPage, ProvidersPage, SlotPage, SupervisionPage, SystemPage } from "./pagesParesseuses";
 import {
   COMPACT_BUTTON_MIN_TOKENS,
   COMPACT_BUTTON_RATIO,
@@ -20,8 +20,6 @@ import { initRoutingPush } from "./routerAdmin";
 import { tachesList, tachesReports } from "./tachesClient";
 import { openTerminal, systemStats, type SystemStats } from "./systemClient";
 import { useProjects } from "./useProjects";
-import type { ProjectConfig } from "./projectAdmin";
-import { attendreDisponible, imageSuivanteNavigateur, type RaisonReprise } from "./repriseSession";
 import { useProviders } from "./useProviders";
 import { useSpeech } from "./useSpeech";
 import { Donut } from "./Donut";
@@ -344,21 +342,6 @@ function App() {
     return ok;
   }
 
-  /** T-159 — ouvre dans « Projets » une conversation reprenant la COPIE d'une session Claude du poste. */
-  async function handleReprendreSession(
-    projet: ProjectConfig,
-    sessionIdCopie: string,
-    titre: string,
-  ): Promise<RaisonReprise> {
-    // T-162 — « Projets » n'est montée qu'à sa première visite : on y bascule, puis on attend son `ref`.
-    if (!agentPageRef.current) setPage("projects");
-    const agent = await attendreDisponible(() => agentPageRef.current, imageSuivanteNavigateur);
-    if (!agent) return "page-indisponible";
-    const raison = await agent.reprendreSession(projet.id, sessionIdCopie, titre);
-    if (raison === "ok") setPage("projects");
-    return raison;
-  }
-
   function handleOpenTerminal() {
     // Vue Projets → terminal dans le projet en cours ; ailleurs → home.
     const projectPath = page === "projects" ? (agentPageRef.current?.getSelectedProjectPath() ?? null) : null;
@@ -567,9 +550,6 @@ function App() {
         </SlotPage>
         <SlotPage active={page === "system"}>
           <SystemPage />
-        </SlotPage>
-        <SlotPage active={page === "sessions"}>
-          <SessionsClaudePage projects={projectAdmin.projects} onReprendre={handleReprendreSession} />
         </SlotPage>
       </main>
       <CommandPalette projects={projectAdmin.projects} onSelectProject={handlePaletteSelectProject} />

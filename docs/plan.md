@@ -17,7 +17,7 @@ API à venir), organisée **par projets liés à un répertoire**, avec :
   contexte moyen, nb de conversations, nb d'agents par conversation) ;
 - **éditeur no-code type n8n** pour composer agents/skills, simple mais efficace.
 
-Base d'inspiration : orchestrateur Pays de la Loire (http://localhost:8002/agent/orchestrateur).
+Base d'inspiration : un orchestrateur d'agents existant (instance locale).
 
 ## Cadrage (validé au grill 2026-07-18)
 

@@ -247,6 +247,46 @@ export function subtypePourInterface(subtype: string, interruption: Interruption
   return interruption === "abandon" ? "aborted" : subtype;
 }
 
+/** Longueur maximale d'une entrée de `errors` conservée (journal et interface). */
+const ERREUR_SDK_MAX = 500;
+
+/**
+ * T-187 — les `errors` d'un message `result` du SDK : libellés techniques
+ * (« No conversation found with session ID: … »), jamais un corps de réponse.
+ * Pure : tout ce qui n'est pas un tableau de chaînes donne `[]`, chaque
+ * entrée est bornée.
+ */
+export function extraireErreursResultat(message: { errors?: unknown }): string[] {
+  const brut = message.errors;
+  if (!Array.isArray(brut)) return [];
+  return brut
+    .filter((e): e is string => typeof e === "string")
+    .map((e) => (e.length > ERREUR_SDK_MAX ? e.slice(0, ERREUR_SDK_MAX) : e));
+}
+
+/**
+ * T-187 — la reprise demandée visait une session dont le transcript n'existe
+ * plus (purge de `~/.claude/projects`). Le SDK le dit par `errors`, et par
+ * rien d'autre : `subtype` est le même `error_during_execution` qu'un arrêt.
+ */
+export function estSessionPerdue(erreurs: ReadonlyArray<string>): boolean {
+  return erreurs.some((e) => /No conversation found with session ID/i.test(e));
+}
+
+/**
+ * Ce que le `done` d'un tour dit de sa cause d'échec. `sessionPerdue` n'est vrai
+ * que si le tour demandait une reprise, et jamais après un abandon : l'interface
+ * relance sur ce signal, et une relance ne doit pas passer outre un « Arrêter ».
+ */
+export function diagnostiquerResultat(
+  message: { errors?: unknown },
+  repriseDemandee: boolean,
+  interruption: Interruption,
+): { erreurs: string[]; sessionPerdue: boolean } {
+  const erreurs = extraireErreursResultat(message);
+  return { erreurs, sessionPerdue: repriseDemandee && interruption !== "abandon" && estSessionPerdue(erreurs) };
+}
+
 /** Écrit la trace de journal d'une issue, au bon niveau. Les champs sont
  *  toujours des libellés techniques — jamais un corps de réponse. */
 export function tracerIssue(
@@ -271,6 +311,9 @@ export interface ResultatDeTour {
   usage: Usage | null;
   contextTokens: number | null;
   totalCostUsd: number | null;
+  /** T-187 — `errors` du `result` SDK, transportées telles quelles jusqu'à l'UI. */
+  erreurs?: string[];
+  sessionPerdue?: boolean;
 }
 
 export interface EtatFinDeTour {
@@ -313,6 +356,8 @@ export function enregistrerResultatFinal(p: {
   model: string | null;
   sessionId: string | null;
   subtype: string;
+  /** T-187 — `errors` du résultat (déjà bornées), au journal si non vides. */
+  erreurs?: ReadonlyArray<string>;
   interruption: Interruption;
   usage: Usage | null;
   ventilation: ReadonlyArray<UsageVentilationLine>;
@@ -349,6 +394,7 @@ export function enregistrerResultatFinal(p: {
     sessionId: p.sessionId,
     model: p.model,
     ...(issue.status === "aborted" ? { cause: issue.errorMessage } : {}),
+    ...(p.erreurs && p.erreurs.length > 0 ? { erreurs: p.erreurs } : {}),
   });
 }
 

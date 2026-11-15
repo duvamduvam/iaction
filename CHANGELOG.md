@@ -9,6 +9,61 @@ versions selon [SemVer](https://semver.org/lang/fr/).
 > Les entrées commencent à la 0.3.0 ; les versions antérieures ne sont pas
 > reconstituées après coup.
 
+## [0.7.0] — 2026-11-16
+
+Depuis la 0.6.1 (2026-10-21) : **l'agent règle lui-même sa conversation**
+(modèle, effort, compactage), **deux comptes Claude** cohabitent, et **une
+session Claude d'une autre machine se pilote** depuis un agent de projet.
+
+### Ajouté
+
+- **L'agent change lui-même de modèle et d'effort** (outil `changer_modele`).
+  L'effet est immédiat, et un bandeau « Annuler » permet de revenir en arrière,
+  pendant le tour comme après (T-207, T-210).
+- **L'agent programme lui-même le compactage** de sa conversation (outil
+  `compacter`) : `/compact` est mis en file pour la fin du tour, avec un avis
+  « Annuler », au lieu de demander à l'utilisateur de le taper (T-216).
+- **Deux comptes Claude** (« Claude Perso » / « Claude Teams ») : sélecteur
+  dans le moteur, consommation, historique et débord par compte, compte par
+  défaut d'un projet. Rien ne change sans second compte (T-189, T-191).
+- **Un agent lit la consommation de l'abonnement** à la demande (outil
+  `lire_usage`), sans rien injecter dans le prompt (T-202).
+- **Sessions distantes pour les agents** : un agent de projet dialogue avec
+  une session Claude Code d'une autre machine (outils
+  `sessions_distantes_lister` / `session_distante_demander`), à raison d'une
+  session distante par conversation, avec une fenêtre de question quand la
+  machine distante est mal branchée ou attend une validation (T-165 à T-178,
+  T-180, T-185). L'interface « Sessions Claude » de la 0.6 est retirée au
+  profit de ces outils (T-179).
+- **Bouton « Copier » sur chaque bloc de code**, avec repli quand le
+  presse-papier refuse au premier clic (T-199, T-214).
+- **Fable 5.2** remplace Fable 5.1 dans le sélecteur (agent SDK 0.3.322). Un
+  fil resté sur un modèle sorti du sélecteur mais encore servi garde son
+  réglage d'effort (T-212, T-213).
+
+### Corrigé
+
+- Un lien web cliqué s'ouvre dans le navigateur du système, et non plus dans
+  la fenêtre d'IAction, d'où on ne pouvait pas revenir (T-184).
+- Un blocage Cloudflare (« 403 Attention Required ») n'est plus présenté comme
+  un défaut d'identifiants, et toute erreur d'API synthétisée par le CLI laisse
+  désormais une ligne dans le journal (T-215).
+- La jauge d'abonnement ne redescend plus dans une même fenêtre quand le point
+  d'usage rend une valeur en retard. L'outil `lire_usage` applique la même
+  protection (T-192).
+- `window.confirm` ne demandait rien : les actions qu'il gardait passent
+  désormais par une vraie confirmation (T-195).
+- Une question d'agent « mise de côté » reste trouvable et survit au
+  changement de projet (T-181) ; une session dont le transcript a été purgé
+  repart sur une nouvelle session au lieu de bloquer l'onglet (T-187).
+- Une page Projets de plus de 30 sessions ne perd plus les plus anciennes au
+  redémarrage (T-151, T-152).
+
+### Outillage
+
+- `npm run verif` refuse un backlog dont le tableau et le corps d'un ticket se
+  contredisent (T-208).
+
 ## [0.6.0] — 2026-09-19
 
 Une cinquantaine de tickets depuis la 0.5.0. Trois fils dominent : **on peut

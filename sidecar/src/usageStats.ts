@@ -22,6 +22,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { errMessage, isNonEmptyString, isPlainObject } from "./base.js";
+import { COMPTE_PAR_DEFAUT, compteConnu, compteDeLigne, compteDemande } from "./compteClaude.js";
 import type { EngineEmitter } from "./engine.js";
 import * as journal from "./journal.js";
 import {
@@ -221,9 +222,11 @@ function normalizeMeta(meta: unknown): {
   routeDebord: boolean | null;
   projectId: string | null;
   projectPath: string | null;
+  compte: string | null;
 } {
   if (!isPlainObject(meta)) {
     return {
+      compte: null,
       source: null,
       conversationId: null,
       routeTier: null,
@@ -232,7 +235,10 @@ function normalizeMeta(meta: unknown): {
       projectPath: null,
     };
   }
+  // T-191 — seul un compte connu et autre que `perso` s'écrit ; le reste vaut `perso` à la lecture.
+  const compte = compteConnu(meta.compte);
   return {
+    compte: compte !== null && compte !== COMPTE_PAR_DEFAUT ? compte : null,
     source: isNonEmptyString(meta.source) ? meta.source : null,
     conversationId: isNonEmptyString(meta.conversationId) ? meta.conversationId : null,
     // S2 — projet auquel imputer le tour : id déclaré (UI, page Projets) et/ou
@@ -257,6 +263,8 @@ export function recordUsageEvent(input: RecordUsageEventInput): void {
     const meta = normalizeMeta(input.meta);
     const event = {
       ts: new Date().toISOString(),
+      // T-191 — écrit seulement hors `perso` (même convention que claude-windows.jsonl).
+      ...(meta.compte !== null ? { compte: meta.compte } : {}),
       engine: input.engine,
       method: input.method,
       providerId: input.providerId ?? null,
@@ -335,6 +343,10 @@ export async function autoDebordCostUsdThisMonth(): Promise<number> {
   let sum = 0;
   for (const ev of events) {
     if (ev.routeDebord !== true) {
+      continue;
+    }
+    // T-191 — le plafond de débord ne compte que le compte principal.
+    if (compteDeLigne(ev) !== COMPTE_PAR_DEFAUT) {
       continue;
     }
     if (typeof ev.costUsd !== "number" || !Number.isFinite(ev.costUsd)) {
@@ -612,7 +624,13 @@ export async function handleUsageStats(
   const fromKey = isValidDateKey(params.from) ? params.from : addDays(toKey, -29);
   const [rangeFrom, rangeTo] = fromKey <= toKey ? [fromKey, toKey] : [toKey, fromKey];
 
-  const events = await readJsonlTolerant(eventsPath());
+  // T-191 — un compte à la fois : `perso` par défaut, un id inconnu est refusé (comme usage.claude.history).
+  const compte = compteDemande(params.compte);
+  if (!compte) {
+    emitter.error(id, `params.compte inconnu : « ${String(params.compte)} »`);
+    return;
+  }
+  const events = (await readJsonlTolerant(eventsPath())).filter((ev) => compteDeLigne(ev) === compte);
   // S2 — index des projets déclarés (config.json) + rattachement des
   // conversations à leur projet (state/project-conversations.json), tous deux
   // en lecture seule.

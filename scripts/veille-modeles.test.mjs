@@ -13,7 +13,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { extraireIdsBinaire, lireIdsListe, nouveautes } from "./veille-modeles.mjs";
+import { extraireIdsBinaire, lireIdsListe, notifier, nouveautes } from "./veille-modeles.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -86,6 +86,64 @@ export const MODELES_ABONNEMENT_CLAUDE: ModeleAbonnement[] = [
   verifier("dans l'ordre du source", ids[0] === "claude-opus-5" && ids[1] === "claude-haiku-4-5");
 }
 
+// ── notifier — T-153 : notification système, jamais fatale, repli journalisé ─
+{
+  const appels = [];
+  const journal = [];
+  const deps = (sur) => ({
+    plateforme: "linux",
+    env: { PATH: "/usr/bin", XDG_RUNTIME_DIR: "/run/user/1000" },
+    uid: 1000,
+    executer: (cmd, args, opts) => {
+      appels.push({ cmd, args, opts });
+      if (sur) throw new Error(sur);
+    },
+    journaliser: (l) => journal.push(l),
+  });
+
+  verifier("Linux : notify-send part", notifier("claude-opus-5-5", deps()) === true && appels[0]?.cmd === "notify-send");
+  verifier("le texte est passé à notify-send", appels[0]?.args.includes("claude-opus-5-5"));
+  verifier(
+    "le bus de session est reconstruit s'il manque",
+    appels[0]?.opts.env.DBUS_SESSION_BUS_ADDRESS === "unix:path=/run/user/1000/bus",
+    JSON.stringify(appels[0]?.opts.env),
+  );
+
+  appels.length = 0;
+  const d = deps();
+  d.env = { DBUS_SESSION_BUS_ADDRESS: "unix:path=/tmp/autre" };
+  notifier("x", d);
+  verifier("un bus déjà posé n'est pas écrasé", appels[0]?.opts.env.DBUS_SESSION_BUS_ADDRESS === "unix:path=/tmp/autre");
+
+  appels.length = 0;
+  journal.length = 0;
+  let leve = null;
+  let retour;
+  try {
+    retour = notifier("claude-opus-5-5", deps("spawn notify-send ENOENT"));
+  } catch (err) {
+    leve = err;
+  }
+  verifier("un échec de notify-send ne lève jamais", leve === null, String(leve));
+  verifier("l'échec rend false", retour === false);
+  verifier(
+    "l'échec est journalisé avec le texte complet",
+    journal.length === 1 && journal[0].includes("ENOENT") && journal[0].includes("claude-opus-5-5"),
+    JSON.stringify(journal),
+  );
+
+  appels.length = 0;
+  journal.length = 0;
+  const w = deps();
+  w.plateforme = "win32";
+  verifier("hors Linux : aucune commande lancée", notifier("claude-opus-5-5", w) === false && appels.length === 0);
+  verifier(
+    "hors Linux : repli journalisé avec le texte",
+    journal.length === 1 && journal[0].includes("win32") && journal[0].includes("claude-opus-5-5"),
+    JSON.stringify(journal),
+  );
+}
+
 // ── le VRAI dépôt : la liste n'est jamais vide ──────────────────────────────
 {
   const chemin = path.join(__dirname, "..", "ui", "src", "modelesAbonnementClaude.ts");
@@ -96,4 +154,5 @@ export const MODELES_ABONNEMENT_CLAUDE: ModeleAbonnement[] = [
 }
 
 console.log(`${reussites} réussite(s), ${echecs} échec(s)`);
+
 if (echecs > 0) process.exitCode = 1;

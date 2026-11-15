@@ -49,6 +49,7 @@ import {
 } from "./tachesClient";
 import { useEffect, useState } from "react";
 import { TacheEditor } from "./orchTacheEditeur";
+import { confirmer } from "./confirmer";
 
 export function formatMsOrDash(ms: number | null): string {
   return ms === null ? "—" : formatReportDate(ms);
@@ -316,9 +317,9 @@ export function TachesSection({
 
   async function handleDelete(tache: TacheInfo) {
     if (
-      !window.confirm(
+      !(await confirmer(
         `Supprimer le manifeste de la tâche « ${tache.name} » ? Son timer systemd est désarmé et supprimé. Le dossier, ses agents/orchestrations et ses rapports sont conservés — seul tache.yaml est supprimé.`,
-      )
+      ))
     )
       return;
     setActionError("");

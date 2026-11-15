@@ -20,8 +20,7 @@ const {
 const { effortValide } = await import(moduleCompile("claudeEffort.js"));
 const { extractModelUsage } = await import(moduleCompile("claudeVentilation.js"));
 const { origineMessage } = await import(moduleCompile("claudeSousAgents.js"));
-// Étape 9 : sessionTitles, commands et usage ont quitté claude.ts.
-const { isFallbackTitle } = await import(moduleCompile("claudeSessionTitles.js"));
+// Étape 9 : commands et usage ont quitté claude.ts.
 const { executerClaudeUsage } = await import(moduleCompile("claudeUsage.js"));
 const { executerClaudeCommands } = await import(moduleCompile("claudeCommands.js"));
 
@@ -116,18 +115,6 @@ async function testSummarizeToolResult() {
   assert(typeof summarizeToolResult(boucle) === "string", "objet circulaire ⇒ pas d'exception");
   console.log("OK: summarizeToolResult — blocs, troncature, circulaire");
 }
-
-async function testIsFallbackTitle() {
-  // Le SDK tronque parfois summary : comparaison par PRÉFIXE, pas égalité.
-  assert(isFallbackTitle("Corrige le bug de", "Corrige le bug de la jauge de contexte") === true,
-    "summary tronqué du premier prompt ⇒ repli");
-  assert(isFallbackTitle("Réparation de la jauge", "Corrige le bug de la jauge") === false,
-    "vrai titre IA ⇒ pas un repli");
-  assert(isFallbackTitle("Corrige", undefined) === false, "sans premier prompt ⇒ jamais un repli");
-  assert(isFallbackTitle("   ", "Corrige") === false, "candidat vide ⇒ pas un repli");
-  console.log("OK: isFallbackTitle — préfixe, pas égalité stricte");
-}
-
 
 async function testExecuterClaudeUsage() {
   // Étape 9 — le dépôt injecté est la SEULE source : pas d'instantané ⇒
@@ -276,7 +263,6 @@ await lancer(
   testExtractModelUsage,
   testDecorateAuthError,
   testSummarizeToolResult,
-  testIsFallbackTitle,
-  testExecuterClaudeUsage,
+    testExecuterClaudeUsage,
   testExecuterClaudeCommands,
 );

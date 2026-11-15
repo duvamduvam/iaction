@@ -14,7 +14,9 @@
         "cacheReadInputTokens": 2
       },
       "contextTokens": 5300,
-      "totalCostUsd": 0.0021
+      "totalCostUsd": 0.0021,
+      "erreurs": [],
+      "sessionPerdue": false
     }
   },
   "attendu": {
@@ -27,6 +29,8 @@
       "cacheReadInputTokens": 2
     },
     "contextTokens": 5300,
-    "totalCostUsd": 0.0021
+    "totalCostUsd": 0.0021,
+    "erreurs": [],
+    "sessionPerdue": false
   }
 }

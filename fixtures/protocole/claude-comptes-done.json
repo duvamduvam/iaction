@@ -1,0 +1,34 @@
+{
+  "quoi": "done de claude.comptes quand le second compte (Claude Teams) a des identifiants valides : la liste que l'interface met dans ses sélecteurs de moteur. Sans second compte, seul « perso » figure dans la liste (l'interface reste celle d'avant). Aucun champ de jeton ne figure jamais ici.",
+  "parseur": "parseComptes",
+  "evenement": {
+    "id": "temoin-comptes-1",
+    "event": "done",
+    "data": {
+      "comptes": [
+        {
+          "id": "perso",
+          "label": "Claude Perso",
+          "connecte": true
+        },
+        {
+          "id": "teams",
+          "label": "Claude Teams",
+          "connecte": true
+        }
+      ]
+    }
+  },
+  "attendu": [
+    {
+      "id": "perso",
+      "label": "Claude Perso",
+      "connecte": true
+    },
+    {
+      "id": "teams",
+      "label": "Claude Teams",
+      "connecte": true
+    }
+  ]
+}

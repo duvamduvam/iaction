@@ -11,6 +11,7 @@
 import { isNonEmptyString } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import type { ClaudeQuery, ClaudeQueryFn, ClaudeQueryOptions } from "./claude.js";
+import { resoudreCompte } from "./compteClaude.js";
 
 // ---------------------------------------------------------------------------
 // claude.commands — session « à vide » (aucun tour joué) pour ne récupérer
@@ -90,12 +91,19 @@ export async function executerClaudeCommands(
     emitter.error(id, "params.cwd manquant ou invalide");
     return;
   }
+  // Même compte, même env que le tour : le menu « / » doit refléter les
+  // skills et commandes du compte qui servira (docs/spec-deux-comptes.md).
+  const compte = resoudreCompte(params.compte);
+  if (!compte.ok) {
+    emitter.error(id, compte.message);
+    return;
+  }
 
   const options: ClaudeQueryOptions = {
     cwd,
     includePartialMessages: false,
     permissionMode: "default",
-    env: { ...process.env, ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}) },
+    env: { ...process.env, ...compte.env, ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}) },
     // Mêmes sources que le moteur projet de claude.start : la liste des
     // commandes doit refléter ce que le tour verra RÉELLEMENT — skills et
     // commandes globaux du poste (~/.claude) compris, sinon le menu « / »

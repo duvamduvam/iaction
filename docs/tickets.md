@@ -38,73 +38,819 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 
 ## Ouverts
 
-| ID    | Type | Prio | Statut | Titre |
-|-------|------|------|--------|-------|
-| T-114 | bug  | P1   | fait   | `search_chat` ne voit plus AUCUNE conversation depuis T-061 : le sidecar lit un monolithe que l'UI a renommé et que plus personne n'écrit |
-| T-115 | bug  | P1   | fait   | Le RAG ne fonctionne pas en pratique : sa mise à jour dépend d'un bouton que l'utilisateur ne clique jamais, faute de savoir quand ni pourquoi — 3 index sur 4 datent d'un mois |
-| T-118 | bug  | P1   | fait   | Windows : l'application ne peut pas joindre l'API Claude — « API Error: Unable to connect to API », app inutilisable sur ce poste |
-| T-116 | tech | P3   | fait   | En session de développement, chaque rechargement HMR bancal finit en « rendu React interrompu : Can't find variable » au niveau `error` — ~80 occurrences en un mois, invisible en version empaquetée |
-| T-102 | bug  | P1   | fait   | Un sous-agent (`Agent`) a tourné 38 min sans UN signe dans le fil ni le journal, le tour s'est clos en « arrêt demandé » sans que l'utilisateur le demande, et le modèle a ensuite affirmé que rien n'avait bloqué |
-| T-101 | feat | P3   | fait   | Les actions discrètes du fil (recherche web, compaction, débordement, voix) ne disent pas À QUELLE HEURE elles ont eu lieu |
-| T-100 | bug  | P3   | fait   | La barre hebdo d'abonnement reste calée sur la semaine ISO (lundi→dimanche), décalée de deux jours du cycle réel `resetsAt` (samedi 20:00) |
-| T-103 | bug  | P2   | fait   | Le garde-fou du port 1420 propose un remède qui ne libère pas le port : Vite survit à l'arrêt de `tauri dev` |
-| T-113 | bug  | P3   | ouvert | Le dernier bloc d'un tour en streaming est recopié dans un objet neuf à chaque rendu : son `memo` ne sert à rien, et son Markdown est reparsé même quand le texte n'a pas bougé |
-| T-111 | bug  | P2   | fait   | `npm run verif` tue la session de développement en cours : la vérification et l'app se disputent le répertoire de compilation |
-| T-112 | bug  | P1   | fait   | L'application peut disparaître sans laisser UNE SEULE ligne dans `app.jsonl` — l'échec le plus muet du projet |
-| T-095 | bug  | P1   | fait   | La frappe traîne toujours (4ᵉ signalement) : la webview tourne en rendu logiciel imposé, et c'est le plafond que T-031 et T-083 ont approché sans pouvoir le franchir |
-| T-086 | bug  | P1   | fait   | Depuis T-062, chaque fenêtre relance les jauges pour son compte : deux fenêtres = deux fois les sondes, dont un VRAI micro-tour Claude sur un abonnement saturé |
-| T-085 | bug  | P2   | fait   | `usage.credits` échoue en boucle sur un certificat qui ne correspond pas — 1 371 lignes `error` en 4 h, et aucune ne dit quel hôte |
-| T-057 | bug  | P2   | fait   | Le journal réel est à 85 % d'erreurs : les jauges périodiques crient en boucle des états nominaux |
-| T-026 | feat | P3   | abandonné | Recherche web : des pages de rubrique au lieu d'articles — un seul constat en cinq semaines, jamais reproduit |
-| T-029 | tech | P2   | en cours | Démarrage long : aucun budget mesuré entre le lancement et la première image |
-| T-056 | bug  | P2   | abandonné | Le process de contenu WebKit plante par intermittence — bibliothèque du SYSTÈME, signature qui se déplace de greffon en greffon, aucune récidive depuis le 2026-08-23 |
-| T-048 | bug  | P2   | fait | Coller une capture fige le composeur ~5 s : ni vignette, ni frappe prise en compte pendant la lecture du presse-papier |
-| T-117 | bug  | P2   | fait   | Badge « Session 5h saturée » ne se réinitialise pas quand la fenêtre expire (compte à rebours ≤ 0) : affichage trompe l'utilisateur sur le statut réel |
-| T-119 | bug  | P2   | fait   | Un DOSSIER cité dans le fil répond « introuvable dans le projet » alors qu'il existe : la résolution ne sonde que des fichiers, et la barre finale vide le nom cherché |
-| T-120 | feat | P2   | fait   | Une conversation ne peut pas se programmer : session saturée, machine libre, heures creuses perdues faute de pouvoir dire « reprends à 3 h » |
-| T-121 | feat | P2   | ouvert | Le réveil ne vaut que l'application ouverte : la reprise programmée devrait continuer « headless » sur le serveur, poste éteint |
-| T-122 | feat | P2   | fait   | Onze onglets ouverts, aucun moyen de retrouver le bon : trois titres commencent par les mêmes mots et la troncature emporte justement ce qui les distingue |
-| T-123 | bug  | P1   | fait   | Le mot-clé d'envoi vocal est inutilisable : « transmets » ressort de la transcription en « très prends ce mail », « transmettre », « je transmets » — quatre tentatives, zéro envoi |
-| T-124 | bug  | P1   | fait   | Repliement spectral à la capture : le ré-échantillonnage 48→16 kHz n'a AUCUN filtre anti-repliement, un 20 kHz arrive intact dans la bande vocale et détruit les consonnes |
-| T-125 | tech | P1   | fait   | Toute la chaîne voix est muette dans le journal : ni segment transcrit, ni verdict du mot-clé, ni issue d'envoi — un échec de dictée est indiagnosticable |
-| T-126 | bug  | P1   | fait   | Le mot-clé d'envoi est bien ENTENDU mais mal orthographié (« Banana », « Benen ») : le matcher comparait des lettres, il compare désormais le squelette consonantique |
-| T-127 | bug  | P1   | fait   | L'application ne compile plus dès que cargo rejoue le build script : `build/sidecar-bundle/`, ressource déclarée dans `tauri.conf.json`, n'existe qu'après un empaquetage — jamais en développement |
-| T-128 | bug  | P1   | abandonné | La source du canal système est figée au démarrage — **dossier valide, mauvais dépôt** : le code visé n'est pas dans IAction, à reprendre dans l'application de captation |
-| T-129 | bug  | P2   | fait   | L'encart GPU disparaît en silence : `nvidia-smi` échoue 12 fois/min sans journalisation |
-| T-130 | bug  | P1   | fait   | « Reprise à heure inconnue » alors que le fil dit « resets 6pm » : le parseur du refus exige des minutes que le SDK omet sur une heure pleine |
-| T-131 | bug  | P2   | fait | Un tour s'est clos en « arrêt demandé » sans que personne ne le demande (2026-08-29) : la cause n'a jamais été élucidée, et le journal de l'époque ne portait pas encore le champ qui l'aurait nommée |
-| T-132 | doc  | P3   | fait   | Les notes de version de la 0.5.0 renvoyaient à des tickets qui ne sont pas les siens — trois références fausses dans un document public, mis en miroir en issues GitHub |
-| T-133 | bug  | P1   | fait   | Un test du réveil dépendait du fuseau de la machine sans le dire : vert sur ce poste (Europe/Paris), rouge sur les runners (UTC) — les DEUX constructions de la 0.6.0 sont tombées dessus |
-| T-134 | bug  | P1   | fait   | Un test exige le mode POSIX 0600 sur le coffre de secrets : Windows ignore les modes et rend 666, la construction NSIS tombait — et au passage, sur Windows le coffre n'a AUCUNE protection par mode |
-| T-135 | bug  | P1   | fait   | `new URL(import.meta.url).pathname` rend « /D:/a/… » sous Windows : la doublure d'un test n'était jamais trouvée, troisième échec d'affilée de la construction NSIS |
-| T-136 | tech | P1   | fait   | La CI ne savait pas dire ce qui avait cassé : « échec sans ligne reconnaissable », parce qu'elle ne garde que 60 lignes — celles du tableau récapitulatif, jamais celles du message |
-| T-137 | bug  | P1   | fait   | `claude.sessionTitles` promet « jamais bloquant » mais attend `listSessions` sans aucune borne : une LENTEUR (et non une panne) laisse la requête sans réponse pour toujours |
-| T-138 | bug  | P1   | fait   | Un test Rust affirmait que le processus courant est vivant — or hors Linux la détection répond « mort » PAR CONCEPTION : le test contredisait le code qu'il gardait |
-| T-139 | tech | P2   | fait   | 32 alertes Dependabot : trois paquets seulement sont LIVRÉS (dont les 8 `high`), et ce sont eux qui comptent — les autres relèvent d'outils ou d'un module optionnel |
-| T-140 | bug  | P1   | fait   | Utilisation hebdomadaire d'abonnement : le regroupement par `resetsAt` brut fabrique une barre par relevé |
-| T-141 | bug  | P2   | fait   | Fenêtre de contexte : un palier unique de 200 k pour tous les modèles de l'abonnement, alors que seul Haiku l'est encore |
-| T-142 | tech | P3   | fait   | Fable 5.1 : le modèle existait au catalogue depuis un moment, mais le CLI embarqué ne le connaissait pas |
-| T-143 | tech | P2   | fait | Opus 5.5 sorti le 2026-09-22, absent de la liste quatre jours plus tard — la liste en dur vieillit en silence, il faut une veille automatique |
-| T-144 | bug  | P1   | fait   | Une capture jointe de 2464 px empoisonne la session dès que l'historique dépasse 20 images : l'API la refuse à chaque tour, sans issue affichée |
-| T-145 | bug  | P2   | fait   | Modale « Question de l'agent » : le `context` joint (un tableau de 14 lignes) est tronqué et illisible — 640 px, préformaté sans retour à la ligne, ascenseur dans l'ascenseur |
-| T-146 | feat | P2   | fait   | Plus de bouton « Nouvelle fenêtre » : relancer IAction ouvre une fenêtre dans l'instance en cours, sur le projet libre le plus utilisé |
-| T-148 | feat | P2   | en cours | Choisir le micro ET la sortie audio (casque) depuis le composeur : le réglage du micro était enfoui dans Configuration › Voix, et la dictée au casque Bluetooth partait sur le micro interne coupé |
-| T-149 | feat | P2   | fait | Voix lente : la transcription et la synthèse n'étaient pas chronométrées dans le journal, impossible de désigner le maillon lent — mesure ajoutée, lecture sur tours réels à faire |
-| T-150 | bug  | P2   | en cours | Mode conversation : les hallucinations COMPOSÉES (« Merci.  Merci.  Sous-titrage… ») passaient le filtre et s'empilaient dans le brouillon plus vite qu'on ne les effaçait |
-| T-151 | bug  | P1   | en cours | Page Projets : au-delà de 30 sessions, les plus anciennes disparaissaient du fichier projet au redémarrage, sans trace ni message — tout l'historique « robot » du projet Didier a été perdu |
-| T-152 | bug  | P3   | ouvert | Page Chat : une conversation au-delà du plafond de 30 reste sur le disque mais n'est plus réécrite — une modification faite dessus (renommage, nouveau message) est perdue au redémarrage |
-| T-153 | tech | P2   | ouvert | Veille modèles : orchestration muette sur API Error, détection non signalée dans l'app, nouveau modèle invisible |
-| T-154 | bug  | P2   | en cours | Ctrl+L (replier les panneaux) sans effet sous Windows |
-| T-155 | bug  | P2   | fait   | Session qui attend des jobs externes : l'agent promet « je reprends automatiquement à leur fin » mais rien ne le réveille, et le plafond de 10 min d'attente des tâches de fond expire sans trace |
-| T-156 | bug  | P2   | fait   | Sélecteur d'effort masqué par la liste du sélecteur de modèle : le champ « Effort » ajouté sous « Modèle » était recouvert par la liste déroulante ouverte, invisible pour l'utilisateur |
-| T-157 | bug  | P2   | fait   | Panneau « Sous-agents en cours » : un sous-agent en arrière-plan affiché terminé (9 ✓ pendant qu'un sous-agent Opus tournait encore), et aucun moyen de voir lequel travaillait |
-| T-158 | bug  | P2   | fait   | Playwright MCP ferme le navigateur à chaque fin de réponse de l'agent : une démarche en cours (paiement en attente de carte) est coupée dès que l'agent rend la main |
-| T-159 | feat | P2   | en cours | Panneau « Sessions Claude » : lister les sessions Claude Code du poste, en reprendre une en copie dans IAction, ouvrir claude.ai/code pour les autres machines |
-| T-160 | bug  | P3   | fait   | Prototype avatar : le serveur statique renvoyait le message d'erreur brut au client (CodeQL) et son confinement par préfixe laissait passer un dossier voisin |
-| T-161 | bug  | P2   | ouvert | Ctrl+L sans effet sous Windows (constat utilisateur) — piste : version installée antérieure au repli des panneaux |
-| T-162 | bug  | P2   | fait   | « Reprendre dans IAction » (Sessions Claude) affiche « Reprise refusée » et ne fait rien tant que la page Projets n'a pas été visitée ; quatre causes fondues en un message |
+| ID    | Type | Prio | Statut    | Titre |
+|-------|------|------|-----------|-------|
+| T-113 | bug  | P3   | ouvert    | Le dernier bloc d'un tour en streaming est recopié dans un objet neuf à chaque rendu : son `memo` ne sert à rien, et son Markdown est reparsé même quand le texte n'a pas bougé |
+| T-029 | tech | P2   | en cours  | Démarrage long : aucun budget mesuré entre le lancement et la première image |
+| T-121 | feat | P2   | ouvert    | Le réveil ne vaut que l'application ouverte : la reprise programmée devrait continuer « headless » sur le serveur, poste éteint |
+| T-148 | feat | P2   | en cours  | Choisir le micro ET la sortie audio (casque) depuis le composeur : le réglage du micro était enfoui dans Configuration › Voix, et la dictée au casque Bluetooth partait sur le micro interne coupé |
+| T-150 | bug  | P2   | en cours  | Mode conversation : les hallucinations COMPOSÉES (« Merci.  Merci.  Sous-titrage… ») passaient le filtre et s'empilaient dans le brouillon plus vite qu'on ne les effaçait |
+| T-151 | bug  | P1   | en cours  | Page Projets : au-delà de 30 sessions, les plus anciennes disparaissaient du fichier projet au redémarrage, sans trace ni message — tout l'historique « robot » du projet Didier a été perdu |
+| T-152 | bug  | P3   | en cours  | Page Chat : une conversation au-delà du plafond de 30 reste sur le disque mais n'est plus réécrite — une modification faite dessus (renommage, nouveau message) est perdue au redémarrage |
+| T-153 | tech | P2   | en cours  | Veille modèles : orchestration muette sur API Error, détection non signalée dans l'app, nouveau modèle invisible |
+| T-154 | bug  | P2   | en cours  | Ctrl+L (replier les panneaux) sans effet sous Windows |
+| T-169 | bug  | P3   | en cours  | En dev, l'interface rechargée à chaud parle à un sidecar resté ancien : « méthode inconnue » au lieu de « relancez l'application » |
+| T-180 | feat | P2   | en cours  | Une session distante par conversation (et paramètre `fil`), créée à la demande sur le relais en mode serveur ; verrou par session distante |
+| T-183 | bug  | P1   | en cours  | Une image glissée pendant le tour et « non vue » repart sans elle au renvoi automatique : le texte « la » part seul, l'avis du composeur promet le contraire, l'agent répond « pas d'image ni de lien » |
+| T-184 | bug  | P2   | en cours  | Un lien web cliqué s'ouvrait DANS la fenêtre d'IAction, sans retour possible : la webview quittait l'application pour le site, sans barre d'adresse ni « précédent » |
+| T-185 | feat | P2   | en cours  | Session distante (poste du bureau) : fenêtre de question quand elle est mal branchée ou attend une validation, et permissions distantes posées à l'utilisateur au lieu d'être refusées d'office |
+| T-186 | bug  | P1   | en cours  | Une fenêtre qui change de projet peut écraser le fichier d'état du projet qu'elle quitte avec les sessions du projet d'arrivée |
+| T-187 | bug  | P1   | en cours  | Reprendre une session dont le transcript a été purgé échoue sans dire pourquoi, et l'onglet reste bloqué |
+| T-189 | feat | P2   | en cours  | Deux comptes Claude (« Claude Perso » / « Claude Teams ») : sélecteur dans le moteur, conso, historique et débord par compte, compte par défaut d'un projet — invisible sans second compte |
+| T-191 | bug  | P3   | en cours  | `events.jsonl` n'a pas de champ `compte` : les coûts et tours d'un tour Teams se mêlent à ceux de `perso` dans `usage.stats` et la page Supervision |
+| T-192 | bug  | P2   | en cours  | Jauge qui redescend dans une même fenêtre : le point d'usage rend parfois une valeur en retard, qui écrasait le relevé |
+| T-193 | bug  | P3   | en cours  | En-têtes pliables du sélecteur de modèle (éditeurs, ex. « anthropic · 12 ») sans le style des en-têtes fixes (« Favoris ») : ni violet, ni majuscules, ni petite taille |
+| T-194 | bug  | P2   | en cours  | Relance d'IAction refusée avec « port 1420 déjà pris » quand le binaire de dev a disparu du disque, alors que la fenêtre vit et que D-Bus répond |
+| T-195 | bug  | P1   | en cours  | `window.confirm` ne demande rien : huit actions gardées s'exécutent sans confirmation |
+| T-196 | bug  | P2   | en cours  | Lancement à froid muet : ~80 s de compilation Rust sans aucun retour visible, et le second appui annonce une fenêtre ouverte qui n'existe pas encore |
+| T-197 | bug  | P2   | en cours  | Noms de discussions inutilisables : le titre IA est écrasé par le début du premier message, la page Chat ne l'utilise pas, et les listes n'ont pas de recherche |
+| T-200 | bug  | P2   | en cours  | Génération du titre de discussion visée sur `claude-haiku-5-5`, id que le CLI embarqué 0.3.292 ne connaît pas : échec probable en silence (`done {titre:null}`), même piège que T-142 |
+| T-201 | bug  | P2   | en cours  | Seuils de la pyramide de délégation (3 et 12 $/M) calés sur des tarifs « mi-2026 » que les tarifs actuels contredisent : un taux mixte de Sonnet 5.5 passe sous 3 $/M, Opus 5.5 sous 12 $/M |
+| T-202 | feat | P2   | en cours  | Un agent ne voit pas la consommation de l'abonnement que l'interface affiche : outil MCP `lire_usage`, appelé à la demande, sans rien injecter dans le prompt |
+| T-203 | bug  | P2   | en cours  | L'encart « SOUS-AGENTS » affiche le modèle déclaré dans le manifeste (`implementeur · sonnet`) alors que l'appel `Agent` demandait `opus` et que le sous-agent tourne en Opus |
+| T-204 | bug  | P2   | en cours  | Taper « /clear » dans le composeur de la page Projets (moteur Claude Perso) ne vide rien : bulle de réponse vide, transcript conservé, même session reprise au tour suivant |
+| T-206 | bug  | P2   | en cours  | Une tâche de fond `Bash` détachée n'apparaît dans aucun encart de la barre droite : la transcription annonce « en attente des rapports de 1 tâche(s) de fond », la barre LLM n'affiche rien |
+| T-207 | feat | P2   | en cours  | L'agent ajuste lui-même son modèle et son effort (outil `changer_modele`, effet immédiat, bandeau Annuler) au lieu de seulement suggérer le changement |
+| T-210 | bug  | P2   | en cours  | L'agent ne bascule jamais de modèle tout seul : `changer_modele` est exposé mais jamais appelé (il signale « Opus suffit » en texte) |
+| T-211 | bug  | P2   | ouvert    | Relais en mode serveur invisible dès qu'aucune session n'est vivante : « pc-bureau-relais » annoncé déconnecté alors qu'il était actif ; une session créée sur le relais garde son ancien mode de permission |
+| T-214 | bug  | P2   | en cours  | Le bouton « Copier » des blocs de code affiche souvent « Échec » au premier clic (le second marche) ; l'erreur est avalée sans trace |
+| T-216 | feat | P2   | en cours  | L'agent programme lui-même le compactage de sa conversation (outil `compacter`, « /compact » en file, avis Annuler) au lieu de demander à l'utilisateur de taper /compact |
+
+### T-217 — CI Windows : garde-fou de source en `\n` sur un fichier extrait en CRLF
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Clos** 2026-11-16 · **Créé** 2026-11-16
+
+**Constat** (2026-11-16, PR de l'instantané 0.7.0) : `construire (windows-latest, nsis)` échoue en 1 min 33 ; annotation : `ui/src/comptesClaude.test.ts:148` « tableau de dépendances de l'autosave introuvable: expected null not to be null ». Vert en local (Linux) et sur la machine Linux de la CI.
+
+**Cause** : le test lit `AgentPage.tsx` et applique un motif multi-lignes écrit en `\n` ; le checkout Windows convertit les fins de ligne en CRLF. Le test vérifiait l'OS, pas le code (piège déjà rencontré).
+
+**Correction** : `lire()` normalise CRLF → LF avant les motifs. **Piste non faite** : un `.gitattributes` (`* text=auto eol=lf`) éviterait la classe entière ; à décider, il change aussi les fichiers `.ps1` extraits sous Windows.
+
+### T-216 — L'agent programme lui-même le compactage de sa conversation
+
+**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-13
+
+**Demande** (David, 2026-11-13) : « Ajoute le compact accessible dans l'outil directement. » L'agent d'un onglet Projets répondait « tu peux lancer /compact, je ne peux pas le faire moi-même ».
+
+**Implémenté** (2026-11-13) :
+- outil `mcp__studio__compacter` (`sidecar/src/compacterOutil.ts`, serveur `studio`), entrée `raison` obligatoire. Il émet le chunk `kind: "compaction_demandee"`, journalise (raison, sessionId) et répond « Compactage programmé : il partira dès la fin de ce tour… ». Auto-autorisé, comme `changer_modele`. Exposé aux tours `interactive` hors chat pur, y compris sous `modeleVerrouille` ;
+- UI : à réception, `/compact` en file pour la conversation du tour, sans doublon (même chemin que le bouton « Compacter » pendant un tour, `ui/src/compactionDemandee.ts`). Avis sur la bulle : « L'agent a demandé un compactage — il partira à la fin du tour · Annuler » ; « Annuler » retire `/compact` de la file. Le bouton n'apparaît que sur la dernière demande, tant que `/compact` attend en file ;
+- protocole : `docs/protocol.md`, témoin `fixtures/protocole/claude-compaction-demandee-chunk.json` (sidecar `temoins.test.js`, UI `protocole.test.ts`) ; tests `sidecar/test/compacterOutil.test.js`, `ui/src/compactionDemandee.test.ts`.
+
+**Tâches de fond** : tant que le sidecar attend les rapports (`background_wait`), le tour reste `streaming` côté UI, donc la file ne part pas. `/compact` part au `done` réel : après les rapports, après « Rendre la main » (`claude.release`) ou à l'expiration du plafond. « Arrêter » vide la file, `/compact` compris. Limite héritée : une conversation en arrière-plan ne vide sa file qu'au retour sur son onglet.
+
+**Vérification** (app ouverte, garde T-111 active) : étapes de `verif` rejouées une à une, toutes à 0 sauf `test -w ui` (1 échec, déjà connu, T-213) ; `cargo test` non joué.
+
+**Reste à faire** : relancer l'app (le sidecar en cours n'a pas l'outil), puis valider en usage réel : l'agent appelle l'outil, l'avis s'affiche, Annuler marche, `/compact` part en fin de tour.
+
+### T-215 — Un blocage Cloudflare (403) est présenté comme un problème de connexion, et n'est pas journalisé
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Clos** 2026-11-16 · **Créé** 2026-11-13
+
+**Constat** (2026-11-13, vers 10:15 UTC) : un tour projet (compte « perso », Opus 5.5) s'arrête sur « Failed to authenticate. API Error: 403 Attention Required! | Cloudflare — connectez-vous via `claude login` ou configurez une clé API dans Fournisseurs ». Dans le quart d'heure suivant, la même erreur coupe deux fois un sous-agent Claude Code sur la même machine (Sonnet 5.5, `authentication_failed`, HTTP 403). Entre deux, `curl` vers l'API répond 401 « x-api-key header is required » (réponse normale sans clé). Blocage intermittent, propre au réseau de la machine, pas à IAction.
+
+**Défaut 1 — conseil faux** : « Attention Required! | Cloudflare » est une page de défi Cloudflare : la requête est bloquée en amont, les identifiants ne sont pas en cause, `claude login` n'y change rien. `sidecar/src/diagnosticErreurClaude.ts` classe le message en famille `authentification` (il contient « Failed to authenticate ») et ajoute le conseil de la l.84. C'est le défaut que T-059 et T-103 combattent : un conseil faux envoie déboguer le mauvais problème.
+
+**Défaut 2 — échec muet** : le journal consolidé ne porte aucune ligne « 403 », « Cloudflare » ou « authenticate » pour ce tour, seulement « compte du tour », « serveurs MCP du tour » et « push déposé ».
+
+**Correctif proposé** :
+1. nouvelle famille `cloudflare` dans `classerErreurClaude`, testée AVANT `authentification` (motifs « Attention Required », « Cloudflare », « cf-ray », « Just a moment »), conseil : « accès bloqué en amont par Cloudflare (réseau, VPN, proxy ou IP partagée jugée suspecte) ; réessayez dans quelques minutes. Vos identifiants ne sont pas en cause. » ;
+2. journaliser toute erreur d'API de fin de tour (statut, extrait du message, famille, compte, modèle, sessionId) ;
+3. à étudier : une seule nouvelle tentative automatique, avec un délai, pour cette famille.
+
+**Correction** (2026-11-16) : 1. famille `cloudflare` dans `classerErreurClaude` (`sidecar/src/diagnosticErreurClaude.ts`), testée après le réseau et AVANT l'authentification, avec le conseil proposé (blocage amont, identifiants hors de cause) ; 2. le chemin muet était le message SYNTHÉTISÉ par le CLI (pas une exception du flux) : `claude.ts` y journalise désormais un `warn` « erreur d'API (message synthétique du CLI) » avec famille, statut HTTP, extrait borné à 300 caractères, compte, modèle et sessionId (`champsErreurApi`). Test : `sidecar/test/diagnosticErreurClaude.test.js` › `testCloudflare`. **Non fait** : 3. la nouvelle tentative automatique, restée « à étudier » — à rouvrir si le blocage revient souvent.
+
+### T-214 — Le bouton « Copier » des blocs de code affiche souvent « Échec » au premier clic
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-13
+
+**Constat** (utilisateur, 2026-11-13) : « le copié-collé déconne souvent, la première fois que je clique ça écrit échec » ; le second clic marche. Cas typique : retour dans IAction après avoir collé une commande ailleurs (PowerShell du poste du bureau).
+
+**Preuve / code** : `ui/src/Markdown.tsx`, `MarkdownPre.copier()` appelle `navigator.clipboard.writeText` et, en cas de rejet, affiche « Échec » SANS rien journaliser (l'erreur est avalée par `catch {}`) : on ne sait pas pourquoi l'écriture est refusée. Même appel dans `ui/src/SystemPage.tsx` (~l.524) et `ui/src/menuReference.tsx` (~l.249).
+
+**Cause** : non vérifiée. Hypothèse : sous WebKitGTK (moteur de Tauri sous Linux), `clipboard.writeText` est refusé quand le document n'a pas encore le focus ; le clic qui ramène la fenêtre au premier plan arrive avant le focus, ou sans « activation utilisateur » valide.
+
+**Correctif proposé** :
+1. journaliser le nom et le message de l'erreur (journal consolidé, scope `ui`) ;
+2. en repli, écrire par le presse-papier natif : une commande Tauri `clipboard_write_text` avec `arboard`, déjà en dépendance (`src-tauri/src/clipboard.rs`). Sous Linux, `arboard` ne garde la sélection que tant que l'objet `Clipboard` vit : il faut l'objet en statique ou un fil avec `SetExtLinux::wait` ;
+3. factoriser les trois appels dans une seule fonction `copierTexte`.
+
+**Précaution** : modifier `src-tauri` pendant que l'app tourne en `tauri dev` la recompile et la relance (constaté le 2026-11-11 à 16:42). Faire ce correctif app fermée.
+
+**Lien** : T-199 (le bouton « Copier »).
+
+**Fait, partie interface** (2026-11-13, app ouverte, rechargement à chaud) : `ui/src/copierTexte.ts` regroupe les trois appels. Si `writeText` est refusé, il essaie `document.execCommand("copy")`, puis attend le focus (400 ms au plus) et réessaie `writeText`. Chaque refus est journalisé (scope `ui`, « copie : … », avec le nom de l'erreur, le message et l'état du focus) : c'est ce journal qui confirmera ou non l'hypothèse. tsc et lint passent ; les tests ui ont un seul échec, déjà connu (T-213). **Reste** : le repli natif `arboard`, seulement si le journal montre que les deux replis ne suffisent pas, et à faire app fermée.
+
+### T-213 — Un fil épinglé sur un modèle Claude sorti du sélecteur (encore servi) perd son effort sans le dire
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Clos** 2026-11-16 · **Créé** 2026-11-11
+
+**Constat** (2026-11-11, en passant à Fable 5.2, T-212) : `effortsPour` (`ui/src/modelesAbonnementClaude.ts`) ne connaît que `MODELES_ABONNEMENT_CLAUDE`. Pour un fil resté sur `claude-fable-5-1` (et, déjà avant, sur `claude-opus-5` ou `claude-sonnet-5`), modèles sortis du sélecteur mais toujours servis, le sélecteur d'effort disparaît et l'effort repart au défaut (`null`) sans le signaler (`ui/src/ChatPage.tsx` ~l.941, `ui/src/envoiProjet.ts` ~l.283).
+
+**Preuve** : `ui/src/changementModele.test.ts` › « Annuler » › « remet modèle ET effort d'avant dans les sélecteurs » attend `"effort": "high"` et reçoit `""`, car son jeu d'essai utilise `claude-fable-5-1`. `npm run test -w ui` : 1 échec sur 1107, donc `npm run verif` n'est pas vert.
+
+**Correctif proposé** : garder les niveaux d'effort des modèles retirés du sélecteur mais encore servis (une petite liste de modèles hérités, ou une règle de famille) ; à défaut, signaler la perte de l'effort à l'utilisateur. Ensuite, recaler les tests qui citent encore `claude-fable-5-1` : `changementModele.test.ts`, et `contextBus.test.ts` (« claude-fable-5-1 l'emporte sur le préfixe » ne vérifie plus ce qu'annonce son titre).
+
+**Lien** : T-212 (marqué « fait » à tort alors que `verif` n'était pas vert à cause de ce test ; repassé « en cours »).
+
+**Correction** (2026-11-16) : `MODELES_HERITES_CLAUDE` (`ui/src/modelesAbonnementClaude.ts`) liste les modèles sortis du sélecteur mais encore servis (`claude-fable-5-1`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`) avec leurs niveaux d'effort ; `effortsPour` les consulte après la liste. Ils ne sont jamais proposés (test). Un fil épinglé dessus garde son sélecteur et son effort. `contextBus.test.ts` vise maintenant `claude-fable-5-2`, entrée exacte de la liste, ce qu'annonce son titre. `changementModele.test.ts` garde `claude-fable-5-1` : il vérifie désormais le cas réel d'un fil hérité.
+
+### T-212 — Fable 5.2 sorti le 2026-11-09 : la liste proposait encore Fable 5.1, plus cher, que le CLI embarqué 0.3.319 ne remplaçait pas
+
+**Type** tech · **Prio** P3 · **Statut** fait · **Clos** 2026-11-16 · **Créé** 2026-11-11
+
+**Rouvert le 2026-11-11** : marqué « fait » alors que `npm run verif` n'est pas vert (`npm run test -w ui` : 1 échec sur 1107, voir « Échec restant » ci-dessous et T-213). Repassé « en cours » ; il se refermera quand T-213 sera corrigé et `verif` au vert.
+
+**Constat** (2026-11-11) : `node scripts/veille-modeles.mjs --sans-notif` signale « NOUVEAU — claude-fable-5-2 (SDK publié 0.3.322, installé 0.3.319) ». Claude Fable 5.2 (`claude-fable-5-2`) est sorti le 2026-11-09 ; Fable 5.1 passe « legacy (still available) ».
+
+**Ce qu'apporte Fable 5.2** (platform.claude.com, models/overview et fable-5-2, consultés le 2026-11-11) : $8 / $40 par Mtok contre $10 / $50 pour Fable 5.1, cache lu $0,20, écriture de cache 5 min $10, 1 h $16 ; contexte 1 M, sortie 128 k ; réflexion adaptative toujours active, efforts low → max, effort par défaut `high`. Fable coûte désormais 2× Opus 5.5 ($4 / $20), et non plus 2,5×.
+
+**Correction** (même pratique que T-142, T-143 et la sortie de `claude-haiku-4-5` le 2026-11-07) :
+- `sidecar/package.json` : `^0.3.319` → `^0.3.322`, `npm install` joué depuis la racine ; `package-lock.json` ne bouge que sur l'agent SDK et ses huit paquets plateforme. Binaire embarqué vérifié : `strings node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude | grep -c claude-fable-5-2` = 26.
+- `ui/src/modelesAbonnementClaude.ts` : `claude-fable-5-1` sort de la liste, `claude-fable-5-2` le remplace ; ligne d'historique dans l'en-tête ; note d'Opus 5.5 « 2,5× moins cher » → « 2× moins cher ».
+- `sidecar/src/changerModele.ts` : copie `MODELES_CHANGEABLES` alignée (comparée par `changementModele.test.ts`).
+- `ui/src/contextBus.ts` (commentaire) et placeholder du formulaire d'agents (`ui/src/orchAgents.tsx`) suivent.
+- Rien d'autre à changer : aucune table de prix par modèle Claude dans le code (la conso vient des relevés du CLI), aucun défaut ni palier de routage sur Fable (T-078), et pas de mécanisme de recalage des réglages enregistrés — un fil ou un agent épinglé sur `claude-fable-5-1` continue de tourner (modèle legacy toujours servi) et garde sa fenêtre de 1 M par le préfixe `claude-fable` de `contextWindowFor`.
+
+**Vérification** : `npm run verif` refusé par la garde T-111 (session de dev lancée à 09:53 sur le port 1420, pendant le travail ; non forcé). Étapes jouées à la main : toutes à 0 (lint, cliquet, casse, bundle, budget, routage, veille:test, audit, tickets, version, ui:typecheck, sidecar:test) **sauf `npm run test -w ui` (code 1, 1 échec sur 1107)** ; `cargo test` non joué (même répertoire de compilation que la session). `node scripts/veille-modeles.mjs --sans-notif` : « RAS — SDK installé 0.3.322, publié 0.3.322, liste à jour ».
+
+**Échec restant, à trancher** : `changementModele.test.ts` › « Annuler › remet modèle ET effort d'avant » attend `{ model: "claude-fable-5-1", effort: "high" }` et reçoit `effort: ""`. Ce n'est pas un défaut du test : `effortsPour` ne connaît que les modèles de la liste. Un modèle qui en sort ne propose donc plus aucun effort. Conséquence réelle, et pas seulement en test : un fil épinglé sur `claude-fable-5-1` perd son sélecteur d'effort, et son effort part à `null` (`ui/src/ChatPage.tsx` l.941, `ui/src/envoiProjet.ts` l.283), c'est-à-dire au défaut, sans le signaler. Même effet, déjà présent, pour `claude-opus-5` et `claude-sonnet-5`. Deux issues possibles, non tranchées : faire connaître à `effortsPour` les efforts des modèles sortis mais encore servis, ou recaler le jeu d'essai du test sur `claude-fable-5-2`.
+
+**Clôture** (2026-11-16) : l'échec restant est levé par T-213 (`effortsPour` connaît les modèles hérités) ; `npm run verif` est vert.
+
+### T-211 — Relais en mode serveur invisible dès qu'aucune session n'est vivante : « pc-bureau-relais » annoncé déconnecté alors qu'il était actif ; une session créée sur le relais garde son ancien mode de permission
+
+**Type** bug · **Prio** P2 · **Statut** ouvert · **Créé** 2026-11-09
+
+**Constat** (2026-11-09, vers 15 h 50, heure de Paris) : le relais en mode serveur `pc-bureau-relais` (environment `env_…`, nommé « <poste>:%USERPROFILE%\iaction-relais:… », état `active`) tournait et était connecté. Les deux sessions qui lui étaient rattachées ont été archivées, dont `session_…`, archivée parce qu'elle avait gardé le mode de permission auto du lancement précédent du relais. `mcp__iaction__session_distante_demander` (session « pc-bureau-relais », fil « test-bypass-2 ») a répondu « Les sessions distantes intitulées « pc-bureau-relais » sont déconnectées. Relancez /remote-control… » alors que le relais était actif.
+
+**Piste lue dans le code (non vérifiée, cause non confirmée)** : `sidecar/src/filsSessionsDistantes.ts`, commentaire d'en-tête : un relais est une session `remote-control-cli` portant un `environment_id`. IAction ne le repère qu'au travers d'une session existante ; sans session non archivée, le relais devient invisible.
+
+**Contournement appliqué** (2026-11-09, manuel, non codé) : création d'une session par `POST /v1/sessions` sur l'`environment_id` (`docs/spec-sessions-claude.md`, § « Sonde « créer une session sur le relais » »). L'outil a ensuite fonctionné : une session neuve a été créée pour le fil `test-bypass-3`, en bypassPermissions.
+
+**Constat lié** : une session créée sur le relais garde le mode de permission en vigueur à sa création. Changer `--permission-mode` et relancer le relais ne s'applique qu'aux sessions créées ensuite.
+
+**Piste de correction** (à noter, non implémentée) : découvrir les relais par `GET /v1/environments?beta=true` (en-tête `anthropic-beta: environments-2025-11-01`), en rapprochant le nom de l'environnement ou une session historique, au lieu de dépendre d'une session vivante.
+
+### T-210 — L'agent ne bascule jamais de modèle tout seul : `changer_modele` est exposé mais jamais appelé
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-08
+
+**Constat** (2026-11-08, session `ea199388`, compte 2, projet Didier) : Fable a écrit « Opus suffit… Pense à rebasculer » au lieu d'appeler l'outil `mcp__studio__changer_modele`. Le journal `~/.config/net.duvam.iaction/logs/app.jsonl` ne contient aucune entrée `changer_modele` ni `model_change`. Le sidecar en cours (`dist-dev`, 09:04) embarque bien `changerModele.js`, et la transcription montre que l'outil est exposé (`sidecar/src/claude.ts` ~l.347, condition `interactive && !modeleVerrouille`, satisfaite depuis `ui/src/envoiProjet.ts` l.287-290).
+
+**Pistes de cause** (non vérifiées, cause non comprise à ce stade) :
+1. Le SDK annonce l'outil comme outil MCP différé : la transcription porte « The following deferred tools are now available via ToolSearch… mcp__studio__changer_modele ». Le modèle ne reçoit que le nom, pas la description qui dit quand l'appeler, et il faudrait un ToolSearch préalable qu'il n'a aucune raison de faire. Probablement vrai aussi pour `mcp__studio__ask_user` (à vérifier).
+2. La consigne globale `~/.claude/CLAUDE.md` (« Choix du modèle ») demande de signaler en une ligne puis de continuer. Le modèle suit cette consigne, et l'instruction système d'IAction (`composerInstructionSysteme`, `sidecar/src/paletteTour.ts` l.118) ne mentionne pas l'outil.
+
+**Lien** : T-207 a livré l'outil `changer_modele` ; ce ticket constate qu'en usage réel il n'est pas appelé.
+
+**Correctifs proposés** (non faits) :
+- Rendre l'outil non différé (option SDK pour charger l'outil d'emblée, ou désactivation du tool search pour le serveur `studio`).
+- Ajouter une ligne dans `composerInstructionSysteme`, seulement quand l'outil est exposé : « quand le modèle n'est pas le bon, appelle `mcp__studio__changer_modele` au lieu de le signaler ».
+- Amender `~/.claude/CLAUDE.md` (« ou bascule-toi toi-même si `changer_modele` est disponible ») : nécessite l'accord de David, car ce fichier sert aussi hors d'IAction.
+
+**Test attendu** : un tour projet doit présenter `changer_modele` et `ask_user` hors de la liste différée.
+
+**Statut** : ouvert, à traiter plus tard. L'app est en cours d'utilisation : ne pas recompiler le sidecar avant d'avoir la main.
+
+**Fait** (2026-11-13, avec T-216) :
+- **Chargement différé** : le serveur `studio` est créé avec `createSdkMcpServer({ name: "studio", tools, alwaysLoad: true })` (`sidecar/src/askUser.ts`). Option documentée dans le SDK installé (0.3.322) : `sdk.d.ts`, `CreateSdkMcpServerOptions.alwaysLoad` : « all tools from this server are always included in the prompt and never deferred behind tool search. Applied via `_meta['anthropic/alwaysLoad']` on each tool. Equivalent to `defer_loading: false` on the API ». Vérifié dans `sdk.mjs` (la clé est posée à l'enregistrement de chaque outil) et dans le binaire CLI embarqué (la clé `anthropic/alwaysLoad` y est lue). Cela couvre `ask_user`, `changer_modele` et `compacter`.
+- **Instruction système** : `composerInstructionSysteme` (`sidecar/src/paletteTour.ts`) ajoute une phrase par outil d'action exposé : appeler `mcp__studio__changer_modele` au lieu de signaler le changement de modèle, et `mcp__studio__compacter` au lieu de demander de taper /compact. Rien n'est annoncé pour un outil absent.
+- Fait depuis (constaté le 2026-11-16) : `~/.claude/CLAUDE.md` dit désormais que, dans IAction, quand `mcp__studio__changer_modele` est disponible, le modèle bascule lui-même au lieu de seulement le signaler. Non vérifié : le faux SDK des tests ne passe pas par le vrai `createSdkMcpServer`, donc `alwaysLoad` n'est pas couvert par un test. Reste le **test attendu** en usage réel, après relance de l'app : `changer_modele` et `ask_user` hors de la liste différée.
+
+### T-209 — `npm run verif` échoue sur le cliquet de taille : six fichiers au-dessus de leur plafond après les correctifs du 2026-11-07/08
+
+**Type** tech · **Prio** P2 · **Statut** fait · **Créé** 2026-11-08
+
+**Constat** (2026-11-08, `npm run verif` lancé par l'implémenteur de T-194/T-196, code 1) : `ui/src/AgentPage.tsx` 2866/2796, `ui/src/ChatPage.tsx` 2698/2624, `ui/src/agentSidebarDroit.tsx` 857 (> 800), `ui/src/envoiProjet.ts` 822 (> 800), `ui/src/sidecar.ts` 1118/1089, `sidecar/src/claude.ts` 1542/1411.
+
+**Cause** : correctifs ajoutés sans extraction (T-204, T-206, T-205) et chantier T-207 en cours, sur une branche déjà chargée (T-189).
+
+**Reste à faire** : extraire selon la méthode des fichiers-dieux, une fois T-207 terminé ; `npm run verif` vert avant tout commit poussé.
+
+**Fait** (2026-11-08) : découpage sans relever aucun plafond. AgentPage 2912→2751, ChatPage 2698→2486, agentSidebarDroit 857→632, envoiProjet 822→794, sidecar.ts 1118→1082, claude.ts 1497→1291. Dix modules extraits (dont `chatPersistance.ts`, `menuSlash.ts`, `claudeTypes.ts`, `claudeMesures.ts`), cinq fichiers de test ajoutés. `npm run verif` : code 0.
+
+### T-207 — L'agent ajuste lui-même son modèle et son effort
+
+**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-08
+
+**Demande** (David, 2026-11-08) : la suggestion « Opus suffit / Fable serait plus adapté » marche ; l'agent doit pouvoir appliquer lui-même le changement de modèle et d'effort. Décisions : dans les deux sens sans validation, effet immédiat (`setModel` / `applyFlagSettings` du SDK), bandeau avec Annuler.
+
+**Spec** : `docs/spec-changement-modele-auto.md`.
+
+**Implémenté** (2026-11-08) : outil `mcp__studio__changer_modele` (`sidecar/src/changerModele.ts`, serveur `studio` unique), chunk `kind: "model_change"`, requête `claude.setModel` pour Annuler en cours de tour, bandeau stocké sur le tour (`ui/src/changementModele.ts`). Si l'effort échoue après le modèle, le modèle d'avant est remis. Tests sidecar et UI verts ; `verif` bloqué par T-209 seulement.
+
+**Écart validé** : outil réservé aux tours interactifs (pas d'orchestration ni de planificateur, où personne ne verrait le bandeau ; le modèle fixé par le manifeste d'un agent n'y serait pas protégé).
+
+**Reste à faire** : validation par David dans l'app (un tour où l'agent change de modèle, bandeau, Annuler pendant et après le tour).
+
+### T-208 — Le backlog peut contredire ses tickets : statut et corps divergent sans que rien ne le signale
+
+**Type** tech · **Prio** P3 · **Statut** fait · **Clos** 2026-11-16 · **Créé** 2026-11-08
+
+**Constat** (2026-11-08, relecture du backlog pendant un ménage) : cinq tickets disaient une chose dans la colonne Statut et une autre dans leur corps, ou un corps périmé par rapport au code. T-190 était « fait » avec « Non traité » dans le corps ; T-159 était « en cours » avec « Retiré par T-179 » ; T-183 décrivait une « correction prévue » déjà présente dans `ui/src/envoiProjet.ts` ; T-154 et T-029 renvoyaient à la 0.6.0 alors que `package.json` est en 0.6.1 ; T-202 n'avait pas de « Reste à faire ».
+
+**Cause** : non établie. Hypothèse non vérifiée : le statut et le corps sont modifiés à des moments différents, sans relecture croisée.
+
+**Ce qui ne le détecte pas** : `npm run tickets:test` contrôle les statuts connus, la présence d'une section détaillée et le vocabulaire type/prio ; le miroir (`scripts/refleter-tickets.mjs`) ne lit que la colonne Statut.
+
+**Piste** : ajouter un contrôle de cohérence entre statut et corps (règles à définir, par exemple « fait » sans « Non traité » ni « Reste à faire » ouvert). Non commencé.
+
+**Correction** (2026-11-16) : `incoherencesStatut` (`scripts/refleter-tickets.mjs`) applique deux règles qui se vérifient sans interpréter la prose : le « **Statut** x » du corps égale la colonne du tableau, et un ticket clos ne finit pas sur un « Non traité » qu'aucun paragraphe de clôture ou de correction ne suit (un historique clos reste légitime). `scripts/refleter-tickets.test.mjs` les teste sur un jeu d'essai et sur le vrai `docs/tickets.md` : un écart casse désormais `npm run verif`. Au jour de la correction : 215 tickets, aucun écart. Hors règle, assumé : un « Reste à faire » périmé dans le corps d'un ticket « en cours » ne se détecte pas mécaniquement.
+
+### T-206 — Une tâche de fond `Bash` détachée n'apparaît dans aucun encart de la barre droite
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-07
+
+**Constat** (2026-11-07, constat de David dans l'application) : la transcription affiche « Tour terminé — en attente des rapports de 1 tâche(s) de fond… : Push robot image; rebuild and push vision image », mais la barre de droite (encart LLM) n'affiche rien.
+
+**Cause** (lecture de code, non vérifiée en exécution) : l'encart ne listait que les sous-agents (`sousAgentsVifs`, blocs `Task`/`Agent`). Une tâche de fond `Bash` détachée n'apparaissait donc nulle part, alors que `turn.backgroundTasks.descriptions` la porte.
+
+**Correctif appliqué** (2026-11-07, non vérifié dans l'application) : `tachesDeFondHorsSousAgents` dans `ui/src/agentTurns.ts` (descriptions vivantes du dernier tour assistant, sous-agents exclus par description) ; rendu « Tâches de fond · N en cours » dans `ui/src/agentSidebarDroit.tsx` ; test ajouté dans `ui/src/agentTurns.test.ts`. Typage OK, vitest `agentTurns` 54/54.
+
+**Reste à faire** : validation visuelle par David (rechargement à chaud). La clôture se fait après cette validation, par David.
+
+### T-205 — L'agent de Projets ne voit pas les outils de l'extension Claude in Chrome
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-11-07
+
+**Constat** (2026-11-07, constat de David, page Projets, moteur Claude Perso) : l'agent affirme n'avoir aucun outil pour piloter Chrome, alors que l'extension Claude in Chrome est installée sur le poste.
+
+**Cause** (vérifiée par lecture du CLI embarqué et de sa configuration) : le CLI n'expose les outils `mcp__claude-in-chrome__*` qu'avec le drapeau `--chrome` (présent dans `--help` du CLI embarqué), ou avec le réglage « activé par défaut » de `/chrome`, absent de la configuration utilisateur. Le sidecar ne passait aucun `extraArgs` au SDK, donc ni l'un ni l'autre.
+
+**Correctif appliqué** (2026-11-07, non vérifié dans l'application) : `sidecar/src/claude.ts`, moteur projet (hors `chatOnly`), `options.extraArgs = { chrome: null }` ; champ `extraArgs` ajouté à `ClaudeQueryOptions`. Décision de David : activation TOUJOURS, risque accepté. Un agent en mode Autonome pilote le vrai Chrome et ses sessions ouvertes ; coût en définitions d'outils à chaque tour. Typage OK, `npm test` du sidecar OK (58 fichiers, 0 échec).
+
+**Validé** par David dans l'application le 2026-11-07 : l'agent du projet Didier a piloté Chrome via les outils `mcp__claude-in-chrome__*`. Clôture sur cette validation.
+
+### T-204 — « /clear » dans le composeur de Projets ne vide pas la conversation
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-07
+
+**Constat** (2026-11-07, constat de David dans l'application, page Projets, moteur Claude Perso) : taper « /clear » dans le composeur et l'envoyer ne vide rien. Une bulle de réponse vide s'affiche, le transcript reste en place, et le tour suivant reprend la même session (jauge de contexte inchangée, 101 k).
+
+**Cause** (lecture de code, non vérifiée en exécution) : le composeur transmet « /clear » tel quel au CLI via le SDK. IAction conserve son transcript et son `sessionId`, et reprend la même session au tour suivant (`resume`). Le vidage côté IAction existe déjà (`clearConversation`, raccourci Ctrl+K) mais n'était pas branché sur « /clear ».
+
+**Correctif appliqué** (2026-11-07, non vérifié dans l'application) : `envoyerDepuisComposeur` dans `ui/src/AgentPage.tsx` intercepte « /clear » (touche Entrée et bouton Envoyer) et appelle `clearConversation` (`sessionId` remis à null, bandeau Annuler).
+
+**Non couvert** : « /clear » passé par la file d'attente ou par l'injection pendant un tour. Refusé pendant un tour, le brouillon reste en place.
+
+**Reste à faire** : validation par David dans l'application (vidage effectif, bandeau Annuler, tour suivant sur une session neuve). La clôture se fait après cette validation, par David.
+
+### T-203 — L'encart SOUS-AGENTS affiche le modèle déclaré, pas le modèle demandé à l'appel
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-07
+
+**Constat** (2026-11-07, capture de David) : dans un projet, l'agent lance l'outil `Agent` avec `subagent_type` « implementeur » et `"model": "opus"` dans l'input. Le sous-agent tourne en Opus, l'override de l'appel primant sur le frontmatter. L'encart « SOUS-AGENTS » de la barre droite affiche pourtant « implementeur · sonnet ».
+
+**Cause** (lecture de code, non vérifiée en exécution) : `modeleSousAgentDeclare` (`ui/src/agentTurns.ts`, vers la ligne 633) ne lit que le `model` déclaré dans le manifeste de l'agent (`.claude/agents/implementeur.md`, `model: sonnet`) et ignore le `model` passé dans l'input de l'appel `Agent`. `SousAgentVu` (`ui/src/agentTurns.ts`, vers la ligne 473) ne porte pas ce champ. L'encart est rendu dans `ui/src/agentSidebarDroit.tsx`, vers la ligne 555.
+
+**Effet** : l'utilisateur voit un modèle faux pour le sous-agent en cours, et ne peut pas savoir si un override de modèle a été appliqué à l'appel.
+
+**Correctif attendu** : extraire `model` de l'input de l'outil `Agent` dans `sousAgentsVifs`, l'ajouter à `SousAgentVu`, et l'afficher en priorité sur le modèle déclaré, avec une distinction visible (infobulle ou libellé : « modèle demandé à l'appel » contre « déclaré »). Test à ajouter.
+
+**Fait** (2026-11-08) : le `model` de l'input de l'appel `Agent` est lu dans `sousAgentsVifs` et porté par `SousAgentVu.modele`. L'encart l'affiche en priorité sur le modèle déclaré ; une infobulle distingue « demandé à l'appel » de « déclaré ». Test ajouté.
+
+**Reste à valider** : vérifier à l'écran un `implementeur` appelé avec `model` opus.
+### T-202 — Un agent ne peut pas lire la consommation de l'abonnement
+
+**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-07
+
+**Constat** (2026-11-07, utilisateur) : dans un tour d'agent du moteur Claude, l'agent répond « je ne vois pas ton usage » alors que l'interface affiche en haut les jauges d'abonnement (Session 54 % · 2 h, Semaine 2 % · 7 j, Fable 0 %).
+
+**Cause** (vérifiée par lecture) : ces jauges viennent de `sidecar/src/claudeUsage.ts` et de l'historique `sidecar/src/fenetresAbonnement.ts`, et ne servent qu'à l'affichage et au routeur de débord. `composerInstructionSysteme` (`sidecar/src/paletteTour.ts`) n'injecte rien de tel, et aucun outil MCP ne l'expose.
+
+**Décision** (utilisateur) : un OUTIL que l'agent appelle quand il en a besoin. Surtout pas d'injection automatique dans le prompt système ni dans les messages : pas de mention de la consommation quand elle ne sert à rien.
+
+**Correctif** : outil `lire_usage` (`mcp__iaction__lire_usage`) dans le serveur MCP in-process `iaction`, logique dans `sidecar/src/outilUsage.ts`. Il lit le dernier relevé de `claude-windows.jsonl` du compte du TOUR (option `compte` transmise par `claude.ts` à `buildKnowledgeMcpServer`) et rend : % de la fenêtre 5 h, % de la fenêtre 7 jours, % des fenêtres propres à un modèle (Fable…), heure de reprise de chacune, et l'ÂGE du relevé (écrit par battement, il peut être vieux). Aucun relevé : texte clair, pas une erreur. Lecture en échec : `isError` et journal.
+
+**Reste à faire** : relancer l'application, puis demander à un agent de lire sa consommation (outil `lire_usage`).
+
+### T-201 — Seuils de la pyramide de délégation calés sur des tarifs périmés
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-07
+
+**Constat** (2026-11-07, relecture de `ui/src/pyramideDelegation.ts`, lignes 50-57) : `SEUIL_MECANIQUE_USD_PAR_M = 3` et `SEUIL_GROS_USD_PAR_M = 12`. Le commentaire affirme que « les deux seuils tombent entre les familles, pas dedans », avec des ordres de grandeur « mi-2026 » (haiku ≈ 1-5 $/M, sonnet ≈ 3-15 $/M, opus/fable ≈ 15-75 $/M).
+
+**Tarifs actuels** (entrée/sortie, $ par million de tokens) : Haiku 5.5 0,10/0,50 · Sonnet 5.5 2/10 · Opus 5.5 4/20 · Fable 5.1 10/50.
+
+**Effet attendu** : un taux mixte de Sonnet 5.5 peut passer sous 3 $/M et être classé « mécanique » ; Opus 5.5 peut passer sous 12 $/M et ne pas être classé « gros ». La pyramide de délégation peut donc mal ranger les tours. Effet non mesuré en exécution.
+
+**Arbitrage** (David, 2026-11-08) : classer par famille de modèle plutôt que par taux.
+
+**Fait** (2026-11-08) : `ui/src/pyramideDelegation.ts` classe par famille : Fable en haut, Opus au milieu, Haiku et Sonnet en bas. Un identifiant rattaché à deux familles n'est pas classé ; un modèle gratuit sans famille est compté comme local.
+
+**Reste à valider** : arbitrer les cibles du skill sobriété (10-20 % haut, 50-60 % milieu…), écrites pour les anciens étages de la pyramide.
+### T-200 — Titre de discussion visant un modèle que le CLI embarqué ne connaît pas
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-07
+
+**Constat** (2026-11-07, sortie de `node scripts/veille-modeles.mjs`) : « NOUVEAU — claude-haiku-5-5 (SDK publié 0.3.319, installé 0.3.292) ».
+
+**Observation par lecture** : `sidecar/src/titreDiscussion.ts:22` pose `MODELE_TITRE = "claude-haiku-5-5"` (code non commité de la branche `deux-comptes`). Le CLI embarqué par l'agent SDK installé (0.3.292) ne connaît pas cet id. Risque : la génération de titre échoue en silence, se rabat sur `done {titre:null}` et journalise la ligne WARN « titre de discussion abandonné ». Aucun échec constaté en exécution à ce jour : cause non vérifiée en exécution.
+
+**Même piège que T-142** : un CLI embarqué qui ignore un id publié dans le SDK.
+
+**Correctif en cours** : passage de `claude-haiku-4-5` à `claude-haiku-5-5` dans `ui/src/modelesAbonnementClaude.ts`, dans le palier trivial du routeur (`sidecar/src/router.ts`, `ui/src/routerAdmin.ts`) et dans le micro-tour de relevé (`sidecar/src/claudeUsage.ts`). Reste à monter `@anthropic-ai/claude-agent-sdk` à 0.3.319 dans `sidecar/package.json` : ce montage n'a pas pu se faire pendant que l'application tournait, `npm install` pendant `tauri dev` tuant le sidecar.
+
+**SDK monté** (2026-11-08, application arrêtée) : `@anthropic-ai/claude-agent-sdk` et son binaire `claude-agent-sdk-linux-x64` en 0.3.319 (`sidecar/package.json`, `package-lock.json`). `npm test` du sidecar : 59 fichiers, 0 échec. Reste : au prochain lancement, vérifier qu'une nouvelle discussion reçoit bien un titre Haiku (pas `titre:null`).
+
+### T-199 — Bouton « Copier » sur les blocs de code
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Créé** 2026-11-06 · **Clos** 2026-11-06
+
+**Constat** (2026-11-06, utilisateur, capture) : pour coller une commande proposée dans une conversation, il faut sélectionner à la main tout le bloc, souvent une longue ligne qui dépasse et défile.
+
+**Réalisé** : `MarkdownPre` (`ui/src/Markdown.tsx`) enveloppe chaque bloc avec un bouton « Copier » toujours visible, sur les pages Projets et Chat et partout où `Markdown` est rendu. Le texte vient du DOM, sans le saut de ligne final. Le bouton confirme « Copié ✓ » ou dit « Échec » pendant 1,5 s. Le bouton est hors du `pre`, qui défile horizontalement.
+
+### T-198 — Fenêtre blanche pendant une refonte rechargée à chaud
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-11-06 · **Clos** 2026-11-06
+
+**Constat** (2026-11-06 vers 17 h 11, capture utilisateur) : fenêtre d'IAction entièrement blanche pendant l'implémentation de T-197.
+
+**Cause** : `tauri dev` tournait et Vite poussait chaque écriture de `ui/src` dans la fenêtre. Le travail a retiré `claudeSessionTitles`, `appliquerTitresIA` et `deriveSessionTitle` de leurs modules avant de migrer `AgentPage.tsx`, qui les référençait encore et ne passait pas les nouvelles propriétés à la section Sessions. `tsc` confirmait ces erreurs à 17:11. Ce n'est pas un défaut du produit : c'est une méthode de travail, sur une application en service.
+
+**Résolu** : `AgentPage.tsx` est redevenu cohérent à 17:12:32. Fichiers d'état relus après coup : 6 projets, 98 sessions, 60 conversations Chat, aucun illisible.
+
+**Règle retenue** : sur `ui/src`, quand l'application tourne, ajouter le nouveau code d'abord et retirer l'ancien en dernier ; tout export reste en place tant qu'un fichier l'utilise.
+
+### T-197 — Noms de discussions inutilisables pour se retrouver dans l'historique
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-06
+
+**Constat** (2026-11-06, utilisateur) : « les noms des discussions et de l'historique sont vraiment pourris, j'ai souvent du mal à m'y retrouver ».
+
+**Mesure sur l'état réel du poste** : Chat, 59 titres sur 60 sont le début de la question, coupé à 40 caractères (« Donne les aticté », « Donne la somme ») ; 1 seul est personnalisé. Projets, 98 sessions : 71 ont un titre IA du CLI qui n'est pas celui du fichier d'état, 22 n'en ont aucun, 4 sont personnalisées, 1 n'a pas d'id serveur.
+
+**Causes** (quatre, indépendantes) :
+
+1. **Le titre IA ne survit pas.** `appliquerTitresIA` le pose en mémoire, mais `buildPersistedSession` (`ui/src/modeleProjet.ts:577`) et les deux synchronisations de `ui/src/AgentPage.tsx` (l. 1014 et 1069) recalculent le titre depuis le premier message dès que `titleCustom` est faux. L'effet qui le repose ne se rejoue que si un `sessionId` change : une session où l'on continue de parler retombe sur le repli jusqu'au prochain chargement (déduit du code, pas observé à l'écran). Effet de bord : le titre est calculé sur les tours CONSERVÉS (`slice(-MAX_PERSISTED_TURNS)`), il peut donc changer quand le premier message sort de la fenêtre.
+2. **La page Chat n'appelle jamais `claude.sessionTitles`.** Et le CLI n'a produit un titre que pour 8 des 57 conversations Chat qui ont un id de session.
+3. **Le titre IA du CLI est parasité par les connaissances injectées.** `envoiProjet.ts:576` préfixe le premier message du bloc de connaissances, et le CLI titre sur ce message : « Documents de connaissances du projet » pour une discussion sur des mails, « Outils MCP disponibles et connaissances projet » pour un compte rendu. 19 titres sur 71 répondent à ce motif (repérage par expression régulière, ordre de grandeur). Le moteur neutre, lui, n'a pas de titre IA du tout.
+4. **Aucune recherche** dans les listes de sessions (Chat, Projets), archives comprises.
+
+**Piste** : un titre généré par IAction lui-même, sur le texte VU par l'utilisateur (`displayContent`) et la première réponse, stocké dans un champ séparé du repli pour qu'aucune sauvegarde ne l'écrase ; champ de recherche sur titre et contenu ; rattrapage unique de l'existant (`titleCustom` jamais touché). Le choix du générateur reste à trancher : aucun modèle génératif local n'est disponible aujourd'hui (seul `ollama-embed` tourne, conteneur `ollama` arrêté).
+
+**Réalisé** (2026-11-06, `docs/spec-titres-discussions.md`) : générateur tranché = Haiku. `titreIA` (champ séparé, règle unique `titreAffiche`) conservé par les sauvegardes Projets et Chat et par les archives ; `claude.titreDiscussion` (`sidecar/src/titreDiscussion.ts`) remplace `claude.sessionTitles`, retirée avec `appliquerTitresIA` et la règle T-063 ; déclenchement à la fin d'un tour Claude réussi (une tentative par session et par lancement, moteur neutre exclu) ; recherche dans les deux listes ; bouton « Nommer les anciennes discussions (N) » (archives comprises côté Projets). Vérifié : lint, types UI et sidecar, tests UI et sidecar (faux SDK). **Non vérifié en réel** : aucun appel à Haiku (le sidecar en service ne connaît pas encore la méthode, un redémarrage est nécessaire), rendu à l'écran de la recherche et du bouton, passage de rattrapage sur les vraies sessions et archives, compte Teams. Le compteur N compte une archive jamais relue comme éligible (surestimation possible jusqu'au passage). Reste à passer à `fait` après essai réel.
+
+**Vérifié en réel** (2026-11-06) : après la relance de 17:13, un premier titre généré par Haiku est arrivé dans `projet-rdpl.json` (« Transcripteur 0.7.0 et 0.8.0 »). Le chemin sidecar, modèle, atterrissage et sauvegarde fonctionne sur le compte perso.
+
+### T-196 — Lancement à froid muet, et second appui qui annonce une fenêtre inexistante
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-06
+
+**Constat** (2026-11-06) : premier lancement après le `rm -rf` de `src-tauri/target` (T-194), par le raccourci clavier. À 08:09:28, `scripts/dev.sh` démarre et cargo recompile les 535 unités : la fenêtre n'apparaît qu'à 08:10:52, soit ~84 s sans aucun signe à l'écran. À 08:09:42, un second appui tombe sur le refus du port 1420 (Vite déjà levé, binaire pas encore lancé) : `notify-send` annonce « bascule sur la fenêtre ouverte » alors qu'aucune fenêtre n'existe. L'utilisateur a conclu que l'application ne se lançait plus. Le lancement a pourtant abouti seul, sans erreur.
+
+**Cause** : `dev.sh` ne notifie rien pendant la compilation, et sa sortie part dans le journal utilisateur, invisible depuis le raccourci. Le refus de T-028 assimile « port 1420 occupé » à « une fenêtre est ouverte », ce qui est faux pendant toute la compilation.
+
+**Piste** : notification au départ (« compilation en cours, ça peut prendre 1 à 2 minutes ») ; dans le refus, distinguer « `tauri dev` tourne mais pas encore le binaire » et dire que le démarrage est en cours. À traiter avec T-194, même branche du script.
+
+**Note** : `iaction.desktop` redirige vers `/tmp/iaction.log`, mais le raccourci clavier passe par gsd-media-keys et ce fichier n'existe pas : il faut lire `journalctl --user`.
+
+**Fait** (2026-11-08) : `scripts/dev.sh` notifie « compilation en cours » au départ ; le refus de port distingue « `tauri dev` tourne mais pas encore le binaire » et dit que le démarrage est en cours.
+
+**Reste à valider** : que David lance réellement le script (second appui application ouverte, à froid, pendant la compilation).
+### T-195 — `window.confirm` ne demande rien : huit actions gardées s'exécutent sans confirmation
+
+**Type** bug · **Prio** P1 · **Statut** en cours · **Créé** 2026-11-05
+
+**Constat** (2026-11-05, entre 18h47:30 et 18h47:45, heure locale, scope `ui`) : quatre erreurs `promesse rejetée non gérée : dialog.confirm not allowed. Command not found`. L'action de l'utilisateur à l'origine de ces appels n'est pas identifiée.
+
+**Impact** (priorité relevée à P1 le 2026-11-08) : les huit actions gardées par `window.confirm` (suppression de projet, de fournisseur, d'agent, d'orchestration, de tâche et de règle d'application ; fermeture ou rechargement d'un fichier modifié) s'exécutaient SANS confirmation. Plus grave que décrit à l'origine : le rejet ne bloquait rien, il laissait passer.
+
+**Cause** (trouvée 2026-11-08) : `tauri-plugin-dialog` injecte un `window.confirm` asynchrone qui appelle une commande `confirm` qui n'existe pas. La promesse renvoyée est toujours vraie : `if (!window.confirm(...)) return` ne retournait donc jamais, et l'action s'exécutait. Capability en place : `dialog:default` dans `src-tauri/capabilities/default.json`. Le « dialog.confirm not allowed » journalisé en est le symptôme.
+
+**Fait** (2026-11-08) : `confirmer()` est async (`ui/src/confirmer.ts`, `ui/src/confirmation.ts`) et passe par `ask()` du plugin. Une erreur de la boîte vaut refus, et ce refus est journalisé. Test qui interdit tout retour de `window.confirm`.
+
+**Reste à valider** : David essaie Non puis Oui sur les cinq familles d'actions.
+
+### T-194 — Relance refusée « port 1420 déjà pris » quand le binaire de dev a disparu
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-05
+
+**Constat** (2026-11-05) : à 18h39, une session Claude d'un autre projet, lors d'un ménage disque, a exécuté `rm -rf` sur `src-tauri/target` alors que l'application IAction tournait. Le processus a survécu (exécutable marqué « deleted »). À 19h02 et 19h03, `scripts/dev.sh` a refusé deux relances avec « Une session de développement écoute déjà sur le port 1420 », alors que le canal D-Bus `net.duvam.iaction.SingleInstance` répondait. La condition `[ -x src-tauri/target/debug/iaction ]` de la branche T-146 (nouvelle fenêtre) étant fausse, le script retombe sur le refus de port, qui ne dit pas que le binaire manque.
+
+**Cause** : non établie dans le détail. Constat : le message accuse le port alors que le fait observé est l'absence du binaire sur disque, et la branche D-Bus n'a pas été prise dans ce cas.
+
+**Contournement** (appliqué le 2026-11-05) : binaire recopié depuis `/proc/<pid>/exe`. Ce n'est pas une correction.
+
+**Piste** : demander la fenêtre via D-Bus sans dépendre du binaire sur disque, ou dire explicitement que le binaire manque. Note : le prochain vrai redémarrage recompilera tout l'arbre Rust.
+
+**Fait** (2026-11-08) : `scripts/dev.sh` relance la fenêtre via D-Bus `ExecuteCallback`, sans exiger le binaire sur disque.
+
+**Reste à valider** : que David lance réellement le script (second appui application ouverte, à froid, pendant la compilation).
+### T-193 — En-têtes pliables du sélecteur de modèle sans le style des en-têtes fixes
+
+**Type** bug · **Prio** P3 · **Statut** en cours · **Créé** 2026-11-05
+
+**Constat** (2026-11-05, capture Chromium lors de la migration des listes déroulantes vers `Deroulant.tsx`) : dans le sélecteur de modèle, les en-têtes de groupe pliables (éditeurs, ex. « anthropic · 12 ») ne sont pas rendus comme l'en-tête non pliable « Favoris ». Ils perdent le violet, les majuscules et la petite taille. Sans rapport avec la migration ; constaté pendant elle.
+
+**Cause** : non établie. Hypothèse non vérifiée : dans `ui/src/App.css`, `.model-picker__entete--pliable` déclare `font-size: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit` sur le même élément que `.model-picker__entete`, ce qui annulerait ses valeurs et ferait hériter celles du `<li>` parent.
+
+**Fait** (2026-11-08) : quatre lignes `inherit` retirées de `.model-picker__entete--pliable` (`ui/src/App.css`).
+
+**Reste à valider** : coup d'œil à l'écran (styles calculés des deux types d'en-tête sur capture). La cause reste une hypothèse tant que ce n'est pas vu.
+
+### T-192 — Jauge d'abonnement qui redescend, comme si le tour n'avait rien consommé
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-05
+
+**Constat** (2026-11-05, capture utilisateur) : après une présentation sur Claude Teams, la jauge « Session » affiche 11 %. `claude-windows.jsonl` montre pourtant 15 → 23 % pendant le tour, puis 11 % au relevé suivant, dans la même fenêtre. Sur les 6 000 derniers relevés du compte principal : 77 baisses d'au moins 2 points sans réinitialisation, dont 55 au passage vers des dates de reset au format `+00:00`. Le défaut précède les deux comptes ; il se voit davantage sur Teams (12 points d'écart).
+
+**Cause** : le point d'usage rend parfois une valeur en retard, et le dernier relevé reçu écrasait le précédent. La raison côté Anthropic n'est pas établie.
+
+**Réalisé** : `appliquerPlancher` (`sidecar/src/claudeUsage.ts`) garde la valeur la plus haute de chaque fenêtre dans le relevé servi. L'historique garde le brut. Le plancher était en mémoire ; il est depuis dérivé de `claude-windows.jsonl` à la lecture (voir Fait).
+
+**Fait** (2026-11-08) : le plancher est dérivé de `claude-windows.jsonl` à la lecture ; il survit au redémarrage et ne traverse pas un reset. Test : `sidecar/test/plancherDebord.test.js`.
+
+**Fait** (2026-11-16) : `readLatestClaudeReleve` (outil `lire_usage`) applique le même plancher dérivé (`pctAvecPlancher`, élargi à toute clé de fenêtre, fenêtres par modèle comprises). Test : `plancherDebord.test.js`, dernier cas.
+
+**Reste à valider** : à l'écran, la jauge ne redescend plus dans une même fenêtre ; ensuite clôture.
+
+### T-191 — `events.jsonl` ne distingue pas les comptes Claude
+
+**Type** bug · **Prio** P3 · **Statut** en cours · **Créé** 2026-11-05
+
+**Constat** (revue adverse de T-189) : seul `claude-windows.jsonl` porte un champ `compte`. Les événements d'usage (`events.jsonl`) n'en ont pas : les tours, tokens et coûts d'un tour Teams s'agrègent avec ceux de `perso` dans `usage.stats`, la page Supervision et le plafond de débord (`autoDebordCostUsdThisMonth`). `scripts/usage-baseline.mjs` filtre désormais les fenêtres sur `perso` mais ne peut rien faire des événements. **Correctif demandé** (demande explicite) : écrire `compte` dans l'événement seulement hors `perso` (même convention que les fenêtres) et filtrer les lectures.
+
+**Fait** (2026-11-08) : `compte` est écrit dans `events.jsonl` hors `perso` (via meta) ; `usage.stats` accepte `compte` (perso par défaut) ; le débord et `scripts/usage-baseline.mjs` filtrent sur `perso`.
+
+**Reste à valider** : le sélecteur Supervision est dans un lot de suite. Les événements Teams antérieurs restent mêlés à `perso` : pas de migration.
+### T-190 — L'audit de publication refuse l'étude « deux comptes » et deux URL existantes
+
+**Type** bug · **Prio** P3 · **Statut** fait · **Clos** 2026-11-16 · **Créé** 2026-11-05
+
+**Constat** (2026-11-05, en vérifiant T-189) : `npm run audit` sort en code 1 avec 6 traces — `docs/etude-deux-comptes.md` lignes 262 (motif local de `scripts/.audit-motifs`) et 277-279 (URL d'hôtes externes), plus `src-tauri/src/garde_navigation.rs:87` et `ui/src/liensExternes.test.ts:13` (URL d'hôte jugée « non attendue »). Aucune n'a été introduite par T-189. **Non traité** : la décision (retirer la trace, ou marquer `audit-publication:ok` si légitime) revient au propriétaire de l'étude.
+
+**Clôture** (2026-11-16) : `npm run audit` sort à 0 (« rien à signaler ») — les six traces ont disparu entre-temps, avec le retrait des traces de la mission du dépôt (commit du 2026-11-11). Rien à décider de plus.
+
+### T-189 — Deux comptes Claude : sélecteur, conso par compte, défaut par projet
+
+**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-05
+
+**Besoin** : utiliser un second compte Claude (abonnement Team, autre organisation) à côté du compte principal, en choisissant à la main lequel sert une session. Cadre et preuve : [etude-deux-comptes.md](etude-deux-comptes.md) (§ 7 bis), contrat : [spec-deux-comptes.md](spec-deux-comptes.md).
+
+**Réalisé** :
+- Sidecar : module unique `compteClaude.ts` (tableau des comptes, env, disponibilité par la seule date `refreshTokenExpiresAt`, jamais un jeton) ; méthode `claude.comptes` ; paramètre `compte` sur `claude.start`, `claude.commands`, `usage.claude`, `usage.claude.init`, `usage.claude.history` ; dépôt d'usage, cadence de la sonde et dédoublonnage de l'historique **par compte** ; champ `compte` dans `claude-windows.jsonl` écrit seulement hors `perso` ; le débord lit explicitement `perso` et ne voit plus jamais une ligne d'un autre compte.
+- Interface : champ `compte` dans `engine` (persisté, absent = pas de choix explicite), deux options « Claude Perso » / « Claude Teams » dans les listes Moteur de la page Projets et du Chat quand `claude.comptes` rend `teams` (sinon « Claude (abonnement) » inchangé), menu « / » du compte du tour, jauges de l'encart qui suivent le compte de la session active (cache disque par compte, nom du compte affiché hors `perso`, mise à jour immédiate au changement d'onglet).
+- Défaut de projet : champ optionnel `compteClaude` dans `ProjectConfig` ; résolution choix explicite → défaut du projet → `perso` ; défaut `teams` indisponible : retour à `perso` avec un journal `warn`. Aucun écran de réglage : le champ s'édite dans la config du poste.
+
+**Après revue adverse (2026-11-05)** : le compte du tour est ce que le sélecteur affiche, sans exception — Auto n'est plus proposé quand le compte effectif n'est pas `perso` (un modèle Auto passe sur le modèle Claude par défaut) ; le choix de compte est posé SUR la session par le geste de l'utilisateur (`avecCompteMoteur` / `avecCompteChat`) et n'est plus recopié depuis l'état d'affichage par une sauvegarde de fin de tour ; une liste de comptes en échec n'est plus « aucun compte » (dernière liste conservée, génération la plus récente fait foi, l'envoi attend) ; défaut `teams` avec compte déconnecté : refus du tour avec la commande, pas de repli (repli sur `perso` seulement sans aucun second compte, avec `warn`) ; `compteClaude` invalide : `warn` et champ ignoré ; une nouvelle session repart du défaut du projet ; changer de compte ne réinitialise plus le modèle ; chaque compte disponible est sondé ; le repère de réouverture du réveil « au reset » est tenu par compte ; cache disque de l'encart partagé entre bouton ↻ et sondes ; `compte` omis du protocole quand il vaut `perso`.
+
+**Restés sur `perso`** (spec) : tâches de fond (planifiées, étapes d'orchestration headless), sessions distantes. Un agent sélectionné dans une session suit le compte de la session. Jamais de bascule automatique ; le débord ne vise jamais l'autre compte.
+
+**À tracer** : la sauvegarde de fin de tour recopie encore `providerId`, `model` et `selectedAgent` depuis l'état d'affichage vers la session ACTIVE (`buildLiveSessions` d'AgentPage et de ChatPage) : même défaut de fermeture périmée que celui corrigé ici pour le compte, antérieur à T-189 et non corrigé. `events.jsonl` sans compte : T-191.
+
+**Non vérifié** : tour réel sur le compte Teams depuis l'application (la preuve P0 a été faite hors IAction), format exact du champ `refreshTokenExpiresAt` du fichier d'identifiants réel (lu par extraction textuelle, ms, secondes ou ISO acceptés), tenue au-delà de 8 jours.
+
+### T-188 — Le skill « Claude in Chrome » se charge alors qu'aucun outil navigateur n'est exposé
+
+**Type** bug · **Prio** P3 · **Statut** fait · **Créé** 2026-11-04 · **Clos** 2026-11-07
+
+**Constat** (2026-11-04, constat utilisateur, projet didier) : à la demande « check via chrome », l'agent charge le skill `anthropic-skills:chrome-browser`, fait trois `ToolSearch` sans rien trouver, puis répond qu'il n'a pas accès à Chrome. Le skill est proposé, ses outils `mcp__claude-in-chrome__*` n'existent pas.
+
+**Cause constatée** : le skill vient du compte claude.ai (via `settingSources: ["user", …]`) et n'est qu'un mode d'emploi. Les outils, eux, exigent trois choses absentes :
+- `sidecar/src/claude.ts` ne passe pas le drapeau CLI `--chrome` (aucun `extraArgs`) ;
+- le poste n'a ni l'extension (aucun profil), ni l'hôte de messagerie native (`NativeMessagingHosts` vide, pas de `~/.claude/chrome`) ;
+- pas de `google-chrome` dans le PATH, seulement Chromium en snap.
+
+**Précision du même jour** : ce qui répond à « via chrome » dans OrgaIA n'est pas Claude in Chrome, mais le serveur MCP `chrome` (Playwright) déclaré dans le `.mcp.json` de ce projet : 25 outils connectés, 647 appels `mcp__chrome__browser*` sur 16 des 70 sessions conservées. Le projet Didier (`python/dadou_robot_ros`) ne déclare pas ce serveur : 0 appel sur ses 20 sessions conservées. Faute d'outil, le mot « chrome » y déclenche le skill de l'extension, qui ne peut pas marcher sur ce poste.
+
+**Mise à jour du 2026-11-04 (soir)** : le projet Didier déclare désormais le serveur `chrome` (commit 315c9e6 de `dadou_robot_ros`), port 9334 et profil distincts d'OrgaIA. Essai direct du relais : `initialize` et `tools/list` répondent, 25 outils, sans ouvrir de fenêtre. Pas encore essayé dans un tour IAction.
+
+**Non vérifié** : que `extraArgs: { chrome: null }` suffise côté SDK, et que l'extension puisse joindre l'hôte natif depuis un Chromium snap (confinement).
+
+**Résolu** (2026-11-07) par T-205 : `options.extraArgs = { chrome: null }` est posé dans `sidecar/src/claude.ts` (moteur projet), et l'agent pilote le vrai Chrome via les outils `mcp__claude-in-chrome__*` (validé par David dans l'application). Le point « Non vérifié » ci-dessus est levé. Piste (a) réalisée ; pistes (b) et (c) sans objet.
+
+**Pistes** : (a) activer Claude in Chrome : installer Chrome et l'extension, puis passer le drapeau ; (b) porter le navigateur persistant Playwright de T-158 au catalogue MCP (`sidecar/src/mcpCatalog.ts`, qui ne propose aujourd'hui aucun navigateur) ; (c) retirer le skill de la palette tant que ses outils manquent, pour que l'agent ne tâtonne pas.
+
+### T-187 — Reprendre une session dont le transcript a été purgé échoue sans dire pourquoi, et l'onglet reste bloqué
+
+**Type** bug · **Prio** P1 · **Statut** en cours · **Créé** 2026-11-04
+
+**Constat** (2026-11-04, 20:15:29 et 20:15:37, projet Krishnamurti, session 06ad533b) : le tour s'achève par « Le tour s'est terminé anormalement (error_during_execution) », suivi de « résultat vide du moteur ». 0 token, environ 450 ms, aucune ligne « serveurs MCP du tour » au journal. Renvoyer le message ne peut pas aboutir, contrairement à ce que dit le bandeau.
+
+**Cause constatée** : le transcript de la session n'existe plus dans `~/.claude/projects/`. Reproduit avec le SDK et un identifiant inexistant : résultat `subtype` `error_during_execution`, `num_turns` 0, en 439 ms, avec `errors: ["No conversation found with session ID: …"]`. Dans `sidecar/src/claude.ts` (cas `result`), `message.errors` n'est jamais lu : la cause réelle est perdue, ni au journal ni dans l'interface.
+
+**Cause de la disparition du transcript** : non confirmée. Hypothèse : purge automatique de Claude Code, probablement la rétention par défaut de 30 jours (`cleanupPeriodDays` non réglé). Indices : les transcripts les plus anciens sont datés des 5 et 6 octobre sur plusieurs projets ; `~/.claude/.last-cleanup` porte la date du jour.
+
+**Ampleur** : sessions enregistrées sans transcript — dadou-zic 2/2, didier 10/29, docteur 2/4, ia-news 2/2, kristnamurthi 4/5, orgaia-fond 4/4, theatre 4/4 (rdpl non significatif, voir T-186). Toute vieille conversation est donc une panne en attente.
+
+**Constat complémentaire — page Chat** (2026-11-04, 22:27:57, 22:30:19 et 22:30:33 UTC, conversation « FILMS », session f32d41c7, modèles Fable puis Opus) : même panne, mais totalement muette. Trois messages, trois bulles vides « 0 + 0 tokens », aucun bandeau. Dans `ui/src/ChatPage.tsx`, la fin de tour Claude lit `d.subtype` uniquement pour repérer `aborted` : un `error_during_execution` y passe pour un succès. Changer de modèle ne débloque rien, le `claudeSessionId` reste en place.
+
+**À faire** :
+- lire et journaliser `errors` ;
+- afficher l'échec dans la page Chat (`subtype` d'erreur et `result` vide), pas seulement dans Agent ;
+- détecter la session perdue, l'expliquer à l'utilisateur et oublier le `sessionId` pour repartir sur une nouvelle session. Arbitrage en attente : reprise automatique avec récapitulatif issu des tours de l'application, ou simple message ;
+- décider de `cleanupPeriodDays`.
+
+**Limites connues** : aucune relance après « Arrêter » (`diagnostiquerResultat`). Page Agent : le bloc « connaissances » injecté au premier tour ne figure pas dans le récapitulatif, la session reprise repart sans ces documents. Reste à valider sur une vraie session purgée, après relance de l'application (le sidecar en cours d'exécution n'a pas ce code).
+
+**Fait (2026-11-04)** : le sidecar lit et journalise `errors` du `result` (champ `erreurs` de la ligne « tour Claude terminé en erreur ») et le `done` porte `erreurs` et `sessionPerdue` (reprise demandée + « No conversation found with session ID »). Pages Chat et Projets : sur `sessionPerdue`, le `sessionId` du runtime est remis à null et le tour est relancé UNE fois sur une nouvelle session, avec un récapitulatif (`ui/src/sessionPerdue.ts`, 40 000 caractères, les messages les plus récents) tiré des messages gardés par l'application ; le message affiché reste l'original, un avis court accompagne la réponse. Page Chat : tout échec Claude sans texte (`error_during_execution`…) s'affiche désormais dans la bulle au lieu d'une bulle vide « 0 + 0 tokens ». `cleanupPeriodDays` réglé à 365 dans les réglages utilisateur, par décision de l'utilisateur. Reste à valider en conditions réelles (reprise d'une vraie session purgée).
+
+### T-186 — Une fenêtre qui change de projet peut écraser le fichier d'état du projet qu'elle quitte avec les sessions du projet d'arrivée
+
+**Type** bug · **Prio** P1 · **Statut** en cours · **Créé** 2026-11-04
+
+*Priorité demandée : P0. La convention ne connaît que P1 comme plus haute priorité, d'où P1 ici.*
+
+**Constat** (2026-11-04, constat utilisateur, sur disque) : `state/projet-rdpl.json` réécrit à 21:14:43 (20:14:43.438Z) avec les 4 sessions du projet Krishnamurti, alors que son `activeId` et son `activeTab` restent ceux de Rdpl (2a2fa50b, absent de la liste) et que ses `openConversationIds` sont ceux de Krishnamurti. Les sessions propres de Rdpl (jusqu'à 30) ont disparu du fichier. Aucune sauvegarde sur disque.
+
+**Journal** (`logs/app.jsonl`) : fenêtre secondaire `main-2` ouverte à 20:14:37 ; lignes « projet attribué » rdpl à 39.476 et 39.818, puis kristnamurthi à 43.082 et 43.089 — deux revendications à 7 ms d'écart.
+
+**Récurrence** : le même doublon apparaît à chaque première bascule d'une fenêtre secondaire (2026-11-01 19:20:13 orgaia→didier ; 2026-11-02 15:50:47 rdpl→orgaia) et une fois sur `main` (2026-11-01 19:27:53). Le défaut a pu frapper avant sans se voir, une autre fenêtre réécrivant ensuite le bon état.
+
+**Cause** : non reproduite, non confirmée. Hypothèse, d'après la signature du fichier : dans `ui/src/AgentPage.tsx`, `selectProject` et la sauvegarde débouncée prennent l'id de projet et `activeSessionId` dans la closure, alors que `buildLiveSessions` et `persistProject` lisent `sessionsRef` et `openConversationIdsRef`, mis à jour de façon synchrone par `loadProjectStateIntoView`. Deux chemins possibles : (a) un second `selectProject` concurrent, repris après l'`await revendiquerProjet`, la garde `id === selectedProjectId` ayant été passée avant l'await ; (b) un minuteur de sauvegarde tiré entre le chargement et le rendu. L'origine du double appel reste à trouver.
+
+**À faire** :
+- sérialiser `selectProject` ;
+- un propriétaire synchrone des refs : `persistProject` vérifie que le projet réellement chargé dans `sessionsRef` est bien celui qu'il écrit ; en cas d'écart, l'écriture est refusée et journalisée ;
+- test de non-régression.
+
+**Récupération** : en cours pour Rdpl. La fenêtre `main`, chargée à 19:35, en garde une copie en mémoire.
+
+**Fait** (2026-11-08) : garde défensif. `ui/src/gardePersistanceProjet.ts` : `persistProject` refuse l'écriture d'un projet qui n'est pas le projet chargé et la journalise (« écriture du projet refusée », `logs/app.jsonl`) ; `selectProject` est sérialisé. La cause reste non reproduite : c'est un garde, pas la correction de l'origine. `ecrireEntreeProjet` n'est pas gardé.
+
+**Reste à valider** : aucune reproduction. Valider à l'usage (bascule d'une fenêtre secondaire de projet) ; toute occurrence de « écriture du projet refusée » dans `logs/app.jsonl` est un signal à consigner ici. `ecrireEntreeProjet` reste à garder.
+### T-185 — Session distante : fenêtre quand le poste du bureau est mal branché ou attend une validation
+
+**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-03
+
+**Demande utilisateur** (2026-11-03) : « un pop up quand je veux utiliser Claude remote, si c'est mal branché sur le poste du bureau et s'il y a une chose à valider sur le poste du bureau ». Jusque-là, l'outil `session_distante_demander` (T-178) rendait une erreur à l'agent (session absente ou déconnectée), envoyait en file sans rien dire vers une session `requires_action`, et refusait d'office toute permission demandée par la session distante.
+
+**Réalisé** : sur les tours INTERACTIFS seulement, claude.ts passe le pont de question d'`ask_user` aux outils « sessions distantes » (`buildKnowledgeMcpServer(cwd, { demanderUtilisateur })`). Aucune nouvelle interface : c'est la fenêtre de question existante, listée dans « En attente de vous ».
+- Session absente ou déconnectée → « « nom » n'est pas joignable », avec la commande à relancer là-bas ; « Réessayer » relit l'état (5 essais au plus), « Abandonner » rend l'erreur à l'agent.
+- Session `worker_status: requires_action` → « « nom » attend une validation sur son poste » ; « Réessayer », « Envoyer quand même » (mise en file, comportement d'origine), « Abandonner ».
+- Permission demandée par la session distante pendant le tour → « « nom » demande à utiliser Outil », commande ou entrée affichée ; « Autoriser » / « Refuser ». Le résultat de l'outil dit ce qui a été accordé ou refusé.
+- Tours headless (orchestration, planificateur) : comportement d'origine inchangé (erreur, refus d'office).
+
+Fichiers : `sidecar/src/outilsSessionsDistantes.ts` (`problemeBranchement`, `questionBranchement`, `questionPermission`), `knowledge.ts`, `claude.ts` (le serveur `iaction` est construit après le pont). Tests : 4 cas ajoutés à `sidecar/test/outilsSessionsDistantes.test.js` (faux pont, faux fetch, faux query).
+
+**Limite connue** : l'appel d'outil MCP reste borné par `MCP_TOOL_TIMEOUT` (10 min sur les tours interactifs). Le temps passé dans les fenêtres compte dans ce délai, en plus du tour distant.
+
+**Non vérifié en réel** : aucun lancement de l'application ni vraie session sur le poste du bureau. À valider : arrêter `remote-control` sur le poste du bureau, faire appeler l'outil par l'agent, vérifier la fenêtre puis « Réessayer » après relance ; déclencher une commande qui demande permission là-bas et l'autoriser depuis IAction.
+
+### T-184 — Un lien web cliqué s'ouvrait DANS la fenêtre d'IAction, sans retour possible
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-10-26
+
+**Constat** (2026-10-26, constat utilisateur) : un clic sur un lien produit (site 123elec) a remplacé l'application par le site, dans la webview, sans barre d'adresse ni bouton « précédent ». Attendu : tout lien part dans le navigateur par défaut du système.
+
+**Cause** (relevée dans le code) : les liens Markdown étaient déjà interceptés (`Markdown.tsx` → `ouvrirLienExterne` → `open_external`), mais pas tous les `<a>`. `ui/src/SourcesWeb.tsx` rendait les sources web en `<a target="_blank">` nu, qui fait naviguer la webview Tauri.
+
+**Correction** : filet global `ui/src/liensExternes.ts`, installé dans `ui/src/main.tsx`. Un écouteur `click`/`auxclick` au niveau du document route tout lien http(s)/mailto vers une autre origine, non déjà pris en charge (`defaultPrevented`), vers `open_external` sans commande (navigateur système). Un échec est tracé au journal. `target="_blank"` retiré de `SourcesWeb.tsx`. Tests : `ui/src/liensExternes.test.ts` (4 tests).
+
+**Limite** : pas de garde côté Rust (`on_navigation`). Une navigation déclenchée autrement que par un clic sur `<a>` reste possible.
+
+**Rechute** (2026-10-26, même soir, constat utilisateur « toujours pareil ») : l'ouverture passait par le menu contextuel NATIF de la webview (« Ouvrir le lien », clic droit), qui navigue sans aucun événement JavaScript — le filet UI ne pouvait pas le voir. Correction complémentaire : `src-tauri/src/garde_navigation.rs`, plugin `on_navigation` posé sur toutes les fenêtres (`main` comprise, déclarée dans `tauri.conf.json`) ; toute navigation http(s)/mailto hors des hôtes de l'application est refusée et confiée à `open_external` sans commande, avec une ligne de journal (hôte seul, jamais l'adresse entière). Tests unitaires Rust dans le module. Non couvert : « Ouvrir le lien dans une nouvelle fenêtre » (gestionnaire `on_new_window` non posé), à vérifier en usage.
+
+**Rechute 2** (2026-11-03, constat utilisateur « encore des pages web qui s'ouvrent dans IAction ») : un aperçu servi par un agent (`http://localhost:8099/…proposition.html`) a remplacé l'application. Cause : la garde tenait TOUT `localhost` / `127.0.0.1`, quel que soit le port, pour l'application. Correction : seules restent internes `tauri.localhost` et l'origine exacte du `devUrl` (schéma + hôte + port, et seulement si `tauri::is_dev()`). `file:` part aussi au navigateur système. Test `un_apercu_local_d_agent_sort_de_l_application`.
+
+**À valider** : en usage réel, clic sur une source web, un lien Markdown et un lien mailto ; vérifier que le navigateur système s'ouvre et que l'application reste en place.
+
+### T-183 — Une image glissée pendant le tour et « non vue » repart sans elle au renvoi automatique
+
+**Type** bug · **Prio** P1 · **Statut** en cours · **Créé** 2026-10-26
+
+**Constat** (2026-10-26, plusieurs fois, constat utilisateur, page Agent) : il colle une capture et envoie « la » pendant que l'agent travaille. Bulle « le tour s'est clos avant que ce message soit vu — renvoyé automatiquement ». L'avis du composeur dit « Pièces jointes restaurées … il repart avec elles au prochain envoi ». Le message « la » repart pourtant SANS l'image, la capture reste dans le tiroir, et l'agent répond « ton message n'a pas d'image ni de lien ».
+
+**Cause relevée dans le code** : `gererPushPerdu` (ui/src/envoiProjet.ts) remet le texte dans `queuedPrompts` et les pièces dans le tiroir. Le renvoi automatique de fin de tour (AgentPage) appelle `handleSend(override)`, dont le chemin file est texte seul. Même défaut quand `claudePush` renvoie false (course avec la fin du tour). L'avis affiché est donc mensonger.
+
+**Défaut annexe** : le chemin push ne vérifie pas `attachmentsPending`, alors que l'envoi normal le fait. Une image encore en encodage peut partir vide.
+
+**Liens** : T-064 (pièces jointes dans claude.push), T-087 (push_perdu).
+
+**Correctif présent** dans `ui/src/envoiProjet.ts` (`piecesARenvoyerRef`, `rangerPiecesARenvoyer`, `reposerPiecesOrphelines`, garde `attachmentsPending`) : les pièces voyagent avec le message remis en file (ref dédiée consommée au renvoi) ; les pièces orphelines reviennent au tiroir si la file est vidée ; le push refuse tant qu'une image est en encodage. Non rejoué dans l'application à ce jour.
+
+**Reste à faire** : validation par David dans l'application (renvoi d'une image pendant un tour, avis du composeur, réponse de l'agent). Le statut passe à « fait » après cette validation, par David.
+
+### T-182 — Fichier rangé via une variable shell : référence introuvable
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-10-24 · **Fait** 2026-10-24
+
+**Constat** (2026-10-24, capture utilisateur, projet OrgaIA) : la puce `<document>.pdf` du fil n'ouvre pas l'application système, au clic droit comme au clic. Le fichier existe bien sous `~/<dossier personnel>/`.
+
+**Cause** : le modèle l'avait rangé par `O=~/Nextcloud/boulot/…/2026-10; mkdir -p "$O"; … "$O/…"`. `jetonsAbsolus` (ui/src/refFichier.ts) ne retenait que les jetons commençant par `/` ou `~/` : ni l'affectation `O=~/…;` ni `"$O"` n'en faisaient partie. Le dossier n'entrait donc pas dans `basesDuFil`, la résolution concluait « introuvable dans le projet » et le menu contextuel n'affichait que ce message, sans aucun item.
+
+**Fait** : une affectation `NOM=valeur` vaut jeton et est mémorisée, `$NOM`/`${NOM}` sont développés dans les jetons suivants (sauf entre guillemets simples), le `;` final est retiré. Deux tests dans `refFichier.test.ts`. Rejoué sur la vraie session : le dossier figure désormais dans les bases.
+
+### T-181 — Question d'agent mise de côté introuvable
+
+**Type** bug · **Prio** P1 · **Statut** fait · **Créé** 2026-10-22 · **Fait** 2026-10-22
+
+**Constat** (2026-10-22, capture utilisateur, projet client) : « j'ai mis une question de côté mais elle n'apparaît pas sur le côté, je ne peux pas la remettre ».
+
+**Causes relevées dans le code** : (1) « Mettre de côté » (PermissionModal.tsx) replie la question en une pastille `position: fixed` en bas à droite (`.question-pastille`, App.css), à l'endroit des boutons « Envoyer » / « Aller en bas » — rien dans le panneau latéral ; l'état « de côté » vit dans le composant. (2) `setPermissionQueue([])` au changement de projet (`selectProject`), au vidage de conversation et à la réinitialisation (AgentPage.tsx) : une question ou permission en attente disparaît de l'interface alors que le tour, côté sidecar, attend toujours sa réponse — plus aucun moyen de répondre, sauf interrompre le tour. Journal du jour : la question de 14 h 53 a été close par « Ignorer la question » (refus porteur du choix partiel « Dates Live : Oui, dates seules »), l'agent l'a reçue comme non répondue.
+
+**À faire** : section « En attente de vous (n) » dans le panneau latéral droit listant les questions et permissions en attente (projet, conversation, titre), toujours visible, clic = rouvrir la modale ; ne plus vider la file au changement de projet ni au vidage (chaque demande garde son projet/conversation, et la modale ne s'ouvre que dans le bon contexte) ; supprimer la pastille fixe au profit de cette section.
+
+**Fait** (2026-10-22) : la file `permissionQueue` n'est plus vidée au changement de projet ni au vidage (`demandesEnAttente.ts`, `useDemandesEnAttente.ts`) ; chaque demande porte `projectId` et `convId` ; la modale ne montre que le projet courant ; sortie de file par le `finally` de fin de tour d'`envoiProjet.ts` (couvre done, erreur, abort et « Tour interrompu ») et par la suppression du projet. Section « En attente de vous (n) » dans le panneau droit (`EnAttenteSection.tsx`, hors `agentSidebarDroit.tsx` qui est au plafond de 800 lignes) ; clic = bascule projet/conversation puis rouvre la modale ; pastille fixe et CSS supprimés. « Ne plus demander » ne s'applique plus qu'aux demandes du même projet (la clé est par projet). **Non vérifié en réel** : le parcours dans l'application lancée (bascule de projet avec un tour en attente, réouverture depuis la section) ; seuls typecheck, lint, tests vitest de la logique pure le couvrent. Limite connue : les choix cochés d'une demande mise de côté sont perdus si une autre demande prend sa place dans la modale.
+
+### T-180 — Une session distante par conversation
+
+**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-10-21
+
+Question utilisateur : « si j'ouvre une autre session IA Studio, le contexte sera partagé, ça va être le bazar ? ». Oui : tous les appels visent la même session « pc-bureau » (contexte mêlé, et deux appels simultanés peuvent lire la réponse l'un de l'autre). À faire : verrou par session distante (immédiat) ; création à la demande d'une session par conversation sur le relais en mode serveur (sonde API dans `docs/spec-sessions-claude.md`, section « créer une session sur le relais ») ; paramètre `fil`. Bloqué tant qu'un relais en mode serveur n'a pas été vu prendre une session créée.
+
+**Constat** (2026-11-08) : aucun environnement « Bridge » sur le compte. Le poste du bureau tourne en `--remote-control` interactif (session `pc-bureau` connectée, dépôt d'un autre projet).
+
+**Fait** (2026-11-08) : rien de livré à cette date. Le verrou par session distante est en cours, dans un lot de suite.
+
+**Déblocage** (2026-11-08) : relais en mode serveur lancé sur le poste du bureau (`claude remote-control --name pc-bureau-relais --permission-mode auto`, dossier dédié `iaction-relais`, environnement « bridge »). Sonde : `POST /v1/sessions` sur cet environnement → `pending`, puis `connected` / `idle` en moins de 5 s (15 s sur un premier relais) ; `POST …/archive` → 200. Un relais en mode serveur PREND donc une session créée par l'API : la création à la demande est faisable.
+
+**Fait** (2026-11-08) : `session_distante_demander` reçoit un paramètre `fil`. Quand la cible est un relais (`remote-control-cli` avec `environment_id`), IAction lui fait créer une session neuve pour la conversation IAction courante (`meta.conversationId`). L'association (conversation, relais, fil → `session_…`) est persistée dans `state/sessions-distantes-fils.json` et réutilisée ; recréée, avec la note « contexte précédent perdu », si la session est archivée, introuvable ou déconnectée. Cible non relais : comportement et verrou inchangés. La liste signale les relais. Archivage à la suppression d'une conversation (`sessionsDistantes.archiverConversation`) et balayage au démarrage (7 jours d'inactivité). Tout échec d'API journalisé. Tests en faux fetch. Spec et protocole à jour. `npm run verif` : code 0. Script Windows du relais (proxy auto, tâche planifiée ouverture de session / réveil / réseau) : `scripts/windows/relais-distant.ps1`, non exécuté à ce jour.
+
+**Reste** : validation en réel (étiquettes et délai d'une session créée, relais relancé, vue par un sous-agent, archivage à la suppression et balayage ; l'archivage sans corps a répondu 200 à la sonde, le code envoie `{}`). Décision prise par défaut : un tour sans `conversationId` (tâche, orchestration) visant un relais est refusé.
+
+**Verrou livré** (2026-11-08) : `outilsSessionsDistantes.ts` sérialise les appels vers une même session (file par id, résolu depuis le titre), sessions différentes en parallèle, libération en `finally` ; 2 tests. Limite : le délai de 15 min d'un appel en file ne court qu'une fois le verrou pris.
+
+**Reste à valider** : le test de création reste bloqué jusqu'à `claude remote-control` (mode serveur) sur le poste du bureau. Sous Windows, `claude` est absent du PATH de PowerShell.
+### T-179 — Retrait de l'interface « Sessions Claude »
+
+**Type** tech · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Décision utilisateur** (2026-10-21) : « enlever la partie Sessions Claude et utiliser uniquement le sous-agent — beaucoup plus simple au niveau de l'historique et du partage de contexte ». Le dialogue avec une machine distante passe par un sous-agent de projet qui utilise les outils MCP de T-178 : ses échanges vivent dans la conversation locale (historique, contexte, revue) sans mécanisme parallèle.
+
+**À retirer** : page « Sessions Claude » et son raccourci (T-159), reprise en copie (T-162), section « Autres machines », « Piloter » et onglets distants (T-165, T-166 côté UI, T-167, T-171, T-172), rapatriement et « Distiller » (T-168), projet d'accueil (T-173), homonymes / bascule (T-175), historique et rapatriement automatique (T-176), revue de la semaine (T-177), et le code sidecar qui ne sert qu'à eux (moteur distant `claudeDistant.ts`, `claude.agents`/`claude.forkSession`, `rapatrierSession.ts`, `identiteDepot.ts`, `transcriptionsLocales.ts`, messages de protocole correspondants). **À garder** : le client `sessionsDistantes.ts` (jeton, liste, curseur T-166, `lireDetailSession` T-174, `creerQueryFnDistant`), les outils MCP de T-178, `consoleVersStderr.ts` (T-170). Les tickets retirés gardent leur statut et leur corps : ils sont la mémoire de ce qui a été appris (notamment les faits d'API) ; chacun reçoit une ligne « Retiré par T-179 ».
+
+### T-178 — Outils MCP « sessions distantes » pour les agents
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+Demande utilisateur : « un agent spécial pour le poste du bureau qui utilise le partage de sessions Claude », visible « sur le côté comme les sous-agents web ». IAction expose des outils MCP génériques ; le projet définit le sous-agent. Spec : `docs/spec-sessions-claude.md`, section T-178.
+
+**Réalisé** : `sidecar/src/outilsSessionsDistantes.ts` (résolution par titre = connectée la plus récente, tour avec `creerQueryFnDistant`, délai 15/30 min, permissions refusées et signalées, ligne d'origine générique, erreurs en `isError` + journal). Branché dans `buildKnowledgeMcpServer` (knowledge.ts) : le serveur `iaction` porte toujours ces deux outils ; `claude.ts` inchangé (`chatOnly` ne monte aucun MCP, donc rien sur les tours de session distante). Pas de rapatriement automatique (changement de cap : l'interface Sessions Claude sera supprimée) ; aucune dépendance à l'UI, à claudeDistant.ts ni à rapatrierSession.ts. Tests : `sidecar/test/outilsSessionsDistantes.test.js` (faux fetch / faux query). **Non vérifié en réel** : appel réel à l'API, outil vu par un vrai sous-agent (`tools` du fichier d'agent), format exact du `result` distant sur une vraie session, annulation d'un tour long.
+
+### T-177 — Revue de la semaine
+
+Retiré par T-179 (2026-10-21).
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+Demande utilisateur : « que ces sessions soient dans l'historique d'IA Studio pour que je puisse passer en revue à la fin de semaine et mettre à jour ma documentation ». Spec : `docs/spec-sessions-claude.md`, section T-175 à T-177.
+
+**Réalisé** : bouton « Revue de la semaine » (`RevueSemaine.tsx`, page Sessions Claude) avec sélecteur de projet (défaut : projet courant de Projets). Il demande au sidecar le dossier des conversations Claude Code (`claude.dossierTranscriptions`, `sidecar/src/transcriptionsLocales.ts` : `$CLAUDE_CONFIG_DIR` ou `~/.claude`, puis `projects/` + chemin du projet dont tout caractère hors `[A-Za-z0-9]` devient `-` ; règle vérifiée sur ce poste avant d'être figée), compose la consigne (`revueSemaine.ts`, période 7 jours, date locale) et ouvre une conversation locale au composeur pré-rempli, non envoyée (`App.tsx` `handleRevueSemaine`, `AgentPageHandle.newSession(brouillon)`). Dossier introuvable : dit à l'écran, la revue ne portera que sur les sessions distantes. Tests : `sidecar/test/transcriptionsLocales.test.js` (codage, Windows `C:\Users\x\proj`, `CLAUDE_CONFIG_DIR`, handler), `ui/src/revueSemaine.test.ts`.
+
+**Non vérifié en réel** : aucun lancement de l'application ; le changement de projet suivi de la création de la conversation (attente de l'affichage du projet puis deux images, `handleRevueSemaine`) n'a pas été vu à l'écran ; le codage du chemin n'est vérifié que sur un chemin Unix de ce poste (Windows : test sur chaînes) ; les noms de plus de 200 caractères (suffixe de hachage de Claude Code) ne sont pas reproduits.
+
+### T-176 — Historique des sessions distantes dans IAction
+
+Retiré par T-179 (2026-10-21).
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+Même demande. La transcription de « Rapatrier » devient l'historique local : rapatriement automatique à chaque tour, affichage dans l'onglet.
+
+**Réalisé** : `useRapatriementAuto.ts` rapatrie à l'ouverture de l'onglet (sauf si fait il y a moins de 20 s) et à la fin de chaque tour distant (le bandeau reçoit `enCours`) ; silencieux s'il réussit, journal `warn` et ligne discrète s'il échoue, jamais bloquant. Le sidecar rend en plus `echanges` (messages utilisateur textuels). `VoletHistorique.tsx` : volet repliable « Historique (n échanges) » qui rend la transcription avec le composant Markdown (fichier lu à l'ouverture du volet, relu après chaque rapatriement ; tronqué à 2 Mo avec renvoi au fichier), à la place de la note « historique antérieur non affiché ». Tests : `rapatrierSession.test.js` (`echanges`), `rapatriement.test.ts`, `sessionsDistantes.test.ts`.
+
+**Non vérifié en réel** : aucun lancement de l'application ni vraie session distante ; le rendu du volet et l'instant du rapatriement après le `result` (le serveur a-t-il déjà persisté le dernier événement ?) n'ont pas été observés ; le rapatriement de fin de tour ne se déclenche que si l'onglet est affiché (un tour fini en arrière-plan est rattrapé à la réouverture) ; aucun test de composant (logique pure testée, hooks non).
+
+### T-175 — Sessions distantes homonymes
+
+Retiré par T-179 (2026-10-21).
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21) : après relance sur l'autre machine, deux « pc-bureau » dans la liste, l'ancienne déconnectée ; l'onglet restait sur l'ancienne (T-174).
+
+**Réalisé** : `sessionsRemplacees` / `homonymeConnecte` (`ui/src/sessionsDistantes.ts`) — une déconnectée est masquée quand une plus récente de même titre ET même dépôt existe (deux sessions sans dépôt sont homonymes, sans titre jamais), case « Afficher les sessions remplacées » et compte des masquées dans la section. `PropositionBascule.tsx` (bandeau de l'onglet distant, vérifié à l'ouverture et à chaque fin de tour) propose « Basculer vers la session connectée du même nom » : l'onglet garde son titre, son `sessionId` devient le nouvel `cse_…` (`AgentPage` : branchement d'une ligne) et `associationSuivante` (`projetAccueil.ts`) reporte l'association de projet mémorisée. Recherche impossible : journal `warn` et ligne dans le bandeau. Tests : `sessionsDistantes.test.ts`, `projetAccueil.test.ts`.
+
+**Non vérifié en réel** : aucun lancement de l'application ; la bascule d'un onglet réel (persistance du nouveau `sessionId`, remontage du bandeau) n'a pas été vue ; la liste des sessions est relue avec les archivées à chaque vérification (un appel REST par ouverture d'onglet distant).
+
+### T-174 — Envoi vers une session distante déconnectée, sans erreur
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21 18 h 08, capture utilisateur « ça ne marche plus ») : deux messages envoyés dans l'onglet « ⇄ pc-bureau » restent sans réponse ni note d'avancement. L'onglet visait l'ANCIENNE session (relancée entre-temps sous le même nom sur l'autre machine) : `connection_status: disconnected`, `worker_status: requires_action`. Les messages sont acceptés par le serveur et mis en file, jamais traités.
+
+**Cause** : `verifierConnectee` lisait `connection_status` à la racine de `GET /v1/code/sessions/{id}`, or l'API renvoie `{ "response_shape": { … } }`. Champ « absent » → rien n'était bloqué. La sonde du matin montrait déjà cette enveloppe ; elle n'avait pas été reportée dans la spec.
+
+**Fait** : `lireDetailSession` (sessionsDistantes.ts) déballe `response_shape` (puis `data` / `session`), utilisé par `verifierConnectee` et le rapatriement ; test sur la forme réelle.
+
+### T-173 — Projet d'accueil d'une session distante
+
+Retiré par T-179 (2026-10-21).
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21, utilisateur) : « quand je veux piloter une session distante, ça va dans un projet au hasard ». L'onglet s'ouvrait dans le projet courant, sinon le premier. Règle agnostique (dépôt git de la session ↔ remotes des projets locaux, puis association mémorisée, puis choix) : `docs/spec-sessions-claude.md`, section « Projet d'accueil ».
+
+**Réalisé** : le sidecar expose `depot` par session (`identiteDepot`, `depotDeConfig`) et `projets.identitesDepot` (`git remote -v` par projet, git absent = projet sans identité, trace `debug`). L'interface applique la règle en trois étapes (`choisirProjetAccueil`), mémorise les associations en `localStorage` (clé `iaction:accueilSessionDistante`, par identifiant ET par titre + dépôt), affiche « → projet » et « changer de projet » dans la ligne, ouvre un sélecteur (case « Se souvenir » cochée) quand le choix n'est pas unique ; « Rapatrier » utilise le même projet d'accueil. Fichiers : `sidecar/src/identiteDepot.ts`, `sessionsDistantes.ts`, `index.ts`, `ui/src/projetAccueil.ts`, `SelecteurProjetAccueil.tsx`, `SessionsDistantesSection.tsx`, `SessionsClaudePage.tsx`, `App.tsx` (branchement seul). Tests : `sidecar/test/identiteDepot.test.js`, `ui/src/projetAccueil.test.ts`. Constat au passage : l'exemple de la spec nommait un vrai projet, ce que l'audit de publication refusait ; remplacé par un nom générique.
+
+**Non vérifié en réel** : aucun lancement de l'application, aucun vrai `git remote -v` ni vraie session distante (faux exécuteur et données génériques) ; le rendu du sélecteur et du lien « changer de projet » n'a pas été vu à l'écran ; les associations sont en `localStorage` (propre à la fenêtre/poste, non synchronisées).
+
+### T-172 — Session distante : mode de permission refusé, à afficher
+
+Retiré par T-179 (2026-10-21).
+
+**Type** feat · **Prio** P3 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+Complément de T-167. `setPermissionMode` refusé par la session distante (cause réelle constatée : « Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions ») ne laissait qu'un `journal.warn` : l'utilisateur voyait une demande de permission à chaque outil sans savoir pourquoi.
+
+**Réalisé** : le refus est relayé en chunk `distant` `{etat:"mode_refuse", mode}` (voir `docs/protocol.md`) ; l'onglet affiche sous la bulle « La session distante refuse le mode <mode> : relancez-la avec --dangerously-skip-permissions (ou choisissez un autre mode). ». Fichiers : `sidecar/src/sessionsDistantes.ts`, `claudeDistant.ts`, `ui/src/protocole.ts`, `sessionsDistantes.ts`, `agentTranscript.tsx`. Tests : `sidecar/test/sessionsDistantes.test.js`, `ui/src/sessionsDistantes.test.ts`.
+
+**Non vérifié en réel** : le texte vient du refus simulé par un faux `query` ; le libellé exact n'a pas été vu à l'écran, et il suggère `--dangerously-skip-permissions` quel que soit le mode refusé.
+
+### T-171 — Session distante : aucune nouvelle pendant le démarrage du tour
+
+Retiré par T-179 (2026-10-21).
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21 15 h 35, capture utilisateur « pas de retour, mais je vois la réponse dans Claude Code ») : historique de la session distante — message envoyé à 15:35:35 (mode Autonome accepté), cinq « Arrêter » à 15:36:04-06 après 29 s sans rien à l'écran, première réponse de la machine distante à 15:36:35, réponse finale à 15:36:54. Les interruptions, arrivées avant que le tour ne démarre là-bas, ont été acquittées (`success`) sans effet ; la réponse a été produite mais l'onglet n'écoutait plus (« Tour interrompu avant la fin… aborted »).
+
+**À faire** : (1) afficher dans l'onglet l'avancement transmis par `onDeliveryUpdate` (« reçu par la machine distante », « en cours de traitement ») et les messages `system/thinking_tokens` (« réfléchit… »), pour que l'attente se voie ; (2) un arrêt demandé avant `DELIVERY_STATUS_PROCESSING` doit le dire (« la machine distante n'a pas encore commencé ; sa réponse pourra arriver quand même — Rapatrier la récupère ») plutôt que « résultat vide du moteur ».
+
+**Réalisé** : (1) `onDeliveryUpdate` (`RECEIVED`, `PROCESSING`) et les messages `system/thinking_tokens` sont relayés en chunk `distant` (`recu` / `traitement` / `reflechit`, une fois chacun, sans recul — voir `docs/protocol.md`) ; l'onglet affiche une note « Reçu par la machine distante… », « En cours de traitement… », « La machine distante réfléchit… » tant que la réponse n'a rien écrit. (2) Un arrêt demandé avant tout signe de démarrage (ni `PROCESSING`, ni `thinking_tokens`, ni message du tour) émet une fois le texte « La machine distante n'avait pas encore commencé ; sa réponse peut arriver quand même — « Rapatrier » la récupérera. », donc plus de « résultat vide du moteur ». Fichiers : `sidecar/src/sessionsDistantes.ts`, `claudeDistant.ts`, `ui/src/protocole.ts`, `sessionsDistantes.ts`, `agentTurns.ts`, `agentTranscript.tsx`, `envoiProjet.ts`, `sidecar.ts` (une entrée de table, taille inchangée). Tests : faux `query` et faux `fetch` (`sidecar/test/sessionsDistantes.test.js`), `ui/src/sessionsDistantes.test.ts`.
+
+**Non vérifié en réel** : aucun appel à l'API réelle ; les valeurs `DELIVERY_STATUS_*` et la forme de `thinking_tokens` viennent du ticket et du client du SDK, pas d'une capture ; la durée réelle avant `PROCESSING` et le rendu des notes dans l'onglet n'ont pas été observés. L'arrêt n'annule rien là-bas : la réponse tardive reste perdue pour l'onglet (« Rapatrier » la récupère).
+
+### T-170 — Traces du client distant sur le canal du protocole
+
+**Type** bug · **Prio** P3 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21, journal de `scripts/dev.sh`) : `[sidecar] ligne stdout non-JSON ignorée … : [BrowserSSETransport] Dropping control_request from source=client`. Le client `@anthropic-ai/claude-agent-sdk/browser` (T-165) écrit par `console.log` sur la sortie standard, qui porte le protocole JSON du sidecar. Aujourd'hui ignoré sans dommage, mais une trace mal tombée pourrait couper un message du protocole.
+
+**Piste** : pendant l'usage du client distant, rediriger `console.log`/`console.info` du sidecar vers le journal (stderr), ou les capter dans `sessionsDistantes.ts`.
+
+**Réalisé** : `sidecar/src/consoleVersStderr.ts`, appelé au démarrage d'`index.ts` : `console.log/info/debug/table/dir/dirxml` écrivent sur stderr pour tout le process ; le protocole écrit par `process.stdout.write` et n'est pas touché. Test : `sidecar/test/consoleVersStderr.test.js` (dont un process réel : stdout ne porte que la ligne JSON). **Non vérifié en réel** : la trace « [BrowserSSETransport] … » n'a pas été revue dans le journal de `scripts/dev.sh` (le sidecar de dev n'est pas reconstruit).
+
+### T-169 — Dev : interface à jour, sidecar ancien, erreur obscure
+
+**Type** bug · **Prio** P3 · **Statut** en cours · **Créé** 2026-10-21
+
+**Constat** (2026-10-21 16 h 55, capture utilisateur) : « Rapatriement impossible : méthode inconnue: claude.sessionDistante.rapatrier ». Le sidecar tournait depuis 12 h 44 (`dist-dev` reconstruit seulement au lancement de `scripts/dev.sh`), l'interface avait reçu le nouveau code par rechargement à chaud. Les correctifs sidecar du jour (T-166, T-167) n'étaient donc pas actifs non plus, sans que rien ne le dise.
+
+**Piste** : à la réception d'une « méthode inconnue », ou en comparant une empreinte de build exposée par le sidecar à celle de l'interface, afficher « le sidecar est plus ancien que l'interface : relancez IAction ». Uniquement utile en dev (le paquet livre les deux ensemble).
+
+**Fait** (2026-11-08) : `data.code: "methode_inconnue"` côté sidecar ; l'interface ajoute « le sidecar est plus ancien que l'interface : relancez IAction » (sur le code ou sur le préfixe du message).
+
+**Tests UI** (2026-11-08) : trois cas dans `ui/src/sidecar.test.ts` (préfixe, code, erreur ordinaire).
+
+**Reste** : comparaison d'empreinte de build sidecar/UI non traitée (facultatif selon le ticket).
+### T-168 — Rapatrier une session distante dans le projet local
+
+Retiré par T-179 (2026-10-21).
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+Demande utilisateur : capitaliser en local, sur un projet, le contexte d'une session distante. Bouton « Rapatrier » (bandeau de l'onglet distant et ligne de la section « Autres machines ») : historique complet de la session (pagination `?cursor=`, garde-fou 50 pages) écrit en Markdown dans `<projet>/.iaction/sessions-distantes/` (dossier auto-ignoré par git, `.gitignore` = `*`), puis « Distiller dans la mémoire » (bandeau) ouvre une conversation locale NEUVE dont le composeur est pré-rempli avec la consigne, non envoyée. Spec : `docs/spec-sessions-claude.md`, section « Rapatrier ».
+
+**Réalisation** : `sidecar/src/rapatrierSession.ts` (message `claude.sessionDistante.rapatrier`, voir `docs/protocol.md`), `ui/src/rapatriement.ts`, `ui/src/BandeauSessionDistante.tsx`. Pré-remplissage : `handleNewSession(brouillon?)` d'AgentPage pose le brouillon dans le runtime de la conversation neuve (même voie que la dictée). Tests : `sidecar/test/rapatrierSession.test.js` (faux `fetch`), `ui/src/rapatriement.test.ts`.
+
+**Non vérifié en réel** : aucun appel à l'API réelle ni lancement de l'application (le rendu du bandeau, le pré-remplissage effectif du composeur et l'ouverture du fichier écrit ne sont couverts que par le typage et les tests de logique) ; lecture du détail de session éventuellement enveloppé (`data` / `session`) tolérée sans avoir été observée ; le bilan du rapatriement affiché dans le bandeau est perdu au changement d'onglet (relancer « Rapatrier » est idempotent) ; « Distiller » n'est proposé que dans le bandeau, pas dans la section « Autres machines ».
+
+### T-167 — Session distante : une demande de permission à chaque outil
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21, capture utilisateur) : dans l'onglet « ⇄ pc-bureau », « des questions à tout bout de champ » (PowerShell, Write…) alors que le mode d'IAction est « Autonome ». Le relais des permissions marche (validées depuis IAction), mais trop de demandes.
+
+**Cause** : `creerQueryFnDistant` ignorait `options.permissionMode` ; la session distante restait dans son mode de lancement (défaut : tout demander).
+
+**Fait** : le mode choisi dans IAction est appliqué à chaque tour par `setPermissionMode` du client distant ; un refus (ex. `bypassPermissions` sur une session lancée sans l'autoriser) est journalisé et le tour continue. Test ajouté. **Non vérifié en réel** à la clôture.
+
+### T-166 — Session distante : chaque envoi reçoit la réponse d'un ancien tour
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21, premier test réel de T-165, capture utilisateur) : dans l'onglet « ⇄ pc-bureau », « liste le dossier courant » puis une seconde demande reçoivent toutes deux « bonjour depuis le poste du bureau », même coût : la réponse de la sonde faite plus tôt.
+
+**Cause** : le curseur de départ du flux était `resume_cursor` de `GET …/events`. Or cette liste va du plus récent au plus ancien et `resume_cursor` désigne le plus ancien de la page (pagination vers le passé) : il valait 1, le flux rejouait tout et le tour se fermait sur l'ancien `result`. L'erreur venait de la spec (sonde mal lue).
+
+**Fait** : `lireCurseur` prend le plus grand `sequence_num` de la page (0 si vide) ; test réécrit sur la vraie forme de la réponse ; spec et protocole corrigés.
+
+### T-165 — Piloter une session distante depuis IAction
+
+Retiré par T-179 (2026-10-21).
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21 (vérifié en réel par l'utilisateur après T-166 : poste maison → session Remote Control du poste du bureau)
+
+Lister les sessions Remote Control du compte (`GET /v1/code/sessions`) et en piloter une dans un onglet d'IAction, via le client `query({ sse })` de `@anthropic-ai/claude-agent-sdk/browser` branché comme `queryFn` du moteur. Aller-retour vérifié par sonde le 2026-10-21 (poste maison → poste du bureau). Spec : `docs/spec-sessions-claude.md`, section v0.7.0.
+
+**Avancement** (2026-10-21) : code et tests faux-`fetch`/faux-`query` livrés (second moteur par session distante, `sidecar/src/claudeDistant.ts` et `sessionsDistantes.ts` ; section « Autres machines » du panneau). **Non vérifié sans réseau réel** : forme exacte de la liste (`updated_at`, valeur `archived`), tour réel depuis l'application, permission distante de bout en bout, jeton Windows. Reste ouvert : historique antérieur (non rejoué, voir `docs/protocol.md`), session distante déjà en plein tour.
+
+### T-164 — `node_modules` vidé sur le poste de dev : plus aucun tour Claude
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21 vers 11 h 50, capture utilisateur, IAction en dev) : un envoi dans une conversation reprise (T-159) échoue en « Native CLI binary for linux-x64 not found. Reinstall @anthropic-ai/claude-agent-sdk without --omit=optional, or set options.pathToClaudeCodeExecutable. » Vérification : `node_modules/` ne contenait plus AUCUN paquet, seulement `.package-lock.json`, daté de 11 h 24.
+
+**Cause probable** (non prouvée, le journal npm a tourné depuis) : un `npm ci` lancé par une session d'agent pendant le diagnostic CI de la v0.6.1. `npm ci` efface `node_modules` avant d'installer ; interrompu (réseau instable ce jour-là, cf. T-163), il laisse le dossier vide. Ce n'est pas un défaut de la v0.6.1 : le paquet natif `@anthropic-ai/claude-agent-sdk-linux-x64` est bien dans le verrou.
+
+**Fait** : `npm ci` relancé à 11 h 56, 344 paquets, binaire natif présent. **Leçon** : ne jamais lancer `npm ci` sur le poste pendant que l'app tourne en dev ; pour reproduire la CI, utiliser un clone jetable.
+
+### T-163 — CI : délai réseau pendant `npm install` sur la machine Linux
+
+**Type** bug · **Prio** P3 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
+
+**Constat** (2026-10-21, PR #40, job « construire (ubuntu-latest, appimage) », étape « Dépendances npm », 1 min 38) : `npm error connect ETIMEDOUT` (IPv4) puis `ENETUNREACH` (IPv6) vers le registre. La construction Windows du même run est passée. Panne réseau de la machine GitHub, pas du code.
+
+**Fait** : job relancé (`gh run rerun <id> --failed`). Condition de réouverture : si ça se répète, ajouter une nouvelle tentative à l'étape npm de `version.yml`. À noter : `gh run view <id> --log-failed` lit désormais les journaux de run.
 
 ### T-162 — Reprise de session Claude refusée à tort
+
+Retiré par T-179 (2026-10-21).
 
 **Type** bug · **Prio** P2 · **Statut** fait · **Créé** 2026-10-21 · **Fait** 2026-10-21
 
@@ -116,7 +862,9 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 
 ### T-161 — Ctrl+L sans effet sous Windows
 
-**Type** bug · **Prio** P2 · **Statut** ouvert · **Créé** 2026-10-20
+**Type** bug · **Prio** P2 · **Statut** abandonné · **Créé** 2026-10-20 · **Clos** 2026-11-08
+
+**Abandonné** (2026-11-08) : doublon de T-154 — même constat (Ctrl+L sans effet sous Windows), même cause : la v0.5.0, installée sous Windows, ne connaît pas le repli des panneaux. Le suivi et le diagnostic sont dans T-154. **Condition de réouverture** : T-154 clos sans que Ctrl+L replie les panneaux sous Windows dans une version publiée.
 
 **Constat** (2026-10-20, utilisateur) : « le Ctrl+L ne fonctionne pas sur Windows ».
 
@@ -132,7 +880,9 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 
 ### T-159 — Panneau « Sessions Claude »
 
-**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-10-20
+**Type** feat · **Prio** P2 · **Statut** abandonné · **Créé** 2026-10-20 · **Clos** 2026-10-21
+
+**Abandonné** : retiré par T-179 (2026-10-21). L'interface « Sessions Claude » n'existe plus ; seuls le sous-agent et les outils MCP (T-178) restent. **Condition de réouverture** : une demande explicite de réintroduire une page de sessions Claude. La spec `docs/spec-sessions-claude.md` reste la référence si elle revient.
 
 Faire communiquer les sessions Claude sans relais maison : lister les sessions du poste (`claude agents --json`), reprendre l'une d'elles dans IAction en copie (`resume` + `forkSession`), et ouvrir claude.ai/code pour piloter les sessions des autres machines (Remote Control). Spec : `docs/spec-sessions-claude.md`.
 
@@ -232,15 +982,18 @@ surcharge `IACTION_BACKGROUND_WAIT_TIMEOUT_MS` suffit tant que 30 min tient.
 
 ### T-152 — Chat : une conversation hors plafond n'est plus sauvegardée
 
-**Type** bug · **Prio** P3 · **Statut** ouvert · **Créé** 2026-10-05
+**Type** bug · **Prio** P3 · **Statut** en cours · **Créé** 2026-10-05
 
 **Constat** (2026-10-05, lecture du code pendant T-151, non reproduit à l'écran) : la page Chat a le même plafond de 30 (`MAX_CHAT_SESSIONS`, `ui/src/ChatPage.tsx`) mais un fichier par conversation. `sauverChat` n'écrit que les 30 conversations retenues et ne supprime aucun `chatconv-*` ; `chargerChat` relit TOUS les fichiers du disque et rien ne plafonne au chargement. Les conversations hors plafond ne sont donc pas perdues — elles reviennent au redémarrage, telles qu'à leur dernière écriture — mais ce qu'on y change tant qu'elles sont hors plafond (renommage, nouveau message) n'est plus écrit, donc perdu au redémarrage. Le plafond ne borne par ailleurs plus rien : 52 fichiers `chatconv-*` relevés ce jour pour un plafond de 30.
 
 **Piste** : avec un fichier par conversation, le plafond n'a plus de raison d'être à l'écriture — soit le retirer, soit reprendre l'archivage de T-151.
 
+**Fait** (2026-11-08) : archivage du Chat au-delà de 30 : `ui/src/archivesChat.ts`, `ui/src/useArchivesChat.ts`, composant `ui/src/ArchivesGroupe.tsx` partagé. Plus aucune conversation abandonnée ; un échec de sauvegarde du Chat est journalisé.
+
+**Reste à valider** : validation à l'écran. Au premier lancement, environ 22 conversations seront archivées d'un coup. Les archives du Chat restent hors de « Nommer les anciennes discussions ». Pas de reconstruction d'index.
 ### T-153 — Veille modèles : orchestration muette sur API Error, détection non signalée
 
-**Type** tech · **Prio** P2 · **Statut** ouvert · **Créé** 2026-10-06
+**Type** tech · **Prio** P2 · **Statut** en cours · **Créé** 2026-10-06
 
 **Constat** (2026-10-06, ~/.config/net.duvam.iaction/taches/veille-modeles/rapports/, journal.log et rapports datés) :
 
@@ -263,7 +1016,9 @@ Dans journal.log, chaque étape en erreur est consignée « OK étape "veille" t
 
 3. **Rattacher au T-143** : celui-ci porte la racine (liste de modèles vieillit en silence) ; ce ticket documente le dysfonctionnement du processus de veille.
 
+**Fait** (2026-11-08) : volet 1 : `sidecar/src/issueEtape.ts`, une sortie commençant par « API Error: » est un échec. Volet 2, décision de David : notification système `notify-send` depuis `scripts/veille-modeles.mjs`, jamais fatale, bus de session reconstruit si absent, repli sur stderr.
 
+**Reste à valider** : vérifier que la notification arrive depuis la tâche planifiée.
 ### T-154 — Ctrl+L (replier les panneaux) sans effet sous Windows
 
 **Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-10-09
@@ -285,7 +1040,7 @@ Dans journal.log, chaque étape en erreur est consignée « OK étape "veille" t
 
 **Information manquante pour avancer** : version IAction installée sur le PC Windows, page où la touche a été essayée, et résultat de Ctrl+P / Ctrl+H / Ctrl+Maj+L au même moment.
 
-**Cause trouvée le 2026-10-09** : diagnostic en lecture seule exécuté sur le poste Windows « Région » le 2026-10-09, app en cours (démarrée 09:17, session utilisateur ouverte).
+**Cause trouvée le 2026-10-09** : diagnostic en lecture seule exécuté sur le poste Windows du bureau le 2026-10-09, app en cours (démarrée 09:17, session utilisateur ouverte).
 
 | relevé | valeur |
 |---|---|
@@ -298,7 +1053,7 @@ Dans journal.log, chaque étape en erreur est consignée « OK étape "veille" t
 
 **Hypothèse n°1 confirmée** : sous Windows, Ctrl+L fait exactement ce que fait la v0.5.0, et « ne fonctionne pas » signifie « ne replie pas les panneaux ». Aucun défaut de code ni de WebView2 ; les hypothèses 2 à 4 n'ont pas eu à être testées (un essai de frappe automatisée via le poste distant a été abandonné : le job dépassait le délai du worker).
 
-**Reste à faire** : publier la v0.6.0 (étiquette `v0.6.0` → CI → installeur NSIS) et l'installer sur le poste Windows ; vérifier ensuite Ctrl+L à l'écran.
+**Reste à faire** : publier la 0.6.1 (étiquette `v0.6.1` → CI → installeur NSIS) et l'installer sur le poste Windows ; vérifier ensuite Ctrl+L à l'écran.
 
 **Leçon à noter** : l'écart entre `master` et la dernière version publiée n'est signalé nulle part — un constat utilisateur sur Windows doit commencer par comparer la version installée à la version publiée ET à celle de `master`.
 ### T-151 — Les sessions au-delà de 30 disparaissaient en silence du fichier projet
@@ -1772,8 +2527,8 @@ cause est locale au poste (réseau, antivirus, CLI non connecté), le ticket dev
 l'APP aurait dû afficher de mieux qu'une erreur brute de CLI : c'est le volet qui nous
 appartient quelle que soit la cause.
 
-**Diagnostic du 2026-09-02, mené À DISTANCE sur le poste Région** (via le relais
-`region.py ask` du projet rpsl, worker Windows natif — aucun accès manuel au poste). La
+**Diagnostic du 2026-09-02, mené À DISTANCE sur le poste du bureau** (via le relais
+un relais maison d'un autre projet, worker Windows natif — aucun accès manuel au poste). La
 vérité terrain écarte l'hypothèse TLS de départ :
 
 - **Message COMPLET du journal** (`%APPDATA%\net.duvam.iaction\logs\app.jsonl`) : « API Error:
@@ -1793,7 +2548,7 @@ vérité terrain écarte l'hypothèse TLS de départ :
 **Conclusion provisoire** : `ConnectionRefused` sur une fenêtre bornée (10:32→11:22) alors
 que le direct et le CLI fonctionnent au relevé = incident TRANSITOIRE de connexion sur ce
 poste, résorbé depuis. La cause n'est ni dans l'app, ni dans un certificat, ni dans un proxy.
-Reste plausible : une bascule de chemin réseau (VPN Région qui reconnecte — le poste est censé
+Reste plausible : une bascule de chemin réseau (VPN du bureau qui reconnecte — le poste est censé
 sortir par lui, il était en direct-box au relevé) qui a refusé les connexions le temps d'une
 fenêtre. Non prouvable sans l'historique VPN du poste.
 
@@ -3080,7 +3835,7 @@ pourquoi le ticket a stagné un mois :
 Un budget qu'on ne peut pas lire d'une commande n'est pas mesuré : il est *mesurable*, ce qui
 n'est pas la même chose — et c'est exactement l'état dans lequel ce ticket est resté.
 
-**Reste dû, et rien d'autre** : lancer une fois l'AppImage de la 0.6.0, puis
+**Reste dû, et rien d'autre** : lancer une fois l'AppImage de la 0.6.1, puis
 `npm run budget:demarrage --mode empaquete`. Les relevés antérieurs au marquage s'affichent en
 mode « inconnu », ce que le script dit explicitement plutôt que de les confondre avec l'empaqueté.
 
@@ -3627,106 +4382,189 @@ dépassé ; succès ⇒ cadence nominale). **98 tests Rust au vert, code de sort
 
 ## Archivés
 
-| ID    | Type | Prio | Statut | Titre |
-|-------|------|------|--------|-------|
-| T-147 | bug  | P2   | fait   | Le panneau Réveil restait vide au clic sur l'icône, manquait le préremplissage |
-| T-110 | bug  | P2   | fait   | Fermer le DERNIER onglet de fichier laisse un panneau blanc : l'onglet visé (« conversation ») n'existe pas, ni éditeur ni fil ne s'affiche |
-| T-109 | feat | P2   | fait   | Fermer un ENSEMBLE d'onglets d'un geste : clic droit (les autres / à droite / tous / les enregistrés) et clic milieu, comme partout ailleurs |
-| T-108 | feat | P2   | fait   | Clic droit sur une référence du fil : le même menu que l'arbre de fichiers (ouvrir avec l'app déclarée, avec le système, dans l'éditeur, copier le chemin) |
-| T-107 | bug  | P2   | fait   | Le fil exprime ses chemins en `~/…`, que l'interface refusait par principe de résoudre — or le système sait dire où est le dossier personnel |
-| T-106 | bug  | P2   | fait   | « Constamment des liens non cliquables » : trois culs-de-sac sur le même trajet (absolu hors projet non cliquable, fichier rangé par une commande introuvable, type sans règle sans issue) |
-| T-105 | bug  | P2   | fait   | Une référence relative citée par le modèle est cherchée SOUS LA RACINE DU PROJET seulement : « stl/PLATEAU-complet.stl » introuvable alors que le tour venait de l'écrire, ailleurs |
-| T-104 | feat | P3   | fait   | Ouvrir une référence de fichier citée dans le fil AU SURVOL, sans clic (option, désactivée par défaut) |
-| T-098 | doc  | P3   | fait   | `usage.stats` répond un champ `sobriete` que `docs/protocol.md` ne documente nulle part |
-| T-074 | feat | P3   | fait   | Signal d'escalade : repérer les tours refaits par un modèle supérieur — la seule preuve qu'un routage est bon et pas seulement bon marché |
-| T-059 | bug  | P2   | fait   | La jauge de session affichait 94 % pendant que l'abonnement était saturé : relevé sans âge, refus non entendus |
-| T-063 | bug  | P3   | fait   | Panneau Sessions : les titres IA convergent — dix sessions indiscernables autour de la même tâche |
-| T-076 | bug  | P2   | fait   | 17 des 38 tours en erreur n'ont aucun message de cause : un échec consigné sans sa raison reste un échec muet |
-| T-099 | bug  | P2   | fait   | `FileEditor` appelait un composant jamais écrit : ouvrir un .html plantait la vue, et RIEN dans la chaîne ne type-checkait l'UI |
-| T-072 | feat | P2   | fait   | Zone Abonnement : trois devises (quota, payé, équivalent API), rythme de combustion et projection de fin de fenêtre |
-| T-071 | feat | P2   | fait   | Zone Sobriété : délégation, cache, concentration du coût et fiabilité, chacun apparié à un signal de qualité |
-| T-064 | feat | P2   | fait   | Une image jointe ne peut pas partir pendant un tour : `claude.push` est texte seul, alors que l'entrée streamée sait porter une image |
-| T-087 | bug  | P1   | fait   | Une demande glissée en cours de tour est perdue en silence quand le tour n'a plus d'outil à appeler : `claude.push` acquitte le dépôt, pas l'injection |
-| T-058 | tech | P2   | fait   | 22 des 69 méthodes du protocole sans test de bout en bout — toutes concentrées sur `mcp.*` et `orch.*` |
-| T-097 | feat | P2   | fait   | L'application dit qu'une version existe : la page Système compare à la dernière release publiée — descendu de la ligne publique v0.5.0 |
-| T-096 | bug  | P2   | fait   | Windows : la sonde GPU faisait clignoter une console toutes les 5 s, et relançait sans fin un `nvidia-smi` absent — descendu de la ligne publique v0.4.1 |
-| T-094 | feat | P3   | fait   | Sonde système : une pastille par organe (CPU, RAM, GPU), teintée, au lieu d'une bande de six anneaux indifférenciés |
-| T-092 | bug  | P1   | fait   | Le fil mélange la parole du fil et le travail des sous-agents : un mot coupé en deux par leurs outils, et un paragraphe entier réémis par-dessus |
-| T-093 | bug  | P3   | fait   | L'encart des tâches de fond affiche quinze lignes de shell : la description d'un `Bash` détaché est la commande entière |
-| T-091 | bug  | P3   | fait   | L'encart « Sous-agents du dernier tour » parle au présent d'un tour vieux de plusieurs jours dès qu'on rouvre une conversation |
-| T-090 | bug  | P2   | fait   | Un nom de domaine cité dans une réponse est pris pour un fichier : le clic répond « introuvable dans le projet » à propos d'un site web |
-| T-089 | bug  | P1   | fait   | La modale de question couvre l'app : il faut trancher sur ce qu'on ne peut plus aller regarder |
-| T-075 | feat | P3   | fait   | Comparaison à la période précédente, et dénominateur honnête sur l'encart Routage |
-| T-073 | tech | P3   | fait   | `claude-windows.jsonl` : 17 917 instantanés et 3,5 Mo pour 1083 tours — revoir la cadence d'échantillonnage |
-| T-070 | feat | P3   | fait   | Rien ne signale qu'une période est incomplète : le lundi, Semaine affiche les chiffres de Jour |
-| T-069 | bug  | P3   | fait   | Étiquettes de courbe superposées quand les quatre séries convergent vers le bas de la fenêtre |
-| T-068 | bug  | P2   | fait   | « Part à coût nul : 98 % » rassure pendant que la fenêtre 5 h sature — l'indicateur compte des dollars là où la rareté est un quota |
-| T-067 | bug  | P2   | fait   | « Contexte moyen » a une médiane de 6 tokens : le KPI mesure `input_tokens` hors cache, pas le contexte |
-| T-084 | feat | P2   | fait   | Panneaux latéraux rétractables : Ctrl+L dégage l'écran, la poignée les rend, et l'état survit au lancement |
-| T-015 | bug  | P1   | fait   | Un tour Claude peut mourir sans laisser AUCUNE trace dans le journal |
-| T-083 | bug  | P1   | fait   | La frappe traîne dans tout le composeur (Chat ET Projets) : le fond plein écran masqué faisait repeindre TOUT le viewport à chaque caractère |
-| T-082 | bug  | P1   | fait   | « 26,1 % de tours en erreur » ne compte que des interruptions de l'utilisateur : le statut `aborted` n'est jamais écrit pour un tour de chat |
-| T-081 | bug  | P2   | fait   | L'app lance des sous-agents qu'elle ne sait pas lister : `agents.list` ignore `~/.claude/agents`, que le SDK charge pourtant — leur modèle déclaré est invisible |
-| T-080 | feat | P1   | fait   | Suppression du mode Auto des Projets, remplacé par un modèle par défaut réglable (opus-5) |
-| T-079 | bug  | P2   | fait   | La stratégie « descendante » ne descend jamais et ne lit pas le prompt : le mode Auto des Projets n'arbitre rien |
-| T-078 | tech | P1   | fait   | Le sommet de la table était `fable-5`, et la stratégie descendante y envoie TOUT : 23,8 % des tokens pour 39,3 % du coût |
-| T-077 | feat | P2   | fait   | Mode Auto : le sélecteur disait « Auto » sans jamais dire sur QUOI le tour part, et la délégation n'était visible nulle part hors du transcript |
-| T-066 | tech | P1   | fait   | Socle de supervision : la ventilation `modelUsage` était parsée puis jetée — le travail des sous-agents était rangé sous le modèle du fil |
-| T-062 | feat | P2   | fait   | Deux fenêtres, un processus, un sidecar : travailler sur deux projets en même temps |
-| T-065 | bug  | P1   | fait   | Le sélecteur de modèle tuait toute l'interface : l'événement lu DANS l'updater de `setState`, quand React l'a déjà vidé |
-| T-009 | tech | P3   | fait   | Dev : la fenêtre s'ouvrait avant que vite soit chaud, l'IPC restait muet sans un mot |
-| T-030 | bug  | P1   | fait   | La fenêtre gelait sans un mot quand le process de contenu WebKit mourait : les deux journaux le disent, et la fenêtre aussi |
-| T-061 | tech | P2   | fait   | Un fichier d'état par projet et par conversation : les monolithes de 12 Mo et 467 Ko sont éclatés, sauvegardés, migrés |
-| T-060 | bug  | P2   | fait   | Le refus d'une 2e session de dev (garde T-028) était invisible depuis l'icône : notification ajoutée |
-| T-055 | bug  | P2   | fait   | Importer `./journal` sous Node faisait échouer la chaîne tests verts : l'IPC s'installait par effet de bord d'import |
-| T-054 | tech | P2   | fait   | La protection de branche `main` promise par le script de publication n'existait pas : posée, à l'exact de la checklist |
-| T-052 | bug  | P2   | fait   | Les tours de projet partaient avec un prompt système VIDE : le preset Claude Code est demandé explicitement |
-| T-012 | tech | P1   | fait   | Dependabot : les quatre paquets réellement livrés sont montés, le reste ne part pas dans le produit |
-| T-045 | tech | P2   | fait   | Réseau d'entreprise : un encart pour saisir proxy et autorité, et le PAC dit non lu |
-| T-023 | tech | P2   | fait   | Profils de fournisseur : la gratuité et la jauge de solde sont déclarées, plus devinées |
-| T-036 | bug  | P3   | fait   | Swiftask est structurellement muet sur le coût, et la recherche web n'a rien à facturer |
-| T-053 | bug  | P2   | fait   | Le verrou du runner déclarait mort tout détenteur hors Linux : `/proc` sans repli, CI Windows rouge |
-| T-025 | bug  | P2   | fait   | Agents `*-with-search` : la recherche faite deux fois cassait un tour sur cinq, R9 les écarte |
-| T-019 | bug  | P1   | fait   | Les questions interactives n'étaient plus sollicitées : l'outil n'était annoncé que par une fiche de RAG |
-| T-008 | bug  | P3   | fait   | `usage.openrouter` au démarrage : une course avec la poussée des fournisseurs, journalisée en erreur |
-| T-007 | bug  | P2   | fait   | `ollama.ps` répondait une page web : une SONDE dont l'échec est nominal criait « error » 140 fois |
-| T-049 | feat | P3   | fait   | Un HTML cité dans un rapport s'ouvrait dans l'éditeur interne, jamais dans le navigateur déclaré |
-| T-024 | bug  | P3   | fait   | Un chemin hors projet cliqué dans une transcription annonçait « introuvable » alors qu'il existe |
-| T-041 | tech | P3   | fait   | Empaquetage local : `target/release/sidecar/` reversait dans l'AppDir des fichiers disparus de la source |
-| T-051 | bug  | P1   | fait   | La suite de tests travaillait dans le VRAI `~/.local/share`, et pouvait y déplacer des données |
-| T-050 | bug  | P1   | fait   | Verrou orphelin : une modification de manifeste pendant une synchro bloquait toutes les suivantes |
-| T-040 | bug  | P1   | fait   | L'image `ia-runner` ne se construisait plus : le Dockerfile ne copiait pas `sidecar/scripts/` |
-| T-047 | tech | P2   | fait   | La table de routage par défaut était écrite deux fois, sans rien pour vérifier qu'elles concordent |
-| T-046 | bug  | P2   | fait   | `claude-opus-5` absent des sélecteurs : la liste des modèles de l'abonnement était recopiée dans trois fichiers |
-| T-034 | tech | P2   | fait   | Le cliquet de taille était rouge sur `master` : `src-tauri/src/sidecar.rs` à 807 lignes |
-| T-043 | bug  | P1   | fait   | Poste d'entreprise : tous les fournisseurs en « erreur réseau », le fetch de Node ignorait le proxy |
-| T-044 | bug  | P2   | fait   | « erreur réseau: fetch failed » sans le code de cause : quatre pannes, un seul message |
-| T-042 | bug  | P1   | fait   | L'installeur n'embarquait pas la version testée : le bundle réinstallait ses dépendances sans verrou |
-| T-038 | bug  | P1   | fait   | L'AppImage ne se construisait plus : linuxdeploy casse le CLI Claude avec `patchelf`, puis abandonne |
-| T-039 | bug  | P1   | fait   | `ModelPicker.tsx` et `modelPicker.ts` : deux noms que Windows confond, l'installeur ne compilait plus |
-| T-037 | bug  | P2   | fait   | Un test neuf construisait un chemin en `/D:/…` : la CI Windows échouait sur « sans-empreinte » |
-| T-035 | bug  | P2   | fait   | La dépense réelle n'était affichée nulle part : « Débord du mois » ne compte que le routage auto |
-| T-033 | bug  | P2   | fait   | Supervision : Jour et Semaine affichaient les mêmes KPI, et ◀ ▶ sautait d'un mois |
-| T-032 | feat | P2   | fait   | Sélecteur de modèle illisible : 300 slugs bruts dans un `<select>`, favoris en double |
-| T-031 | bug  | P1   | fait   | L'écriture dans le Chat traînait : un rendu de page complet par fragment reçu |
-| T-021 | bug  | P2   | fait   | `models.list` ne montrait que 8 modèles là où le fournisseur en sert 142 |
-| T-022 | bug  | P2   | fait   | Un usage à zéro était enregistré comme zéro, jamais comme « inconnu » |
-| T-028 | bug  | P1   | fait   | Relancer `dev.sh` ouvre une fenêtre morte-née, sans sidecar |
-| T-027 | bug  | P1   | fait   | L'avis « aucune donnée reçue du fournisseur » s'affichait à chaque réponse |
-| T-010 | feat | P2   | fait   | Recherche web pour le moteur neutre (Chat) — aujourd'hui réservée à Claude |
-| T-020 | bug  | P1   | fait   | En développement, l'application exécutait un sidecar périmé de trois jours |
-| T-017 | bug  | P1   | fait   | La coquille journalisait le démarrage du sidecar, jamais sa mort |
-| T-018 | bug  | P1   | fait   | Chat : le fournisseur choisi retombait silencieusement sur Claude |
-| T-016 | bug  | P2   | fait   | Le sidecar annonçait la version 0.1.0, et un test verrouillait ce mensonge |
-| T-014 | bug  | P1   | fait   | CI Windows en échec : un test construisait un chemin sans lettre de lecteur |
-| T-013 | bug  | P2   | fait   | Le miroir des tickets déduisait le dépôt du remote : inutilisable en local |
-| T-011 | bug  | P1   | fait   | L'audit de publication ne voyait pas les fichiers non suivis |
-| T-005 | bug  | P1   | fait   | Le débord R3 ignore la fenêtre 7 jours : l'Auto route vers un abonnement saturé |
-| T-006 | bug  | P1   | fait   | Tour abonnement muet : curseur infini au lieu d'un état « attente/limite atteinte » |
-| T-004 | bug  | P1   | fait   | Le fil redescend tout seul pendant un streaming |
-| T-003 | bug  | P1   | fait   | L'allowlist `tools:` d'un agent n'est pas appliquée (moteur claude) |
-| T-002 | feat | P3   | fait   | Lien « dernier rapport qualité » dans la page Système |
-| T-001 | feat | P3   | fait   | Page « Tickets » dans l'app |
+| ID    | Type | Prio | Statut    | Titre |
+|-------|------|------|-----------|-------|
+| T-217 | bug  | P2   | fait      | CI Windows de la PR 0.7.0 : le garde-fou de source de `comptesClaude.test.ts` cherche un motif en `\n` dans un fichier extrait en CRLF |
+| T-190 | bug  | P3   | fait      | `npm run audit` échoue (6 traces) : `docs/etude-deux-comptes.md` (un motif local, trois URL externes) et deux URL de tests/Rust déjà présentes ; `npm run verif` ne passerait pas avant publication |
+| T-208 | tech | P3   | fait      | Le backlog peut contredire ses tickets : statut et corps divergent sans que rien ne le signale |
+| T-212 | tech | P3   | fait      | Fable 5.2 sorti le 2026-11-09 : la liste proposait encore Fable 5.1, plus cher, que le CLI embarqué 0.3.319 ne remplaçait pas |
+| T-213 | bug  | P2   | fait      | Un fil épinglé sur un modèle Claude sorti du sélecteur (encore servi) perd son effort sans le dire |
+| T-215 | bug  | P2   | fait      | Un blocage Cloudflare (403 « Attention Required ») est présenté comme un défaut d'identifiants (« claude login ») et n'est pas journalisé |
+| T-209 | tech | P2   | fait      | `npm run verif` échoue sur le cliquet de taille : six fichiers au-dessus de leur plafond après les correctifs du 2026-11-07/08 |
+| T-114 | bug  | P1   | fait      | `search_chat` ne voit plus AUCUNE conversation depuis T-061 : le sidecar lit un monolithe que l'UI a renommé et que plus personne n'écrit |
+| T-115 | bug  | P1   | fait      | Le RAG ne fonctionne pas en pratique : sa mise à jour dépend d'un bouton que l'utilisateur ne clique jamais, faute de savoir quand ni pourquoi — 3 index sur 4 datent d'un mois |
+| T-118 | bug  | P1   | fait      | Windows : l'application ne peut pas joindre l'API Claude — « API Error: Unable to connect to API », app inutilisable sur ce poste |
+| T-116 | tech | P3   | fait      | En session de développement, chaque rechargement HMR bancal finit en « rendu React interrompu : Can't find variable » au niveau `error` — ~80 occurrences en un mois, invisible en version empaquetée |
+| T-102 | bug  | P1   | fait      | Un sous-agent (`Agent`) a tourné 38 min sans UN signe dans le fil ni le journal, le tour s'est clos en « arrêt demandé » sans que l'utilisateur le demande, et le modèle a ensuite affirmé que rien n'avait bloqué |
+| T-101 | feat | P3   | fait      | Les actions discrètes du fil (recherche web, compaction, débordement, voix) ne disent pas À QUELLE HEURE elles ont eu lieu |
+| T-100 | bug  | P3   | fait      | La barre hebdo d'abonnement reste calée sur la semaine ISO (lundi→dimanche), décalée de deux jours du cycle réel `resetsAt` (samedi 20:00) |
+| T-103 | bug  | P2   | fait      | Le garde-fou du port 1420 propose un remède qui ne libère pas le port : Vite survit à l'arrêt de `tauri dev` |
+| T-111 | bug  | P2   | fait      | `npm run verif` tue la session de développement en cours : la vérification et l'app se disputent le répertoire de compilation |
+| T-112 | bug  | P1   | fait      | L'application peut disparaître sans laisser UNE SEULE ligne dans `app.jsonl` — l'échec le plus muet du projet |
+| T-095 | bug  | P1   | fait      | La frappe traîne toujours (4ᵉ signalement) : la webview tourne en rendu logiciel imposé, et c'est le plafond que T-031 et T-083 ont approché sans pouvoir le franchir |
+| T-086 | bug  | P1   | fait      | Depuis T-062, chaque fenêtre relance les jauges pour son compte : deux fenêtres = deux fois les sondes, dont un VRAI micro-tour Claude sur un abonnement saturé |
+| T-085 | bug  | P2   | fait      | `usage.credits` échoue en boucle sur un certificat qui ne correspond pas — 1 371 lignes `error` en 4 h, et aucune ne dit quel hôte |
+| T-057 | bug  | P2   | fait      | Le journal réel est à 85 % d'erreurs : les jauges périodiques crient en boucle des états nominaux |
+| T-026 | feat | P3   | abandonné | Recherche web : des pages de rubrique au lieu d'articles — un seul constat en cinq semaines, jamais reproduit |
+| T-056 | bug  | P2   | abandonné | Le process de contenu WebKit plante par intermittence — bibliothèque du SYSTÈME, signature qui se déplace de greffon en greffon, aucune récidive depuis le 2026-08-23 |
+| T-048 | bug  | P2   | fait      | Coller une capture fige le composeur ~5 s : ni vignette, ni frappe prise en compte pendant la lecture du presse-papier |
+| T-117 | bug  | P2   | fait      | Badge « Session 5h saturée » ne se réinitialise pas quand la fenêtre expire (compte à rebours ≤ 0) : affichage trompe l'utilisateur sur le statut réel |
+| T-119 | bug  | P2   | fait      | Un DOSSIER cité dans le fil répond « introuvable dans le projet » alors qu'il existe : la résolution ne sonde que des fichiers, et la barre finale vide le nom cherché |
+| T-120 | feat | P2   | fait      | Une conversation ne peut pas se programmer : session saturée, machine libre, heures creuses perdues faute de pouvoir dire « reprends à 3 h » |
+| T-122 | feat | P2   | fait      | Onze onglets ouverts, aucun moyen de retrouver le bon : trois titres commencent par les mêmes mots et la troncature emporte justement ce qui les distingue |
+| T-123 | bug  | P1   | fait      | Le mot-clé d'envoi vocal est inutilisable : « transmets » ressort de la transcription en « très prends ce mail », « transmettre », « je transmets » — quatre tentatives, zéro envoi |
+| T-124 | bug  | P1   | fait      | Repliement spectral à la capture : le ré-échantillonnage 48→16 kHz n'a AUCUN filtre anti-repliement, un 20 kHz arrive intact dans la bande vocale et détruit les consonnes |
+| T-125 | tech | P1   | fait      | Toute la chaîne voix est muette dans le journal : ni segment transcrit, ni verdict du mot-clé, ni issue d'envoi — un échec de dictée est indiagnosticable |
+| T-126 | bug  | P1   | fait      | Le mot-clé d'envoi est bien ENTENDU mais mal orthographié (« Banana », « Benen ») : le matcher comparait des lettres, il compare désormais le squelette consonantique |
+| T-127 | bug  | P1   | fait      | L'application ne compile plus dès que cargo rejoue le build script : `build/sidecar-bundle/`, ressource déclarée dans `tauri.conf.json`, n'existe qu'après un empaquetage — jamais en développement |
+| T-128 | bug  | P1   | abandonné | La source du canal système est figée au démarrage — **dossier valide, mauvais dépôt** : le code visé n'est pas dans IAction, à reprendre dans l'application de captation |
+| T-129 | bug  | P2   | fait      | L'encart GPU disparaît en silence : `nvidia-smi` échoue 12 fois/min sans journalisation |
+| T-130 | bug  | P1   | fait      | « Reprise à heure inconnue » alors que le fil dit « resets 6pm » : le parseur du refus exige des minutes que le SDK omet sur une heure pleine |
+| T-131 | bug  | P2   | fait      | Un tour s'est clos en « arrêt demandé » sans que personne ne le demande (2026-08-29) : la cause n'a jamais été élucidée, et le journal de l'époque ne portait pas encore le champ qui l'aurait nommée |
+| T-132 | doc  | P3   | fait      | Les notes de version de la 0.5.0 renvoyaient à des tickets qui ne sont pas les siens — trois références fausses dans un document public, mis en miroir en issues GitHub |
+| T-133 | bug  | P1   | fait      | Un test du réveil dépendait du fuseau de la machine sans le dire : vert sur ce poste (Europe/Paris), rouge sur les runners (UTC) — les DEUX constructions de la 0.6.0 sont tombées dessus |
+| T-134 | bug  | P1   | fait      | Un test exige le mode POSIX 0600 sur le coffre de secrets : Windows ignore les modes et rend 666, la construction NSIS tombait — et au passage, sur Windows le coffre n'a AUCUNE protection par mode |
+| T-135 | bug  | P1   | fait      | `new URL(import.meta.url).pathname` rend « /D:/a/… » sous Windows : la doublure d'un test n'était jamais trouvée, troisième échec d'affilée de la construction NSIS |
+| T-136 | tech | P1   | fait      | La CI ne savait pas dire ce qui avait cassé : « échec sans ligne reconnaissable », parce qu'elle ne garde que 60 lignes — celles du tableau récapitulatif, jamais celles du message |
+| T-137 | bug  | P1   | fait      | `claude.sessionTitles` promet « jamais bloquant » mais attend `listSessions` sans aucune borne : une LENTEUR (et non une panne) laisse la requête sans réponse pour toujours |
+| T-138 | bug  | P1   | fait      | Un test Rust affirmait que le processus courant est vivant — or hors Linux la détection répond « mort » PAR CONCEPTION : le test contredisait le code qu'il gardait |
+| T-139 | tech | P2   | fait      | 32 alertes Dependabot : trois paquets seulement sont LIVRÉS (dont les 8 `high`), et ce sont eux qui comptent — les autres relèvent d'outils ou d'un module optionnel |
+| T-140 | bug  | P1   | fait      | Utilisation hebdomadaire d'abonnement : le regroupement par `resetsAt` brut fabrique une barre par relevé |
+| T-141 | bug  | P2   | fait      | Fenêtre de contexte : un palier unique de 200 k pour tous les modèles de l'abonnement, alors que seul Haiku l'est encore |
+| T-142 | tech | P3   | fait      | Fable 5.1 : le modèle existait au catalogue depuis un moment, mais le CLI embarqué ne le connaissait pas |
+| T-143 | tech | P2   | fait      | Opus 5.5 sorti le 2026-09-22, absent de la liste quatre jours plus tard — la liste en dur vieillit en silence, il faut une veille automatique |
+| T-144 | bug  | P1   | fait      | Une capture jointe de 2464 px empoisonne la session dès que l'historique dépasse 20 images : l'API la refuse à chaque tour, sans issue affichée |
+| T-145 | bug  | P2   | fait      | Modale « Question de l'agent » : le `context` joint (un tableau de 14 lignes) est tronqué et illisible — 640 px, préformaté sans retour à la ligne, ascenseur dans l'ascenseur |
+| T-146 | feat | P2   | fait      | Plus de bouton « Nouvelle fenêtre » : relancer IAction ouvre une fenêtre dans l'instance en cours, sur le projet libre le plus utilisé |
+| T-149 | feat | P2   | fait      | Voix lente : la transcription et la synthèse n'étaient pas chronométrées dans le journal, impossible de désigner le maillon lent — mesure ajoutée, lecture sur tours réels à faire |
+| T-155 | bug  | P2   | fait      | Session qui attend des jobs externes : l'agent promet « je reprends automatiquement à leur fin » mais rien ne le réveille, et le plafond de 10 min d'attente des tâches de fond expire sans trace |
+| T-156 | bug  | P2   | fait      | Sélecteur d'effort masqué par la liste du sélecteur de modèle : le champ « Effort » ajouté sous « Modèle » était recouvert par la liste déroulante ouverte, invisible pour l'utilisateur |
+| T-157 | bug  | P2   | fait      | Panneau « Sous-agents en cours » : un sous-agent en arrière-plan affiché terminé (9 ✓ pendant qu'un sous-agent Opus tournait encore), et aucun moyen de voir lequel travaillait |
+| T-158 | bug  | P2   | fait      | Playwright MCP ferme le navigateur à chaque fin de réponse de l'agent : une démarche en cours (paiement en attente de carte) est coupée dès que l'agent rend la main |
+| T-159 | feat | P2   | abandonné | Panneau « Sessions Claude » : lister les sessions Claude Code du poste, en reprendre une en copie dans IAction, ouvrir claude.ai/code pour les autres machines |
+| T-160 | bug  | P3   | fait      | Prototype avatar : le serveur statique renvoyait le message d'erreur brut au client (CodeQL) et son confinement par préfixe laissait passer un dossier voisin |
+| T-161 | bug  | P2   | abandonné | Ctrl+L sans effet sous Windows (constat utilisateur) — piste : version installée antérieure au repli des panneaux |
+| T-162 | bug  | P2   | fait      | « Reprendre dans IAction » (Sessions Claude) affiche « Reprise refusée » et ne fait rien tant que la page Projets n'a pas été visitée ; quatre causes fondues en un message |
+| T-163 | bug  | P3   | fait      | CI : construction Linux de la PR #40 tombée sur un délai réseau pendant `npm install` (machine GitHub), relancée |
+| T-164 | bug  | P2   | fait      | Poste de dev : `node_modules` vidé (0 paquet) pendant que l'app tournait — tout tour Claude échouait en « Native CLI binary for linux-x64 not found » |
+| T-165 | feat | P2   | fait      | Piloter une session Remote Control d'une autre machine depuis un onglet d'IAction (client SSE du SDK branché comme `queryFn` du moteur) |
+| T-166 | bug  | P2   | fait      | Session distante : chaque envoi recevait la réponse d'un tour précédent — le curseur de départ était `resume_cursor`, qui pagine vers le passé |
+| T-167 | bug  | P2   | fait      | Session distante : une demande de permission à chaque outil — le mode choisi dans IAction n'était pas transmis |
+| T-168 | feat | P2   | fait      | Rapatrier une session distante : transcription Markdown dans le projet local (non versionnée), puis distillation proposée vers la mémoire |
+| T-170 | bug  | P3   | fait      | Le client distant du SDK écrit ses traces sur la sortie standard du sidecar, qui est le canal du protocole JSON |
+| T-171 | bug  | P2   | fait      | Session distante : rien ne s'affiche pendant la minute où la machine distante démarre son tour — l'utilisateur arrête, la réponse arrive ensuite et est perdue pour l'onglet |
+| T-172 | feat | P3   | fait      | Session distante : le refus du mode de permission par la session distante (`bypassPermissions` sans `--dangerously-skip-permissions`) n'était que dans le journal — l'onglet doit le dire |
+| T-173 | feat | P2   | fait      | « Piloter » ouvre la session distante dans le bon projet local : association mémorisée, sinon correspondance du dépôt git, sinon choix de l'utilisateur |
+| T-174 | bug  | P2   | fait      | Session distante déconnectée non détectée : messages envoyés dans le vide — le détail de session est enveloppé dans `response_shape` |
+| T-175 | feat | P2   | fait      | Sessions distantes homonymes : masquer les remplacées, proposer de basculer vers la session connectée du même nom |
+| T-176 | feat | P2   | fait      | Historique des sessions distantes dans IAction : rapatriement automatique à chaque tour, volet « Historique » dans l'onglet |
+| T-177 | feat | P2   | fait      | « Revue de la semaine » : conversation locale pré-remplie sur les 7 derniers jours (sessions distantes et locales) pour mettre à jour doc et mémoire |
+| T-178 | feat | P2   | fait      | Outils MCP `sessions_distantes_lister` / `session_distante_demander` : un sous-agent de projet dialogue avec une session d'une autre machine |
+| T-179 | tech | P2   | fait      | Retirer l'interface « Sessions Claude » (page, reprise, onglets distants, rapatriement, historique, revue) : seul le sous-agent + outils MCP (T-178) reste |
+| T-181 | bug  | P1   | fait      | Question d'agent « mise de côté » introuvable : pastille fixe peu visible, et la file des questions est vidée au changement de projet — l'agent attend sans qu'on puisse répondre |
+| T-182 | bug  | P2   | fait      | Référence de fichier rangé via une variable shell (`O=~/…; cp x "$O"`) : « introuvable dans le projet » au clic, menu du clic droit sans aucune application |
+| T-188 | bug  | P3   | fait      | Le skill « Claude in Chrome » se charge dans un tour IAction alors qu'aucun outil navigateur n'est exposé : l'agent le découvre après plusieurs recherches d'outils |
+| T-198 | bug  | P2   | fait      | Fenêtre blanche pendant le développement de T-197 : une refonte en plusieurs fichiers, rechargée à chaud dans l'application en service, a laissé `AgentPage.tsx` appeler des fonctions déjà retirées |
+| T-199 | feat | P2   | fait      | Copier une commande d'un bloc de code oblige à tout sélectionner à la main : bouton « Copier » sur chaque bloc |
+| T-205 | bug  | P2   | fait      | Dans la page Projets (moteur Claude Perso), l'agent répond n'avoir aucun outil pour piloter Chrome alors que l'extension Claude in Chrome est installée : le CLI n'expose les outils `mcp__claude-in-chrome__*` qu'avec le drapeau `--chrome` |
+| T-147 | bug  | P2   | fait      | Le panneau Réveil restait vide au clic sur l'icône, manquait le préremplissage |
+| T-110 | bug  | P2   | fait      | Fermer le DERNIER onglet de fichier laisse un panneau blanc : l'onglet visé (« conversation ») n'existe pas, ni éditeur ni fil ne s'affiche |
+| T-109 | feat | P2   | fait      | Fermer un ENSEMBLE d'onglets d'un geste : clic droit (les autres / à droite / tous / les enregistrés) et clic milieu, comme partout ailleurs |
+| T-108 | feat | P2   | fait      | Clic droit sur une référence du fil : le même menu que l'arbre de fichiers (ouvrir avec l'app déclarée, avec le système, dans l'éditeur, copier le chemin) |
+| T-107 | bug  | P2   | fait      | Le fil exprime ses chemins en `~/…`, que l'interface refusait par principe de résoudre — or le système sait dire où est le dossier personnel |
+| T-106 | bug  | P2   | fait      | « Constamment des liens non cliquables » : trois culs-de-sac sur le même trajet (absolu hors projet non cliquable, fichier rangé par une commande introuvable, type sans règle sans issue) |
+| T-105 | bug  | P2   | fait      | Une référence relative citée par le modèle est cherchée SOUS LA RACINE DU PROJET seulement : « stl/PLATEAU-complet.stl » introuvable alors que le tour venait de l'écrire, ailleurs |
+| T-104 | feat | P3   | fait      | Ouvrir une référence de fichier citée dans le fil AU SURVOL, sans clic (option, désactivée par défaut) |
+| T-098 | doc  | P3   | fait      | `usage.stats` répond un champ `sobriete` que `docs/protocol.md` ne documente nulle part |
+| T-074 | feat | P3   | fait      | Signal d'escalade : repérer les tours refaits par un modèle supérieur — la seule preuve qu'un routage est bon et pas seulement bon marché |
+| T-059 | bug  | P2   | fait      | La jauge de session affichait 94 % pendant que l'abonnement était saturé : relevé sans âge, refus non entendus |
+| T-063 | bug  | P3   | fait      | Panneau Sessions : les titres IA convergent — dix sessions indiscernables autour de la même tâche |
+| T-076 | bug  | P2   | fait      | 17 des 38 tours en erreur n'ont aucun message de cause : un échec consigné sans sa raison reste un échec muet |
+| T-099 | bug  | P2   | fait      | `FileEditor` appelait un composant jamais écrit : ouvrir un .html plantait la vue, et RIEN dans la chaîne ne type-checkait l'UI |
+| T-072 | feat | P2   | fait      | Zone Abonnement : trois devises (quota, payé, équivalent API), rythme de combustion et projection de fin de fenêtre |
+| T-071 | feat | P2   | fait      | Zone Sobriété : délégation, cache, concentration du coût et fiabilité, chacun apparié à un signal de qualité |
+| T-064 | feat | P2   | fait      | Une image jointe ne peut pas partir pendant un tour : `claude.push` est texte seul, alors que l'entrée streamée sait porter une image |
+| T-087 | bug  | P1   | fait      | Une demande glissée en cours de tour est perdue en silence quand le tour n'a plus d'outil à appeler : `claude.push` acquitte le dépôt, pas l'injection |
+| T-058 | tech | P2   | fait      | 22 des 69 méthodes du protocole sans test de bout en bout — toutes concentrées sur `mcp.*` et `orch.*` |
+| T-097 | feat | P2   | fait      | L'application dit qu'une version existe : la page Système compare à la dernière release publiée — descendu de la ligne publique v0.5.0 |
+| T-096 | bug  | P2   | fait      | Windows : la sonde GPU faisait clignoter une console toutes les 5 s, et relançait sans fin un `nvidia-smi` absent — descendu de la ligne publique v0.4.1 |
+| T-094 | feat | P3   | fait      | Sonde système : une pastille par organe (CPU, RAM, GPU), teintée, au lieu d'une bande de six anneaux indifférenciés |
+| T-092 | bug  | P1   | fait      | Le fil mélange la parole du fil et le travail des sous-agents : un mot coupé en deux par leurs outils, et un paragraphe entier réémis par-dessus |
+| T-093 | bug  | P3   | fait      | L'encart des tâches de fond affiche quinze lignes de shell : la description d'un `Bash` détaché est la commande entière |
+| T-091 | bug  | P3   | fait      | L'encart « Sous-agents du dernier tour » parle au présent d'un tour vieux de plusieurs jours dès qu'on rouvre une conversation |
+| T-090 | bug  | P2   | fait      | Un nom de domaine cité dans une réponse est pris pour un fichier : le clic répond « introuvable dans le projet » à propos d'un site web |
+| T-089 | bug  | P1   | fait      | La modale de question couvre l'app : il faut trancher sur ce qu'on ne peut plus aller regarder |
+| T-075 | feat | P3   | fait      | Comparaison à la période précédente, et dénominateur honnête sur l'encart Routage |
+| T-073 | tech | P3   | fait      | `claude-windows.jsonl` : 17 917 instantanés et 3,5 Mo pour 1083 tours — revoir la cadence d'échantillonnage |
+| T-070 | feat | P3   | fait      | Rien ne signale qu'une période est incomplète : le lundi, Semaine affiche les chiffres de Jour |
+| T-069 | bug  | P3   | fait      | Étiquettes de courbe superposées quand les quatre séries convergent vers le bas de la fenêtre |
+| T-068 | bug  | P2   | fait      | « Part à coût nul : 98 % » rassure pendant que la fenêtre 5 h sature — l'indicateur compte des dollars là où la rareté est un quota |
+| T-067 | bug  | P2   | fait      | « Contexte moyen » a une médiane de 6 tokens : le KPI mesure `input_tokens` hors cache, pas le contexte |
+| T-084 | feat | P2   | fait      | Panneaux latéraux rétractables : Ctrl+L dégage l'écran, la poignée les rend, et l'état survit au lancement |
+| T-015 | bug  | P1   | fait      | Un tour Claude peut mourir sans laisser AUCUNE trace dans le journal |
+| T-083 | bug  | P1   | fait      | La frappe traîne dans tout le composeur (Chat ET Projets) : le fond plein écran masqué faisait repeindre TOUT le viewport à chaque caractère |
+| T-082 | bug  | P1   | fait      | « 26,1 % de tours en erreur » ne compte que des interruptions de l'utilisateur : le statut `aborted` n'est jamais écrit pour un tour de chat |
+| T-081 | bug  | P2   | fait      | L'app lance des sous-agents qu'elle ne sait pas lister : `agents.list` ignore `~/.claude/agents`, que le SDK charge pourtant — leur modèle déclaré est invisible |
+| T-080 | feat | P1   | fait      | Suppression du mode Auto des Projets, remplacé par un modèle par défaut réglable (opus-5) |
+| T-079 | bug  | P2   | fait      | La stratégie « descendante » ne descend jamais et ne lit pas le prompt : le mode Auto des Projets n'arbitre rien |
+| T-078 | tech | P1   | fait      | Le sommet de la table était `fable-5`, et la stratégie descendante y envoie TOUT : 23,8 % des tokens pour 39,3 % du coût |
+| T-077 | feat | P2   | fait      | Mode Auto : le sélecteur disait « Auto » sans jamais dire sur QUOI le tour part, et la délégation n'était visible nulle part hors du transcript |
+| T-066 | tech | P1   | fait      | Socle de supervision : la ventilation `modelUsage` était parsée puis jetée — le travail des sous-agents était rangé sous le modèle du fil |
+| T-062 | feat | P2   | fait      | Deux fenêtres, un processus, un sidecar : travailler sur deux projets en même temps |
+| T-065 | bug  | P1   | fait      | Le sélecteur de modèle tuait toute l'interface : l'événement lu DANS l'updater de `setState`, quand React l'a déjà vidé |
+| T-009 | tech | P3   | fait      | Dev : la fenêtre s'ouvrait avant que vite soit chaud, l'IPC restait muet sans un mot |
+| T-030 | bug  | P1   | fait      | La fenêtre gelait sans un mot quand le process de contenu WebKit mourait : les deux journaux le disent, et la fenêtre aussi |
+| T-061 | tech | P2   | fait      | Un fichier d'état par projet et par conversation : les monolithes de 12 Mo et 467 Ko sont éclatés, sauvegardés, migrés |
+| T-060 | bug  | P2   | fait      | Le refus d'une 2e session de dev (garde T-028) était invisible depuis l'icône : notification ajoutée |
+| T-055 | bug  | P2   | fait      | Importer `./journal` sous Node faisait échouer la chaîne tests verts : l'IPC s'installait par effet de bord d'import |
+| T-054 | tech | P2   | fait      | La protection de branche `main` promise par le script de publication n'existait pas : posée, à l'exact de la checklist |
+| T-052 | bug  | P2   | fait      | Les tours de projet partaient avec un prompt système VIDE : le preset Claude Code est demandé explicitement |
+| T-012 | tech | P1   | fait      | Dependabot : les quatre paquets réellement livrés sont montés, le reste ne part pas dans le produit |
+| T-045 | tech | P2   | fait      | Réseau d'entreprise : un encart pour saisir proxy et autorité, et le PAC dit non lu |
+| T-023 | tech | P2   | fait      | Profils de fournisseur : la gratuité et la jauge de solde sont déclarées, plus devinées |
+| T-036 | bug  | P3   | fait      | Swiftask est structurellement muet sur le coût, et la recherche web n'a rien à facturer |
+| T-053 | bug  | P2   | fait      | Le verrou du runner déclarait mort tout détenteur hors Linux : `/proc` sans repli, CI Windows rouge |
+| T-025 | bug  | P2   | fait      | Agents `*-with-search` : la recherche faite deux fois cassait un tour sur cinq, R9 les écarte |
+| T-019 | bug  | P1   | fait      | Les questions interactives n'étaient plus sollicitées : l'outil n'était annoncé que par une fiche de RAG |
+| T-008 | bug  | P3   | fait      | `usage.openrouter` au démarrage : une course avec la poussée des fournisseurs, journalisée en erreur |
+| T-007 | bug  | P2   | fait      | `ollama.ps` répondait une page web : une SONDE dont l'échec est nominal criait « error » 140 fois |
+| T-049 | feat | P3   | fait      | Un HTML cité dans un rapport s'ouvrait dans l'éditeur interne, jamais dans le navigateur déclaré |
+| T-024 | bug  | P3   | fait      | Un chemin hors projet cliqué dans une transcription annonçait « introuvable » alors qu'il existe |
+| T-041 | tech | P3   | fait      | Empaquetage local : `target/release/sidecar/` reversait dans l'AppDir des fichiers disparus de la source |
+| T-051 | bug  | P1   | fait      | La suite de tests travaillait dans le VRAI `~/.local/share`, et pouvait y déplacer des données |
+| T-050 | bug  | P1   | fait      | Verrou orphelin : une modification de manifeste pendant une synchro bloquait toutes les suivantes |
+| T-040 | bug  | P1   | fait      | L'image `ia-runner` ne se construisait plus : le Dockerfile ne copiait pas `sidecar/scripts/` |
+| T-047 | tech | P2   | fait      | La table de routage par défaut était écrite deux fois, sans rien pour vérifier qu'elles concordent |
+| T-046 | bug  | P2   | fait      | `claude-opus-5` absent des sélecteurs : la liste des modèles de l'abonnement était recopiée dans trois fichiers |
+| T-034 | tech | P2   | fait      | Le cliquet de taille était rouge sur `master` : `src-tauri/src/sidecar.rs` à 807 lignes |
+| T-043 | bug  | P1   | fait      | Poste d'entreprise : tous les fournisseurs en « erreur réseau », le fetch de Node ignorait le proxy |
+| T-044 | bug  | P2   | fait      | « erreur réseau: fetch failed » sans le code de cause : quatre pannes, un seul message |
+| T-042 | bug  | P1   | fait      | L'installeur n'embarquait pas la version testée : le bundle réinstallait ses dépendances sans verrou |
+| T-038 | bug  | P1   | fait      | L'AppImage ne se construisait plus : linuxdeploy casse le CLI Claude avec `patchelf`, puis abandonne |
+| T-039 | bug  | P1   | fait      | `ModelPicker.tsx` et `modelPicker.ts` : deux noms que Windows confond, l'installeur ne compilait plus |
+| T-037 | bug  | P2   | fait      | Un test neuf construisait un chemin en `/D:/…` : la CI Windows échouait sur « sans-empreinte » |
+| T-035 | bug  | P2   | fait      | La dépense réelle n'était affichée nulle part : « Débord du mois » ne compte que le routage auto |
+| T-033 | bug  | P2   | fait      | Supervision : Jour et Semaine affichaient les mêmes KPI, et ◀ ▶ sautait d'un mois |
+| T-032 | feat | P2   | fait      | Sélecteur de modèle illisible : 300 slugs bruts dans un `<select>`, favoris en double |
+| T-031 | bug  | P1   | fait      | L'écriture dans le Chat traînait : un rendu de page complet par fragment reçu |
+| T-021 | bug  | P2   | fait      | `models.list` ne montrait que 8 modèles là où le fournisseur en sert 142 |
+| T-022 | bug  | P2   | fait      | Un usage à zéro était enregistré comme zéro, jamais comme « inconnu » |
+| T-028 | bug  | P1   | fait      | Relancer `dev.sh` ouvre une fenêtre morte-née, sans sidecar |
+| T-027 | bug  | P1   | fait      | L'avis « aucune donnée reçue du fournisseur » s'affichait à chaque réponse |
+| T-010 | feat | P2   | fait      | Recherche web pour le moteur neutre (Chat) — aujourd'hui réservée à Claude |
+| T-020 | bug  | P1   | fait      | En développement, l'application exécutait un sidecar périmé de trois jours |
+| T-017 | bug  | P1   | fait      | La coquille journalisait le démarrage du sidecar, jamais sa mort |
+| T-018 | bug  | P1   | fait      | Chat : le fournisseur choisi retombait silencieusement sur Claude |
+| T-016 | bug  | P2   | fait      | Le sidecar annonçait la version 0.1.0, et un test verrouillait ce mensonge |
+| T-014 | bug  | P1   | fait      | CI Windows en échec : un test construisait un chemin sans lettre de lecteur |
+| T-013 | bug  | P2   | fait      | Le miroir des tickets déduisait le dépôt du remote : inutilisable en local |
+| T-011 | bug  | P1   | fait      | L'audit de publication ne voyait pas les fichiers non suivis |
+| T-005 | bug  | P1   | fait      | Le débord R3 ignore la fenêtre 7 jours : l'Auto route vers un abonnement saturé |
+| T-006 | bug  | P1   | fait      | Tour abonnement muet : curseur infini au lieu d'un état « attente/limite atteinte » |
+| T-004 | bug  | P1   | fait      | Le fil redescend tout seul pendant un streaming |
+| T-003 | bug  | P1   | fait      | L'allowlist `tools:` d'un agent n'est pas appliquée (moteur claude) |
+| T-002 | feat | P3   | fait      | Lien « dernier rapport qualité » dans la page Système |
+| T-001 | feat | P3   | fait      | Page « Tickets » dans l'app |
 
 ---
 

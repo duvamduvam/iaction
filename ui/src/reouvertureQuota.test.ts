@@ -75,3 +75,31 @@ describe("memoriserReouverture", () => {
     expect(instantReouvertureQuota(MAINTENANT)).toBe(suivant);
   });
 });
+
+/*
+ * Deux comptes Claude (docs/spec-deux-comptes.md) : le repère de réouverture est
+ * tenu PAR compte — le réveil « au reset » d'une session Teams ne doit pas viser
+ * l'heure de réouverture du compte personnel.
+ */
+describe("réouverture par compte", () => {
+  const demain = (h: number) => new Date(Date.now() + h * 3600_000).toISOString();
+
+  it("chaque compte garde son repère", () => {
+    oublierReouverture();
+    memoriserReouverture(demain(2), "perso");
+    memoriserReouverture(demain(5), "teams");
+    const now = Date.now();
+    const perso = instantReouvertureQuota(now, "perso");
+    const teams = instantReouvertureQuota(now, "teams");
+    expect(perso).not.toBeNull();
+    expect(teams).not.toBeNull();
+    expect((teams as number) - (perso as number)).toBeGreaterThan(2.9 * 3600_000);
+  });
+
+  it("sans compte précisé, c'est perso (comportement d'avant)", () => {
+    oublierReouverture();
+    memoriserReouverture(demain(2));
+    expect(instantReouvertureQuota(Date.now())).toBe(instantReouvertureQuota(Date.now(), "perso"));
+    expect(instantReouvertureQuota(Date.now(), "teams")).toBeNull();
+  });
+});

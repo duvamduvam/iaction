@@ -24,6 +24,7 @@ import { SourcesWeb } from "./SourcesWeb";
 import { MESSAGE_ATTENTE_FOURNISSEUR, enAttenteDuPremierOctet, useAttenteFournisseur } from "./useAttenteFournisseur";
 import { TtsButton } from "./VoiceControls";
 import type { ChatEntry } from "./ChatPage";
+import { AVIS_SESSION_PERDUE } from "./sessionPerdue";
 
 /** Mémoïsé : seules les entrées dont l'objet change re-rendent (le brouillon
     du composeur vit dans l'état de la page — sans memo, chaque frappe
@@ -51,6 +52,7 @@ export const ChatBubble = memo(function ChatBubble({ entry }: Readonly<{ entry: 
       {entry.attachments && entry.attachments.length > 0 && <SentAttachments items={entry.attachments} />}
       {entry.status === "error" && <div className="chat-bubble__error">Erreur : {entry.errorMessage}</div>}
       {entry.status === "aborted" && <div className="chat-bubble__note">Réponse interrompue.</div>}
+      {entry.sessionReprise && <div className="chat-bubble__note">{AVIS_SESSION_PERDUE}</div>}
       {entry.status === "done" && entry.usage && (
         <div className="chat-bubble__usage">
           {entry.usage.promptTokens ?? "?"} + {entry.usage.completionTokens ?? "?"} tokens

@@ -82,7 +82,7 @@ export function prioRank(prio: string): number {
   return i === -1 ? TICKET_PRIOS.length : i;
 }
 
-/** Partie numérique de l'identifiant (`T-012` → 12) ; `T-???` → +∞ (rejeté en fin de tri). */
+/** Partie numérique de l'identifiant (`T-012` → 12) ; `T-183` → +∞ (rejeté en fin de tri). */
 export function idRank(id: string): number {
   const m = /(\d+)/.exec(id);
   return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;

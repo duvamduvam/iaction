@@ -34,13 +34,14 @@ import {
   handleClaudeConfigure,
   handleClaudePermission,
   handleClaudePush,
+  handleClaudeSetModel,
   handleClaudeRelease,
   handleClaudeStart,
+  handleClaudeTitreDiscussion,
   handleClaudeUsage,
   handleClaudeUsageInit,
 } from "./claude.js";
-import { handleClaudeSessionTitles } from "./claudeSessionTitles.js";
-import { handleClaudeAgents, handleClaudeForkSession } from "./sessionsClaude.js";
+import { executerClaudeComptes } from "./compteClaude.js";
 import { isNonEmptyString, isPlainObject } from "./base.js";
 import { migrerDepuisAncienNom } from "./appPaths.js";
 import { handleContextCompact } from "./context.js";
@@ -55,6 +56,7 @@ import { handleProjectEnsureDoc } from "./projectDoc.js";
 import { handleNeutralAbort, handleNeutralPermission, handleNeutralStart } from "./neutralAgent.js";
 import { handleRouterRoute, handleRouterSet } from "./router.js";
 import { handleUsageStats } from "./usageStats.js";
+import { redirigerConsoleVersStderr } from "./consoleVersStderr.js";
 import { handleUsageClaudeHistory } from "./fenetresAbonnement.js";
 import {
   handleAgentsDelete,
@@ -79,6 +81,7 @@ import {
 } from "./taches.js";
 import { handleTachesTimerApply, handleTachesTimerRemove, handleTachesTimerStatus } from "./tachesTimers.js";
 import { handleTicketsList } from "./tickets.js";
+import { balayerFilsInactifs, handleSessionsDistantesArchiverConversation } from "./filsSessionsDistantes.js";
 import { handleSpeechConfigure, handleSpeechSynthesize, handleSpeechTranscribe } from "./speech.js";
 import { signalerPeremption } from "./peremption.js";
 import { handleMajVerifier } from "./maj.js";
@@ -104,6 +107,9 @@ function lireVersion(): string {
 
 const VERSION = lireVersion();
 
+// T-170 — aucune trace de bibliothèque (`console.log`) sur stdout, canal du protocole.
+redirigerConsoleVersStderr();
+
 // ---------------------------------------------------------------------------
 // Émission d'événements (stdout uniquement)
 // ---------------------------------------------------------------------------
@@ -126,6 +132,17 @@ function emitDone(id: string, data: unknown = {}): void {
 
 function emitError(id: string, message: string): void {
   emit({ id, event: "error", data: { message } });
+}
+
+/**
+ * T-169 — « méthode inconnue » porte un `code` stable : l'interface peut y
+ * reconnaître un sidecar plus ancien qu'elle sans analyser une phrase.
+ * `message` garde son préfixe historique (des appelants le testent encore).
+ */
+const CODE_METHODE_INCONNUE = "methode_inconnue";
+
+function emitMethodeInconnue(id: string, method: string): void {
+  emit({ id, event: "error", data: { message: `méthode inconnue: ${method}`, code: CODE_METHODE_INCONNUE } });
 }
 
 function emitChunk(id: string, data: unknown): void {
@@ -275,20 +292,20 @@ async function dispatch(
       case "claude.push":
         await handleClaudePush(id, params, engineEmitter);
         break;
+      case "claude.setModel":
+        await handleClaudeSetModel(id, params, engineEmitter);
+        break;
       case "claude.release":
         await handleClaudeRelease(id, params, engineEmitter);
         break;
       case "claude.commands":
         await handleClaudeCommands(id, params, engineEmitter);
         break;
-      case "claude.sessionTitles":
-        await handleClaudeSessionTitles(id, params, engineEmitter);
+      case "claude.comptes":
+        executerClaudeComptes(id, params, engineEmitter);
         break;
-      case "claude.agents":
-        await handleClaudeAgents(id, params, engineEmitter);
-        break;
-      case "claude.forkSession":
-        await handleClaudeForkSession(id, params, engineEmitter);
+      case "claude.titreDiscussion":
+        await handleClaudeTitreDiscussion(id, params, engineEmitter);
         break;
       // T-023 — `usage.openrouter` reste accepté : renommer une méthode ne
       // doit pas casser une interface qui tourne. L'ancien nom part quand
@@ -402,6 +419,9 @@ async function dispatch(
       case "tickets.list":
         await handleTicketsList(id, params, engineEmitter);
         break;
+      case "sessionsDistantes.archiverConversation":
+        await handleSessionsDistantesArchiverConversation(id, params, engineEmitter);
+        break;
       case "speech.configure":
         handleSpeechConfigure(id, params, engineEmitter);
         break;
@@ -412,7 +432,7 @@ async function dispatch(
         await handleSpeechSynthesize(id, params, engineEmitter);
         break;
       default:
-        emitError(id, `méthode inconnue: ${method}`);
+        emitMethodeInconnue(id, method);
     }
   } catch (err) {
     // Filet de sécurité : une méthode qui lève ne doit jamais faire crasher le sidecar.
@@ -493,6 +513,9 @@ function main(): void {
   }
 
   emit({ event: "ready", data: { version: VERSION, pid: process.pid } });
+
+  // T-180 — archive les sessions distantes de fil inactives depuis plus de 7 jours (rien à faire, donc aucun appel réseau, sans association).
+  void balayerFilsInactifs();
 
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 

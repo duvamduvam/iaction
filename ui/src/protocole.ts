@@ -86,6 +86,10 @@ export interface ClaudeDoneData {
    */
   contextTokens: number | null;
   totalCostUsd: number | null;
+  /** T-187 — `errors` du `result` SDK (libellés techniques). `[]` si absent. */
+  erreurs: string[];
+  /** T-187 — la reprise visait une session dont le transcript n'existe plus. */
+  sessionPerdue: boolean;
 }
 
 export function parseClaudeDone(data: Record<string, unknown>): ClaudeDoneData {
@@ -108,7 +112,11 @@ export function parseClaudeDone(data: Record<string, unknown>): ClaudeDoneData {
 
   const contextTokens = typeof data.contextTokens === "number" ? data.contextTokens : null;
   const totalCostUsd = typeof data.totalCostUsd === "number" ? data.totalCostUsd : null;
-  return { sessionId, subtype, result, usage, contextTokens, totalCostUsd };
+  const erreurs = Array.isArray(data.erreurs)
+    ? data.erreurs.filter((e): e is string => typeof e === "string")
+    : [];
+  const sessionPerdue = data.sessionPerdue === true;
+  return { sessionId, subtype, result, usage, contextTokens, totalCostUsd, erreurs, sessionPerdue };
 }
 
 /** Données extraites du `done` d'un `neutral.start` : même forme que `parseClaudeDone`, sessionId/totalCostUsd toujours `null`. */
@@ -133,6 +141,45 @@ export function parseNeutralDone(data: Record<string, unknown>): NeutralDoneData
   }
 
   return { sessionId: null, subtype, result, usage, totalCostUsd: null };
+}
+
+/**
+ * T-207 — chunk `model_change` : l'agent a changé lui-même de modèle (et
+ * peut-être d'effort) pendant le tour. `from`/`effortFrom` null = inconnu ou
+ * défaut. Sans `to` ni `raison` exploitable, `null` : rien à appliquer, et
+ * surtout rien d'inventé à afficher.
+ */
+export interface ModelChangeData {
+  from: string | null;
+  to: string;
+  effortFrom: string | null;
+  effortTo: string | null;
+  raison: string;
+}
+
+export function parseModelChange(data: Record<string, unknown>): ModelChangeData | null {
+  if (typeof data.to !== "string" || data.to === "") return null;
+  const chaineOuNull = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+  return {
+    from: chaineOuNull(data.from),
+    to: data.to,
+    effortFrom: chaineOuNull(data.effortFrom),
+    effortTo: chaineOuNull(data.effortTo),
+    raison: typeof data.raison === "string" ? data.raison : "",
+  };
+}
+
+/**
+ * T-216 — chunk `compaction_demandee` : l'agent a programmé le compactage de
+ * sa conversation. La demande EST le signal : sans `raison` exploitable, elle
+ * reste valable (raison vide), elle n'est jamais jetée.
+ */
+export interface CompactionDemandeeData {
+  raison: string;
+}
+
+export function parseCompactionDemandee(data: Record<string, unknown>): CompactionDemandeeData {
+  return { raison: typeof data.raison === "string" ? data.raison : "" };
 }
 
 import type { RouteDebord, RouteTarget, RouteTier } from "./sidecar";

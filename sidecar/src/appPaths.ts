@@ -63,7 +63,7 @@ export interface PathEnv {
   home: string;
 }
 
-function currentEnv(): PathEnv {
+export function currentEnv(): PathEnv {
   return { platform: process.platform, env: process.env, home: os.homedir() };
 }
 

@@ -170,13 +170,32 @@ export function repertoireParent(cheminAbsolu: string): string {
  * tant que `home` est `null` (comportement d'avant T-107, à l'identique). Un
  * motif comme `sed 's/a/b/'` ne matche jamais : une fois les guillemets
  * retirés, `s/a/b/` ne commence pas par `/`, et `2>&1` non plus.
+ *
+ * Variables shell (T-182) : le modèle écrit volontiers `O=~/a/b; mkdir -p
+ * "$O"; cp x.pdf "$O/y.pdf"`. Sans elles, aucun jeton ne commence par `/`
+ * ou `~/` et le dossier de rangement n'entrait jamais dans les bases : la
+ * puce répondait « introuvable dans le projet » et le clic droit n'offrait
+ * aucune application. Une affectation `NOM=valeur` vaut donc jeton (sa
+ * valeur), est mémorisée, et `$NOM`/`${NOM}` sont développés dans les
+ * jetons qui suivent. Le `;` collé en fin de jeton est retiré.
  */
 function jetonsAbsolus(commande: string, home: string | null): string[] {
   const jetons: string[] = [];
+  const variables = new Map<string, string>();
   const re = /"[^"]*"|'[^']*'|\S+/g;
   for (let m = re.exec(commande); m; m = re.exec(commande)) {
-    const brut = m[0];
-    const jeton = /^["'].*["']$/.test(brut) ? brut.slice(1, -1) : brut;
+    let brut = m[0].replace(/;+$/, "");
+    const affectation = /^([A-Za-z_]\w*)=(.*)$/.exec(brut);
+    if (affectation) brut = affectation[2];
+    let jeton = /^["'].*["']$/.test(brut) ? brut.slice(1, -1) : brut;
+    // Entre guillemets simples, le shell ne développe rien : nous non plus.
+    if (!brut.startsWith("'")) jeton = jeton.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (tout, a?: string, b?: string) => {
+      return variables.get((a ?? b) as string) ?? tout;
+    });
+    if (affectation) {
+      const valeur = estCheminPersonnel(jeton) ? developperTilde(jeton, home) : jeton;
+      variables.set(affectation[1], valeur);
+    }
     if (jeton.startsWith("/")) jetons.push(jeton);
     else if (estCheminPersonnel(jeton)) {
       const developpe = developperTilde(jeton, home);

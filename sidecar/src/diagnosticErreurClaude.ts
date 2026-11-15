@@ -23,7 +23,14 @@
  */
 
 /** Famille de cause, déduite du seul texte du message. */
-export type FamilleErreurClaude = "abonnement" | "tls" | "reseau" | "authentification" | "image" | "inconnue";
+export type FamilleErreurClaude =
+  | "abonnement"
+  | "tls"
+  | "reseau"
+  | "cloudflare"
+  | "authentification"
+  | "image"
+  | "inconnue";
 
 /** Abonnement saturé — le mot « limit » côtoie souvent « credit »/« plan ». */
 const RE_ABONNEMENT = /usage limit|rate.?limit|limit reached|quota/i;
@@ -49,6 +56,14 @@ const RE_RESEAU =
  */
 const RE_IMAGE = /image in the conversation could not be processed|image dimensions exceed|image exceeds/i;
 
+/**
+ * T-215 — page de défi Cloudflare (« 403 Attention Required! | Cloudflare »,
+ * constatée le 2026-11-13) : la requête est bloquée EN AMONT de l'API. Le
+ * message du CLI commence pourtant par « Failed to authenticate », d'où un
+ * test AVANT l'authentification : `claude login` n'y change rien.
+ */
+const RE_CLOUDFLARE = /attention required|cloudflare|cf-ray|just a moment/i;
+
 /** CLI non connecté / clé absente. */
 const RE_AUTH = /auth|login|api key|unauthorized|401/i;
 
@@ -68,6 +83,7 @@ export function classerErreurClaude(message: string): FamilleErreurClaude {
   if (RE_ABONNEMENT.test(message)) return "abonnement";
   if (RE_TLS.test(message)) return "tls";
   if (RE_RESEAU.test(message)) return "reseau";
+  if (RE_CLOUDFLARE.test(message)) return "cloudflare";
   if (RE_AUTH.test(message)) return "authentification";
   return "inconnue";
 }
@@ -80,6 +96,8 @@ const CONSEILS: Readonly<Record<Exclude<FamilleErreurClaude, "inconnue">, string
     "la connexion HTTPS vers l'API est interceptée : un antivirus qui inspecte le HTTPS, un proxy d'entreprise ou un portail captif présente son propre certificat. L'application et vos identifiants ne sont pas en cause.",
   reseau:
     "l'API Claude est injoignable depuis ce poste : réseau, VPN ou pare-feu. Vos identifiants ne sont pas en cause. Vérifiez l'accès réseau (VPN reconnecté ? portail à valider ?) puis réessayez.",
+  cloudflare:
+    "accès bloqué en amont par Cloudflare (réseau, VPN, proxy ou adresse IP partagée jugée suspecte) ; réessayez dans quelques minutes. Vos identifiants ne sont pas en cause.",
   authentification:
     "connectez-vous via `claude login` ou configurez une clé API dans Fournisseurs.",
   image:
@@ -105,7 +123,20 @@ export function decorerErreurClaude(message: string): string {
  * message du modèle n'est jamais touché.
  */
 export function texteMessageAssistant(inner: unknown, texte: string): string {
-  const synthetique =
-    typeof inner === "object" && inner !== null && (inner as { model?: unknown }).model === "<synthetic>";
-  return synthetique ? decorerErreurClaude(texte) : texte;
+  return estMessageSynthetique(inner) ? decorerErreurClaude(texte) : texte;
+}
+
+/** Message assistant SYNTHÉTISÉ par le CLI, c'est-à-dire une erreur d'API. */
+export function estMessageSynthetique(inner: unknown): boolean {
+  return typeof inner === "object" && inner !== null && (inner as { model?: unknown }).model === "<synthetic>";
+}
+
+/**
+ * T-215 — champs de journal d'une erreur d'API arrivée en message synthétique.
+ * Ce chemin ne passe pas par l'exception du flux : sans cette ligne, le tour
+ * mourait sans laisser AUCUNE trace dans le journal consolidé.
+ */
+export function champsErreurApi(texte: string): { famille: FamilleErreurClaude; statut: number | null; extrait: string } {
+  const statut = /API Error:\s*(\d{3})/i.exec(texte);
+  return { famille: classerErreurClaude(texte), statut: statut ? Number(statut[1]) : null, extrait: texte.slice(0, 300) };
 }

@@ -16,18 +16,21 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseChatDone, parseClaudeDone, parseNeutralDone } from "./protocole";
+import { parseChatDone, parseClaudeDone, parseCompactionDemandee, parseModelChange, parseNeutralDone } from "./protocole";
+import { parseComptes } from "./comptesClaude";
+import { parseTitreDiscussion } from "./titresDiscussions";
 
 const dossier = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures", "protocole");
 
 interface Temoin {
   quoi: string;
-  parseur: "parseChatDone" | "parseClaudeDone" | "parseNeutralDone" | null;
+  parseur: "parseChatDone" | "parseClaudeDone" | "parseNeutralDone" | "parseComptes" | "parseTitreDiscussion" | "parseModelChange" | "parseCompactionDemandee" | null;
   evenement: { id: string; event: string; data: Record<string, unknown> };
   attendu: unknown;
 }
 
-const PARSEURS = { parseChatDone, parseClaudeDone, parseNeutralDone } as const;
+// `parseComptes` prend le `data` brut du done, comme les autres.
+const PARSEURS = { parseChatDone, parseClaudeDone, parseNeutralDone, parseComptes, parseTitreDiscussion, parseModelChange, parseCompactionDemandee } as const;
 
 const temoins = readdirSync(dossier)
   .filter((f) => f.endsWith(".json"))
@@ -72,6 +75,43 @@ describe("cas défensifs — formes que le sidecar n'émet pas, à tolérer sans
     const extrait = parseClaudeDone({ sessionId: "s", subtype: "success" });
     expect(extrait.contextTokens).toBeNull();
     expect(extrait.totalCostUsd).toBeNull();
+  });
+
+  it("parseClaudeDone : erreurs et sessionPerdue — défauts sûrs, valeurs transportées (T-187)", () => {
+    const vide = parseClaudeDone({ sessionId: "s", subtype: "success" });
+    expect(vide.erreurs).toEqual([]);
+    expect(vide.sessionPerdue).toBe(false);
+    const perdu = parseClaudeDone({
+      sessionId: "s",
+      subtype: "error_during_execution",
+      erreurs: ["No conversation found with session ID: s", 4, null],
+      sessionPerdue: true,
+    });
+    expect(perdu.erreurs).toEqual(["No conversation found with session ID: s"]);
+    expect(perdu.sessionPerdue).toBe(true);
+    // Un « true » approximatif ne déclenche pas la reprise automatique.
+    expect(parseClaudeDone({ sessionPerdue: "true" }).sessionPerdue).toBe(false);
+  });
+
+  it("parseModelChange : sans destination exploitable ⇒ null — rien à appliquer, rien d'inventé (T-207)", () => {
+    expect(parseModelChange({ kind: "model_change" })).toBeNull();
+    expect(parseModelChange({ to: "" })).toBeNull();
+    expect(parseModelChange({ to: 42 })).toBeNull();
+  });
+
+  it("parseModelChange : champs d'avant absents ⇒ null, raison absente ⇒ chaîne vide (T-207)", () => {
+    expect(parseModelChange({ to: "claude-opus-5-5" })).toEqual({
+      from: null,
+      to: "claude-opus-5-5",
+      effortFrom: null,
+      effortTo: null,
+      raison: "",
+    });
+  });
+
+  it("parseCompactionDemandee : raison absente ou non textuelle ⇒ chaîne vide, la demande n'est jamais jetée (T-216)", () => {
+    expect(parseCompactionDemandee({ kind: "compaction_demandee" })).toEqual({ raison: "" });
+    expect(parseCompactionDemandee({ raison: 42 })).toEqual({ raison: "" });
   });
 
   it("parseNeutralDone : mêmes champs que Claude, sessionId et coût toujours null", () => {

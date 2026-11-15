@@ -1,0 +1,15 @@
+{
+  "quoi": "chunk compaction_demandee (T-216) : l'agent a programmé le compactage de sa conversation (outil mcp__studio__compacter). Rien n'est compacté dans le tour : l'UI met « /compact » en file pour la conversation (sans doublon) et affiche l'avis « Annuler » ; la commande part quand le tour rend la main.",
+  "parseur": "parseCompactionDemandee",
+  "evenement": {
+    "id": "temoin-compactage-1",
+    "event": "chunk",
+    "data": {
+      "kind": "compaction_demandee",
+      "raison": "Étape 2 terminée, contexte lourd"
+    }
+  },
+  "attendu": {
+    "raison": "Étape 2 terminée, contexte lourd"
+  }
+}

@@ -266,8 +266,9 @@ export function DelegationPanel({ sobriete }: Readonly<{ sobriete: UsageSobriete
  * facture. Basculer une tâche vers un étage inférieur ne se juge JAMAIS sur
  * les tokens déplacés : c'est le coût qui bouge, et il bouge bien plus.
  *
- * L'étage se déduit du TAUX RÉEL du modèle sur la période (`pyramideDelegation.ts`),
- * jamais de son nom — un catalogue par nom pourrit à chaque sortie de modèle.
+ * T-201 : l'étage se déduit de la FAMILLE du modèle (Haiku/Sonnet en bas, Opus au
+ * milieu, Fable en haut — `pyramideDelegation.ts`), plus du taux $/M, que chaque
+ * grille tarifaire périmait. Famille inconnue : « non classé », jamais deviné.
  *
  * Doctrine (jamais un coût sans qualité en regard) : le détail du taux
  * d'erreur PAR ÉTAGE n'existe pas encore — l'agrégat de fiabilité ne relie
@@ -312,7 +313,7 @@ export function PyramidePanel({
           <Barre
             key={l.etage}
             nom={LIBELLE_ETAGE[l.etage]}
-            detail={`cible ${l.borne.min}-${l.borne.max} %${l.dansLaBorne ? " · dans la cible" : ""}`}
+            detail={l.borne ? `cible ${l.borne.min}-${l.borne.max} %${l.dansLaBorne ? " · dans la cible" : ""}` : "sans cible"}
             pct={maxPct > 0 ? (l.pctCout / maxPct) * 100 : 0}
             valeur={`${Math.round(l.pctCout)} % · ${l.costUsd.toFixed(2)} $`}
           />

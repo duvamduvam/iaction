@@ -19,6 +19,12 @@ export interface SessionMeta {
   title: string;
   /** `true` dès que l'utilisateur a renommé la session — le titre auto n'est alors plus jamais recalculé. */
   titleCustom: boolean;
+  /**
+   * Titre généré par le modèle (`claude.titreDiscussion`, T-197). Champ SÉPARÉ
+   * du repli : aucune sauvegarde ne le recalcule, donc aucune ne l'écrase.
+   * Absent sur les sessions antérieures et tant qu'aucun titre n'a été obtenu.
+   */
+  titreIA?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -112,6 +118,21 @@ export function deriveTitleFromText(text: string): string {
   return truncated.charAt(0).toUpperCase() + truncated.slice(1);
 }
 
+/**
+ * LA règle du titre affiché (T-197), partagée par les pages Projets et Chat :
+ * le renommage à la main gagne toujours ; sinon le titre du modèle ; sinon le
+ * repli tiré du premier message. Tout recalcul de titre passe par ici — c'est
+ * ce qui garantit qu'une sauvegarde ne ramène jamais le repli sur un titre IA.
+ */
+export function titreAffiche(
+  session: { title: string; titleCustom: boolean; titreIA?: string },
+  premierMessage: string,
+): string {
+  if (session.titleCustom) return session.title;
+  const ia = typeof session.titreIA === "string" ? session.titreIA.trim() : "";
+  return ia.length > 0 ? ia : deriveTitleFromText(premierMessage);
+}
+
 /** Date relative courte (FR) pour une liste d'historique — pas de dépendance externe (Intl.RelativeTimeFormat suffirait mais ce format compact est plus lisible en liste étroite). */
 export function formatRelativeDate(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -137,7 +158,7 @@ export function sortByRecent<T extends SessionMeta>(sessions: T[]): T[] {
  * est ancienne (ex. reprise d'une vieille session juste avant une
  * sauvegarde). Les autres NE SONT PAS détruites : l'appelant les archive
  * (archivesSessions.ts, T-151) avant de les retirer du fichier. La page Chat
- * l'utilise encore pour son propre plafond.
+ * l'utilise de même (archivesChat.ts, T-152).
  */
 export function capSessions<T extends SessionMeta>(sessions: T[], activeId: string, max: number): T[] {
   if (sessions.length <= max) return sessions;

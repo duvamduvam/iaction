@@ -29,6 +29,9 @@
  */
 
 import * as journal from "./journal.js";
+import { CHANGER_MODELE_TOOL_NAME, creerOutilChangerModele, type PontChangerModele, type SdkTool } from "./changerModele.js";
+import { COMPACTER_TOOL_NAME, creerOutilCompacter, type PontCompacter } from "./compacterOutil.js";
+import { ASK_USER_TOOL_NAME } from "./paletteTour.js";
 
 /** Réponse de l'humain, telle que rendue au modèle. */
 export interface AskUserAnswer {
@@ -63,82 +66,159 @@ const TOOL_DESCRIPTION = [
   "l'essentiel pour trancher).",
 ].join(" ");
 
+type Sdk = typeof import("@anthropic-ai/claude-agent-sdk");
+type Zod = (typeof import("zod/v4"))["z"];
+
+/** L'outil `ask_user` (le seul de ce fichier qui parle à l'humain). */
+export function creerOutilAskUser(sdk: Sdk, z: Zod, ask: AskUserBridge) {
+  return sdk.tool(
+    "ask_user",
+    TOOL_DESCRIPTION,
+    {
+      questions: z
+        .array(
+          z.object({
+            question: z.string().describe("La question, formulée en une phrase claire"),
+            header: z
+              .string()
+              .describe("Étiquette très courte (max ~12 caractères) affichée en pastille, ex. « Périmètre »"),
+            multiSelect: z
+              .boolean()
+              .optional()
+              .describe("true si plusieurs options peuvent être retenues ensemble (défaut false)"),
+            context: z
+              .string()
+              .optional()
+              .describe(
+                "Faits VÉRIFIÉS qui permettent de trancher sans aller voir ailleurs : listing " +
+                  "de fichiers avec tailles et dates, extrait, chiffres relevés. Rendu en " +
+                  "Markdown au-dessus des choix : données tabulaires en TABLEAU Markdown à colonnes " +
+                  "courtes (jamais d'alignement à l'espace), bloc de code seulement pour un vrai " +
+                  "listing ou extrait, concis (≈ 20 lignes au plus, l'essentiel pour trancher). " +
+                  "Obligatoire dès que la question porte sur ce que l'utilisateur n'a pas sous les yeux.",
+              ),
+            options: z
+              .array(
+                z.object({
+                  label: z.string().describe("Le choix, 1 à 5 mots"),
+                  description: z
+                    .string()
+                    .optional()
+                    .describe("Ce qu'implique ce choix (une phrase)"),
+                }),
+              )
+              .describe("2 à 4 choix distincts ; ne pas ajouter d'option « Autre » (l'app la fournit)"),
+          }),
+        )
+        .describe("1 à 4 questions posées ensemble"),
+    },
+    async (args) => {
+      const outcome = await ask(args.questions);
+      if (!outcome.answered) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                "L'utilisateur n'a pas répondu à la question (ignorée ou tour interrompu)." +
+                (outcome.text ? ` Précision : ${outcome.text}` : "") +
+                " Poursuis avec l'hypothèse la plus raisonnable en l'annonçant, ou repose la question en texte.",
+            },
+          ],
+        };
+      }
+      return { content: [{ type: "text" as const, text: outcome.text }] };
+    },
+  );
+}
+
+/** Ce que le tour demande au serveur `studio` (T-207 : plus seulement `ask_user`). */
+export interface OutilsStudio {
+  /** Pont de `ask_user` — `null` : pas d'humain devant l'écran (tour headless). */
+  ask: AskUserBridge | null;
+  /** Pont de `changer_modele` — `null` : chat pur ou agent à modèle fixe. */
+  changerModele: PontChangerModele | null;
+  /** T-216 — pont de `compacter` — `null` : chat pur ou tour headless (le verrou du modèle ne le retire pas). */
+  compacter: PontCompacter | null;
+}
+
+/** Le serveur construit, et ce qu'il expose réellement (pour l'annonce système). */
+export interface ServeurStudio {
+  serveur: unknown;
+  /** `ask_user` est bien dans le serveur. */
+  ask: boolean;
+  changerModele: boolean;
+  compacter: boolean;
+}
+
 /**
- * Construit le serveur MCP `studio`. `null` (l'agent tourne sans l'outil, il
- * posera ses questions en texte) en mode faux SDK — les tests ne doivent
- * jamais importer le vrai SDK — ou si l'import échoue.
+ * Outils `studio` que `canUseTool` (claude.ts) autorise sans modale.
+ * - `ask_user` EST déjà une interaction humaine : demander en plus
+ *   l'autorisation de l'utiliser afficherait deux modales à la suite.
+ * - `changer_modele` (T-207) — décision de David : SANS validation, le
+ *   bandeau « Annuler » de l'UI informe après coup.
+ * - `compacter` (T-216) — même patron : l'avis « Annuler » de la bulle.
  */
-export async function buildAskUserMcpServer(ask: AskUserBridge): Promise<unknown | null> {
-  if (process.env.IACTION_FAKE_CLAUDE === "1") {
-    return null;
-  }
+export function outilStudioSansValidation(toolName: string): boolean {
+  return toolName === ASK_USER_TOOL_NAME || toolName === CHANGER_MODELE_TOOL_NAME || toolName === COMPACTER_TOOL_NAME;
+}
+
+/**
+ * Construit le serveur MCP `studio` regroupant les outils internes du tour
+ * (T-216 : `compacter` aussi ; T-207 : `ask_user` conditionnel, `changer_modele` pour TOUT tour projet
+ * Claude — un seul nom de serveur, donc `mcp__studio__changer_modele` comme
+ * la spec le nomme, ce qu'un second serveur n'aurait pas permis).
+ *
+ * `null` si aucun outil n'est demandé, en mode faux SDK — les tests ne doivent
+ * jamais importer le vrai SDK — ou si l'import échoue (l'agent tourne sans
+ * l'outil : il posera ses questions en texte).
+ *
+ * Exception de test : avec `IACTION_FAKE_CLAUDE_STUDIO=1`, le faux SDK reçoit
+ * un serveur de substitution `{ outilsFactices }` dont les gestionnaires sont
+ * les VRAIS (zod réel, vraie émission du chunk) — c'est ce qui permet au faux
+ * moteur d'appeler `changer_modele` et de capturer un témoin de protocole émis
+ * par le vrai sidecar. `ask_user` n'y figure jamais.
+ */
+export async function buildStudioMcpServer(outils: OutilsStudio): Promise<ServeurStudio | null> {
+  if (outils.ask === null && outils.changerModele === null && outils.compacter === null) return null;
+  const faux = process.env.IACTION_FAKE_CLAUDE === "1";
+  if (faux && process.env.IACTION_FAKE_CLAUDE_STUDIO !== "1") return null;
   try {
-    const sdk = await import("@anthropic-ai/claude-agent-sdk");
     const { z } = await import("zod/v4");
-    const askTool = sdk.tool(
-      "ask_user",
-      TOOL_DESCRIPTION,
-      {
-        questions: z
-          .array(
-            z.object({
-              question: z.string().describe("La question, formulée en une phrase claire"),
-              header: z
-                .string()
-                .describe("Étiquette très courte (max ~12 caractères) affichée en pastille, ex. « Périmètre »"),
-              multiSelect: z
-                .boolean()
-                .optional()
-                .describe("true si plusieurs options peuvent être retenues ensemble (défaut false)"),
-              context: z
-                .string()
-                .optional()
-                .describe(
-                  "Faits VÉRIFIÉS qui permettent de trancher sans aller voir ailleurs : listing " +
-                    "de fichiers avec tailles et dates, extrait, chiffres relevés. Rendu en " +
-                    "Markdown au-dessus des choix : données tabulaires en TABLEAU Markdown à colonnes " +
-                    "courtes (jamais d'alignement à l'espace), bloc de code seulement pour un vrai " +
-                    "listing ou extrait, concis (≈ 20 lignes au plus, l'essentiel pour trancher). " +
-                    "Obligatoire dès que la question porte sur ce que l'utilisateur n'a pas sous les yeux.",
-                ),
-              options: z
-                .array(
-                  z.object({
-                    label: z.string().describe("Le choix, 1 à 5 mots"),
-                    description: z
-                      .string()
-                      .optional()
-                      .describe("Ce qu'implique ce choix (une phrase)"),
-                  }),
-                )
-                .describe("2 à 4 choix distincts ; ne pas ajouter d'option « Autre » (l'app la fournit)"),
-            }),
-          )
-          .describe("1 à 4 questions posées ensemble"),
-      },
-      async (args) => {
-        const outcome = await ask(args.questions);
-        if (!outcome.answered) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  "L'utilisateur n'a pas répondu à la question (ignorée ou tour interrompu)." +
-                  (outcome.text ? ` Précision : ${outcome.text}` : "") +
-                  " Poursuis avec l'hypothèse la plus raisonnable en l'annonçant, ou repose la question en texte.",
-              },
-            ],
-          };
-        }
-        return { content: [{ type: "text" as const, text: outcome.text }] };
-      },
-    );
-    return sdk.createSdkMcpServer({ name: "studio", tools: [askTool] });
+    if (faux) {
+      const outilsFactices: Record<string, (args: unknown) => Promise<unknown>> = {};
+      const sdkFactice: SdkTool = {
+        tool: (nom, _description, _schema, gestionnaire) => {
+          outilsFactices[nom] = gestionnaire as unknown as (args: unknown) => Promise<unknown>;
+          return nom;
+        },
+      };
+      if (outils.changerModele) creerOutilChangerModele(sdkFactice, z, outils.changerModele);
+      if (outils.compacter) creerOutilCompacter(sdkFactice, z, outils.compacter);
+      return { serveur: { outilsFactices }, ask: false, changerModele: outils.changerModele !== null, compacter: outils.compacter !== null };
+    }
+    const sdk = await import("@anthropic-ai/claude-agent-sdk");
+    const tools = [
+      ...(outils.ask ? [creerOutilAskUser(sdk, z, outils.ask)] : []),
+      ...(outils.changerModele ? [creerOutilChangerModele(sdk, z, outils.changerModele)] : []),
+      ...(outils.compacter ? [creerOutilCompacter(sdk, z, outils.compacter)] : []),
+    ];
+    return {
+      // T-210 — `alwaysLoad` : outils jamais DIFFÉRÉS derrière ToolSearch. Sans
+      // lui, le modèle ne voyait que leurs noms, sans la description qui dit
+      // quand les appeler — et ne les appelait jamais. Option documentée par
+      // le SDK (sdk.d.ts, `CreateSdkMcpServerOptions.alwaysLoad` : posée en
+      // `_meta['anthropic/alwaysLoad']` sur chaque outil, équivalent API de
+      // `defer_loading: false`).
+      serveur: sdk.createSdkMcpServer({ name: "studio", tools: tools as never, alwaysLoad: true }),
+      ask: outils.ask !== null,
+      changerModele: outils.changerModele !== null,
+      compacter: outils.compacter !== null,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    // `warn` : le tour continue, l'agent posera ses questions en texte.
-    journal.warn("claude", "serveur MCP studio (ask_user) indisponible", {
+    // `warn` : le tour continue, sans ces outils (questions en texte, modèle inchangé).
+    journal.warn("claude", "serveur MCP studio indisponible", {
       fields: { erreur: message },
     });
     return null;

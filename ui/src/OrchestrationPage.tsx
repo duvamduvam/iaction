@@ -70,6 +70,7 @@ import {
 import { notifyUsageChanged } from "./usageBus";
 import { useRovingFocus } from "./useRovingFocus";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Deroulant } from "./Deroulant";
 
 type OrchSubTab = "agents" | "orchestrations" | "runs" | "taches";
 
@@ -539,7 +540,7 @@ export function OrchestrationPage({ projects, providers }: Readonly<Orchestratio
 
         <div className="field orch-context-select">
           <label htmlFor="orch-context">Contexte</label>
-          <select id="orch-context" value={contextId} onChange={(e) => setContextId(e.currentTarget.value)}>
+          <Deroulant id="orch-context" value={contextId} onChange={setContextId}>
             <option value="">Global uniquement</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -555,7 +556,7 @@ export function OrchestrationPage({ projects, providers }: Readonly<Orchestratio
                 ))}
               </optgroup>
             )}
-          </select>
+          </Deroulant>
         </div>
       </div>
 

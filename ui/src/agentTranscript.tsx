@@ -11,6 +11,8 @@
 
 import { memo } from "react";
 import { SentAttachments } from "./Attachments";
+import { libelleEffort, libelleModele, morceauxBandeau, type ChangementModele } from "./changementModele";
+import { indexCompactionAnnulable, type CompactionDemandee } from "./compactionDemandee";
 import { formaterHeureDiscrete } from "./heureDiscrete";
 import { closeDanglingFence, Markdown } from "./Markdown";
 import { MenuReference } from "./menuReference";
@@ -34,6 +36,7 @@ import {
   type AgentBlock,
   type AgentTurn,
 } from "./agentTurns";
+import { AVIS_SESSION_PERDUE } from "./sessionPerdue";
 
 function ThinkingBlockView({ content }: Readonly<{ content: string }>) {
   return (
@@ -130,6 +133,79 @@ const AgentBlockView = memo(function AgentBlockView({
   return <ToolBlockView block={block} />;
 });
 
+/**
+ * T-207 — « L'agent est passé à **Opus 5.5** · effort moyen — *raison* » + Annuler.
+ * Même registre que les autres notes de bulle ; le bouton disparaît une fois
+ * cliqué (la trace reste, dite « annulé »). Sans rappel fourni (relecture
+ * d'un fil archivé), pas de bouton.
+ */
+function BandeauChangementModele({
+  changement,
+  onAnnuler,
+}: Readonly<{ changement: ChangementModele; onAnnuler?: () => void }>) {
+  const { modele, effort, raison } = morceauxBandeau(changement);
+  return (
+    <div className="chat-bubble__note">
+      L'agent est passé à <strong>{modele}</strong>
+      {effort && <> · {effort}</>}
+      {raison && (
+        <>
+          {" — "}
+          <em>{raison}</em>
+        </>
+      )}
+      {changement.annule ? (
+        <> · annulé (retour à {libelleModele(changement.from)})</>
+      ) : (
+        onAnnuler && (
+          <button
+            type="button"
+            className="btn btn--ghost cleared-notice__undo"
+            onClick={onAnnuler}
+            title={`Revenir à ${libelleModele(changement.from)}${changement.effortFrom !== changement.effortTo ? ` (effort ${libelleEffort(changement.effortFrom)})` : ""}`}
+          >
+            Annuler
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+
+/**
+ * T-216 — « L'agent a demandé un compactage — il partira à la fin du tour ·
+ * Annuler ». La raison de l'agent est en infobulle. Le bouton n'existe que
+ * tant que « /compact » attend en file pour CETTE demande (`onAnnuler` fourni
+ * par la liste) ; une fois parti ou retiré, l'avis reste comme trace.
+ */
+function AvisCompactionDemandee({
+  demande,
+  onAnnuler,
+}: Readonly<{ demande: CompactionDemandee; onAnnuler?: () => void }>) {
+  return (
+    <div className="chat-bubble__note" title={demande.raison.trim() || undefined}>
+      L'agent a demandé un compactage
+      {demande.annule ? (
+        <> · annulé</>
+      ) : (
+        onAnnuler && (
+          <>
+            {" — il partira à la fin du tour · "}
+            <button
+              type="button"
+              className="btn btn--ghost cleared-notice__undo"
+              onClick={onAnnuler}
+              title="Retirer « /compact » de la file"
+            >
+              Annuler
+            </button>
+          </>
+        )
+      )}
+    </div>
+  );
+}
+
 function AgentTurnMeta({ info }: Readonly<{ info: NonNullable<AgentTurn["doneInfo"]> }>) {
   return (
     <div className="chat-bubble__usage">
@@ -154,6 +230,8 @@ export const AgentTurnView = memo(function AgentTurnView({
   onFileRef,
   cwd,
   onReleaseBackground,
+  onAnnulerChangementModele,
+  onAnnulerCompaction,
   sousAgentEnCours,
 }: Readonly<{
   turn: AgentTurn;
@@ -162,6 +240,10 @@ export const AgentTurnView = memo(function AgentTurnView({
   cwd: string | null;
   /** Rendre la main pendant l'attente des rapports de tâches de fond (claude.release). */
   onReleaseBackground?: () => void;
+  /** T-207 — « Annuler » du bandeau de changement de modèle (identité stable, comme les autres rappels). */
+  onAnnulerChangementModele?: (turnId: string) => void;
+  /** T-216 — « Annuler » de l'avis de compactage : fourni à la SEULE bulle dont la demande attend encore en file. */
+  onAnnulerCompaction?: (turnId: string) => void;
   /** T-102 — ce tour est une demande glissée (`injected`) survenue pendant
       qu'un sous-agent occupait le tour précédent : la note « en cours de
       tour » doit le dire, plutôt que de laisser croire à une attente
@@ -271,8 +353,12 @@ export const AgentTurnView = memo(function AgentTurnView({
         {turn.status === "done" && turn.doneInfo && turnSubtypeNotice(turn.doneInfo.subtype) && (
           <div className="chat-bubble__note chat-bubble__note--strong">
             {turnSubtypeNotice(turn.doneInfo.subtype)}
+            {turn.doneInfo.erreurs && turn.doneInfo.erreurs.length > 0 && ` ${turn.doneInfo.erreurs.join(" — ")}`}
           </div>
         )}
+        {/* T-187 — la session d'origine avait disparu : le tour a été relancé
+            sur une nouvelle session, à partir d'un récapitulatif. */}
+        {turn.sessionReprise && <div className="chat-bubble__note">{AVIS_SESSION_PERDUE}</div>}
         {/* Compaction de contexte : confirmation explicite — c'est tout le
             « résultat » d'un /compact, qui ne produit aucun texte par ailleurs. */}
         {turn.compacted && (
@@ -281,6 +367,20 @@ export const AgentTurnView = memo(function AgentTurnView({
             {turn.compacted.preTokens !== null && ` (${Math.round(turn.compacted.preTokens / 1000)} k tokens avant)`}
             {turn.status !== "streaming" && " — la session continue sur l'historique résumé."}
           </div>
+        )}
+        {/* T-207 — l'agent a changé lui-même de modèle : on le dit, avec de quoi revenir. */}
+        {turn.changementModele && (
+          <BandeauChangementModele
+            changement={turn.changementModele}
+            onAnnuler={onAnnulerChangementModele ? () => onAnnulerChangementModele(turn.id) : undefined}
+          />
+        )}
+        {/* T-216 — l'agent a programmé le compactage : il part à la fin du tour, sauf annulation. */}
+        {turn.compactionDemandee && (
+          <AvisCompactionDemandee
+            demande={turn.compactionDemandee}
+            onAnnuler={onAnnulerCompaction ? () => onAnnulerCompaction(turn.id) : undefined}
+          />
         )}
         {/* T-087 — bulle ouverte pour une demande glissée qui n'a jamais été
             vue par le modèle (chunk `push_perdu`) : elle ne recevra jamais de
@@ -332,12 +432,19 @@ export const AgentTranscript = memo(function AgentTranscript({
   onFileRef,
   cwd,
   onReleaseBackground,
+  onAnnulerChangementModele,
+  onAnnulerCompaction,
 }: Readonly<{
   turns: AgentTurn[];
   onFileRef: (ref: string, forcer?: ForcageOuverture) => void;
   cwd: string | null;
   onReleaseBackground?: () => void;
+  onAnnulerChangementModele?: (turnId: string) => void;
+  /** T-216 — fourni par la page SEULEMENT quand « /compact » attend en file : sinon rien à annuler. */
+  onAnnulerCompaction?: (turnId: string) => void;
 }>) {
+  // T-216 — une seule bulle porte « Annuler » : la dernière demande pas encore servie.
+  const compactionAnnulable = onAnnulerCompaction ? indexCompactionAnnulable(turns) : -1;
   return (
     <>
       {turns.map((turn, index) => (
@@ -347,6 +454,8 @@ export const AgentTranscript = memo(function AgentTranscript({
           onFileRef={onFileRef}
           cwd={cwd}
           onReleaseBackground={onReleaseBackground}
+          onAnnulerChangementModele={onAnnulerChangementModele}
+          onAnnulerCompaction={index === compactionAnnulable ? onAnnulerCompaction : undefined}
           // T-102 — seul un tour injecté a besoin de savoir si le tour QUI LE
           // PRÉCÈDE (celui qu'il vient de clore) portait un sous-agent encore
           // en vol : inutile de le calculer pour les autres.

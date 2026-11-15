@@ -14,6 +14,7 @@
 
 import { autoDebordCostUsdThisMonth, isLocalProviderId } from "./usageStats.js";
 import { readLatestClaudeWindows } from "./fenetresAbonnement.js";
+import { COMPTE_PAR_DEFAUT } from "./compteClaude.js";
 import { getProvider } from "./engine.js";
 import type { RouteTarget, RoutingTable } from "./router.js";
 
@@ -78,7 +79,9 @@ export async function applyDebord(
   if (!config || target.engine !== "claude") {
     return { target, debord: null };
   }
-  const windows = await readLatestClaudeWindows();
+  // Le débord ne regarde QUE le compte principal : l'autre compte n'est jamais
+  // une cible de repli, et ses relevés ne doivent jamais influencer cette décision.
+  const windows = await readLatestClaudeWindows(COMPTE_PAR_DEFAUT);
   if (!windows) {
     return { target, debord: null };
   }

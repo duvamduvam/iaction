@@ -88,6 +88,29 @@ export function analyserTickets(markdown) {
 }
 
 /**
+ * T-208 — le tableau et le corps d'un ticket ne doivent pas se contredire.
+ * Deux règles, choisies parce qu'elles se vérifient sans interpréter la prose :
+ * 1. le « **Statut** x » du corps, quand il existe, égale la colonne Statut ;
+ * 2. un ticket clos (fait/abandonné) ne finit pas sur un « **Non traité** »
+ *    qu'aucun paragraphe de clôture ou de correction ne suit.
+ * Rend la liste lisible des écarts (vide = cohérent). Pur.
+ */
+export function incoherencesStatut(tickets) {
+  const ecarts = [];
+  for (const t of tickets) {
+    const m = /\*\*Statut\*\*\s+(en cours|ouvert|fait|abandonné)/.exec(t.corps);
+    if (m && m[1] !== t.statut) ecarts.push(`${t.id} : tableau « ${t.statut} », corps « ${m[1]} »`);
+    // Un « Non traité » d'historique, suivi d'un paragraphe de clôture, est légitime.
+    const nonTraite = t.corps.lastIndexOf("**Non traité**");
+    const cloture = Math.max(...["**Clôture**", "**Correction**", "**Clos**"].map((m) => t.corps.lastIndexOf(m)));
+    if (STATUTS_CLOS.has(t.statut) && nonTraite >= 0 && nonTraite > cloture) {
+      ecarts.push(`${t.id} : « ${t.statut} » mais le corps dit « Non traité »`);
+    }
+  }
+  return ecarts;
+}
+
+/**
  * Compare tickets et issues, rend la liste des actions. Pur : aucun réseau,
  * aucun ordre d'exécution caché — ce qui le rend testable et lisible dans le
  * journal de CI avant application.

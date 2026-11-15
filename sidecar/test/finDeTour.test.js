@@ -18,7 +18,7 @@
 
 import { lancer, assert, moduleCompile } from "./harness.mjs";
 
-const { classerIssueDeTour, libelleAbandonUtilisateur, subtypePourInterface } = await import(
+const { classerIssueDeTour, libelleAbandonUtilisateur, subtypePourInterface, extraireErreursResultat, estSessionPerdue, diagnostiquerResultat } = await import(
   moduleCompile("claudeFinDeTour.js")
 );
 const { newSobrieteAgg, applySobrieteEvent, finalizeSobriete } = await import(
@@ -155,6 +155,40 @@ function testSubtypePourInterface() {
   console.log("OK: subtypePourInterface — seul un abandon EXPLICITE masque le subtype ambigu");
 }
 
+function testErreursResultat() {
+  assert(JSON.stringify(extraireErreursResultat({})) === "[]", "pas de errors ⇒ []");
+  assert(JSON.stringify(extraireErreursResultat({ errors: "x" })) === "[]", "errors non tableau ⇒ []");
+  assert(
+    JSON.stringify(extraireErreursResultat({ errors: ["a", 3, null, "b"] })) === '["a","b"]',
+    "seules les chaînes sont gardées",
+  );
+  const longue = extraireErreursResultat({ errors: ["x".repeat(900)] });
+  assert(longue[0].length === 500, `entrée bornée à 500, reçu ${longue[0].length}`);
+  console.log("OK: extraireErreursResultat — tableau de chaînes bornées, sinon []");
+}
+
+function testSessionPerdue() {
+  assert(
+    estSessionPerdue(["No conversation found with session ID: 06ad533b-0000"]),
+    "le libellé du SDK ⇒ session perdue",
+  );
+  assert(estSessionPerdue(["NO CONVERSATION FOUND WITH SESSION ID: x"]), "insensible à la casse");
+  assert(!estSessionPerdue([]), "aucune erreur ⇒ pas perdue");
+  assert(!estSessionPerdue(["Autre panne"]), "autre erreur ⇒ pas perdue");
+  console.log("OK: estSessionPerdue — reconnaît le seul libellé du SDK");
+}
+
+function testDiagnosticResultat() {
+  const perdue = { errors: ["No conversation found with session ID: x"] };
+  assert(diagnostiquerResultat(perdue, true, null).sessionPerdue, "reprise + libellé ⇒ session perdue");
+  assert(diagnostiquerResultat(perdue, true, "refus").sessionPerdue, "un refus n'empêche pas la reprise");
+  assert(!diagnostiquerResultat(perdue, false, null).sessionPerdue, "pas de reprise demandée ⇒ pas perdue");
+  const abandon = diagnostiquerResultat(perdue, true, "abandon");
+  assert(!abandon.sessionPerdue, "un abandon ne déclenche jamais de relance");
+  assert(abandon.erreurs.length === 1, "la cause reste rapportée après un abandon");
+  console.log("OK: diagnostiquerResultat — jamais de relance après « Arrêter »");
+}
+
 await lancer(
   "T-082 — fin de tour : panne ou interruption",
   testSucces,
@@ -164,4 +198,7 @@ await lancer(
   testHistoriqueAnterieur,
   testLibelleAbandonUtilisateur,
   testSubtypePourInterface,
+  testErreursResultat,
+  testDiagnosticResultat,
+  testSessionPerdue,
 );

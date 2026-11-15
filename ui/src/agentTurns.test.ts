@@ -21,13 +21,17 @@ import {
   sousAgentOccupaitLeTour,
   sousAgentsDuTour,
   sousAgentsVifs,
+  tachesDeFondHorsSousAgents,
   spokenTextOfTurn,
+  texteLuDuDernierTour,
   toolPreview,
   turnSubtypeNotice,
   withAgentSystemPrompt,
   withPushPerdu,
   withSousAgentBattement,
   withTurnError,
+  piecesOrphelines,
+  rangerPiecesARenvoyer,
   retirerPushCorrespondant,
   type AgentBlock,
   type AgentTurn,
@@ -152,6 +156,17 @@ describe("lecture d'un tour", () => {
     expect(dit).not.toContain("ls");
   });
 
+  it("texteLuDuDernierTour ne lit que le dernier tour assistant, dans l'état demandé", () => {
+    const blocks = appendToLastBlock([], "text", "Voilà.");
+    const fini = tour({ blocks, status: "done" });
+    expect(texteLuDuDernierTour([fini], "done")).toBe("Voilà.");
+    expect(texteLuDuDernierTour([fini], "streaming")).toBeNull();
+    expect(texteLuDuDernierTour([tour({ blocks, status: "streaming" })], "streaming")).toBe("Voilà.");
+    expect(texteLuDuDernierTour([fini, tour({ role: "user", blocks })], "done")).toBeNull();
+    expect(texteLuDuDernierTour([tour({ status: "done" })], "done")).toBeNull();
+    expect(texteLuDuDernierTour([], "done")).toBeNull();
+  });
+
   it("withTurnError marque le bon tour en erreur", () => {
     const turns = [tour({ id: "a" }), tour({ id: "b", status: "streaming" })];
     const apres = withTurnError(turns, "b", "réseau coupé");
@@ -218,6 +233,44 @@ describe("retirerPushCorrespondant — T-064, la copie locale des pièces pouss�
     const { trouve, reste } = retirerPushCorrespondant(enCours, "x");
     expect(trouve).toBeUndefined();
     expect(reste).toBe(enCours);
+  });
+});
+
+describe("pièces à renvoyer — T-183, un push perdu repart avec ses pièces", () => {
+  it("rangerPiecesARenvoyer ajoute en fin de file sans muter l'entrée", () => {
+    const file = [{ contenu: "a", attachments: ["img1"] }];
+    const suite = rangerPiecesARenvoyer(file, "b", ["img2"]);
+    expect(suite).toEqual([
+      { contenu: "a", attachments: ["img1"] },
+      { contenu: "b", attachments: ["img2"] },
+    ]);
+    expect(file.length).toBe(1);
+  });
+
+  it("le renvoi consomme l'entrée correspondante, FIFO si le même texte est rangé deux fois", () => {
+    const file = rangerPiecesARenvoyer(rangerPiecesARenvoyer([], "x", ["p1"]), "x", ["p2"]);
+    const { trouve, reste } = retirerPushCorrespondant(file, "x");
+    expect(trouve?.attachments).toEqual(["p1"]);
+    expect(reste).toEqual([{ contenu: "x", attachments: ["p2"] }]);
+  });
+
+  it("piecesOrphelines rend les pièces des messages retirés et garde le reste", () => {
+    const file = [
+      { contenu: "a", attachments: ["p1", "p2"] },
+      { contenu: "b", attachments: ["p3"] },
+      { contenu: "c", attachments: ["p4"] },
+    ];
+    const { pieces, reste } = piecesOrphelines(file, ["c", "a"]);
+    expect(pieces).toEqual(["p4", "p1", "p2"]);
+    expect(reste).toEqual([{ contenu: "b", attachments: ["p3"] }]);
+    expect(file.length).toBe(3);
+  });
+
+  it("un message retiré sans pièces rangées ne rend rien et ne touche pas au reste", () => {
+    const file = [{ contenu: "a", attachments: ["p1"] }];
+    const { pieces, reste } = piecesOrphelines(file, ["texte seul"]);
+    expect(pieces).toEqual([]);
+    expect(reste).toBe(file);
   });
 });
 
@@ -323,6 +376,7 @@ describe("sousAgentsDuTour — T-077, qui travaille pour ce tour", () => {
       termine: false,
       erreur: false,
       arrierePlan: false,
+      modele: null,
     });
   });
 
@@ -366,6 +420,18 @@ describe("sousAgentsDuTour — T-077, qui travaille pour ce tour", () => {
     ]);
   });
 
+  it("T-203 — `modele` reprend le `model` de l'appel, null s'il est absent, vide ou mal typé", () => {
+    const turn = tour({
+      blocks: [
+        blocOutil({ id: "b1", toolInput: { subagent_type: "implementeur", model: " opus " } }),
+        blocOutil({ id: "b2", toolInput: { subagent_type: "implementeur" } }),
+        blocOutil({ id: "b3", toolInput: { subagent_type: "implementeur", model: "  " } }),
+        blocOutil({ id: "b4", toolInput: { subagent_type: "implementeur", model: 42 } }),
+      ],
+    });
+    expect(sousAgentsDuTour(turn).map((a) => a.modele)).toEqual(["opus", null, null, null]);
+  });
+
   it("un tour sans blocs, ou absent, ne rend rien (jamais d'exception)", () => {
     expect(sousAgentsDuTour(undefined)).toEqual([]);
     expect(sousAgentsDuTour(tour({ blocks: undefined }))).toEqual([]);
@@ -379,6 +445,21 @@ describe("sousAgentsDuTour — T-077, qui travaille pour ce tour", () => {
     ];
     expect(sousAgentsVifs(turns).map((a) => a.nom)).toEqual(["recent"]);
     expect(sousAgentsVifs([])).toEqual([]);
+  });
+
+  it("T-206 — `tachesDeFondHorsSousAgents` liste les tâches de fond du dernier tour, sous-agents exclus", () => {
+    const turns: AgentTurn[] = [
+      tour({ id: "a0", backgroundTasks: { count: 1, descriptions: ["vieille"], waiting: false } }),
+      tour({
+        id: "a1",
+        blocks: [blocOutil({ toolInput: { subagent_type: "implementeur", description: "Lot nickel", run_in_background: true } })],
+        backgroundTasks: { count: 2, descriptions: ["Lot nickel", "Push robot image;\n rebuild"], waiting: true },
+      }),
+      { id: "u1", role: "user", content: "et la vision ?", status: "done" },
+    ];
+    expect(tachesDeFondHorsSousAgents(turns)).toEqual(["Push robot image; rebuild"]);
+    expect(tachesDeFondHorsSousAgents([tour({ id: "a2" })])).toEqual([]);
+    expect(tachesDeFondHorsSousAgents([])).toEqual([]);
   });
 });
 

@@ -53,8 +53,6 @@ const PAGE_ZONES: Record<PageId, string[]> = {
     ".panels",
     ".logs-panel",
   ],
-  // T-159 — le panneau d'en-tête (actions, aide), puis le tableau des sessions.
-  sessions: [".sessions-claude .panel", ".sessions-claude__table"],
 };
 
 const FOCUSABLE_SELECTOR =

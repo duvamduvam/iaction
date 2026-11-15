@@ -11,7 +11,7 @@
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { analyserTickets, depotCible, planifierMiroir } from "./refleter-tickets.mjs";
+import { analyserTickets, depotCible, incoherencesStatut, planifierMiroir } from "./refleter-tickets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -154,6 +154,25 @@ Corps du T-002, après le séparateur.
     depotCible({ GH_REPO: "quelquun/essai" }) === "quelquun/essai");
 }
 
+// ── T-208 : cohérence entre le tableau et le corps ───────────────────────
+
+{
+  const t = (id, statut, corps) => ({ id, type: "bug", prio: "P2", statut, titre: "x", corps });
+  verifier("cohérent : statut du corps égal au tableau",
+    incoherencesStatut([t("T-1", "en cours", "**Type** bug · **Statut** en cours · **Créé** x")]).length === 0);
+  verifier("cohérent : corps sans ligne de statut",
+    incoherencesStatut([t("T-1", "fait", "Une ligne.")]).length === 0);
+  const divergent = incoherencesStatut([t("T-2", "fait", "**Statut** ouvert")]);
+  verifier("écart signalé : tableau « fait », corps « ouvert »",
+    divergent.length === 1 && divergent[0].includes("T-2"), divergent.join(" | "));
+  verifier("écart signalé : clos mais « Non traité »",
+    incoherencesStatut([t("T-3", "fait", "**Statut** fait. **Non traité** : la décision.")]).length === 1);
+  verifier("cohérent : « Non traité » d'historique suivi d'une clôture",
+    incoherencesStatut([t("T-5", "fait", "**Non traité** : la décision.\n\n**Clôture** : réglé.")]).length === 0);
+  verifier("un ticket ouvert peut dire « Non traité »",
+    incoherencesStatut([t("T-4", "ouvert", "**Statut** ouvert. **Non traité**.")]).length === 0);
+}
+
 // ── Le vrai fichier : c'est lui que la CI reflétera ──────────────────────
 
 {
@@ -172,6 +191,9 @@ Corps du T-002, après le séparateur.
   verifier("docs/tickets.md : types et prios dans les vocabulaires de la convention",
     tickets.every((t) => ["bug", "feat", "tech", "doc"].includes(t.type) && ["P1", "P2", "P3"].includes(t.prio)),
     tickets.filter((t) => !["bug", "feat", "tech", "doc"].includes(t.type) || !["P1", "P2", "P3"].includes(t.prio)).map((t) => t.id).join(" "));
+  const ecarts = incoherencesStatut(tickets);
+  verifier("docs/tickets.md : le tableau et le corps de chaque ticket s'accordent (T-208)",
+    ecarts.length === 0, ecarts.join(" | "));
 }
 
 console.log(`${reussites} réussite(s), ${echecs} échec(s)`);

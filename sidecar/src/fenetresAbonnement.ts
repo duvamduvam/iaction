@@ -17,8 +17,12 @@
 import { errMessage, isNonEmptyString, isPlainObject } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import * as journal from "./journal.js";
-import { enqueueWrite, globalConfigRoot, readJsonlTail, readJsonlTolerant } from "./jsonlStore.js";
+import { enqueueWrite, globalConfigRoot, readJsonlTailWithInfo, readJsonlTolerant, TAIL_READ_BYTES } from "./jsonlStore.js";
+import { COMPTE_PAR_DEFAUT, compteDemande, compteDeLigne, type CompteId } from "./compteClaude.js";
 import path from "node:path";
+
+/** Relecture élargie quand le bloc de fin ne porte aucune ligne du compte demandé. */
+const TAIL_ELARGIE_BYTES = 1024 * 1024;
 
 function claudeWindowsPath(): string {
   return path.join(globalConfigRoot(), "usage", "claude-windows.jsonl");
@@ -72,8 +76,12 @@ export function signatureFenetres(windows: Record<string, unknown>): string {
     .join("|");
 }
 
-/** État du dernier instantané écrit — mémoire de processus, jamais persistée. */
-let dernierInstantane: { signature: string; ts: number } | null = null;
+/**
+ * État du dernier instantané écrit, PAR COMPTE — mémoire de processus, jamais
+ * persistée. Un état unique ferait écarter l'instantané d'un compte parce qu'il
+ * ressemble à celui de l'autre (deux comptes à 0 % ont la même signature).
+ */
+const derniersInstantanes = new Map<CompteId, { signature: string; ts: number }>();
 
 /**
  * T-073 — faut-il écrire cet instantané ?
@@ -97,16 +105,24 @@ export function doitEnregistrerInstantane(
 
 /** Test only : oublie le dernier instantané écrit. */
 export function reinitialiserCadenceInstantanes(): void {
-  dernierInstantane = null;
+  derniersInstantanes.clear();
 }
 
-export function recordClaudeWindowsSnapshot(windows: Record<string, unknown>): void {
+export function recordClaudeWindowsSnapshot(
+  windows: Record<string, unknown>,
+  compte: CompteId = COMPTE_PAR_DEFAUT,
+): void {
   try {
     const maintenant = Date.now();
     const signature = signatureFenetres(windows);
-    if (!doitEnregistrerInstantane(dernierInstantane, signature, maintenant)) return;
-    dernierInstantane = { signature, ts: maintenant };
-    const line = JSON.stringify({ ts: new Date(maintenant).toISOString(), windows });
+    if (!doitEnregistrerInstantane(derniersInstantanes.get(compte) ?? null, signature, maintenant)) return;
+    derniersInstantanes.set(compte, { signature, ts: maintenant });
+    // `compte` n'est écrit que s'il diffère de `perso` : les lignes d'avant valent `perso`.
+    const line = JSON.stringify({
+      ts: new Date(maintenant).toISOString(),
+      ...(compte !== COMPTE_PAR_DEFAUT ? { compte } : {}),
+      windows,
+    });
     enqueueWrite(claudeWindowsPath(), line, (err) =>
       reportUsageWriteFailure("claude-windows.jsonl", err),
     );
@@ -133,29 +149,120 @@ function windowUtilization(value: unknown): number | null {
 
 /**
  * R3 — dernier instantané de claude-windows.jsonl (lecture tolérante, PAR LA
- * FIN — voir readJsonlTail : jamais de parse intégral sur le chemin chaud) :
+ * FIN — voir readJsonlTailWithInfo : jamais de parse intégral sur le chemin chaud) :
  * pourcentages des fenêtres 5 h et 7 jours de l'abonnement Claude, plus le
  * `ts` de capture (R6-A — le routeur ignore les instantanés trop vieux, voir
  * DEBORD_SNAPSHOT_MAX_AGE_MS dans router.ts). `null` si aucun instantané
  * exploitable (fichier absent/vide) — le routeur ne déborde alors jamais
  * (comportement R1 inchangé).
+ *
+ * Deux comptes (docs/spec-deux-comptes.md) : seules les lignes du `compte`
+ * demandé comptent, `perso` par défaut. Une ligne `teams` à 99 % ne peut donc
+ * jamais déclencher un débord, et ne masque pas le dernier relevé de `perso`
+ * qui se trouve derrière elle. Si la fin du fichier n'en porte aucune, la
+ * lecture s'élargit une fois avant de conclure à « pas de relevé ».
  */
-export async function readLatestClaudeWindows(): Promise<{
+export async function readLatestClaudeWindows(compte: CompteId = COMPTE_PAR_DEFAUT): Promise<{
   ts: string | null;
   fiveHourPct: number | null;
   sevenDayPct: number | null;
 } | null> {
-  const rows = await readJsonlTail(claudeWindowsPath());
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const windows = rows[i].windows;
-    if (!isPlainObject(windows)) {
-      continue;
+  for (const octets of [TAIL_READ_BYTES, TAIL_ELARGIE_BYTES]) {
+    const { rows, truncated } = await readJsonlTailWithInfo(claudeWindowsPath(), octets);
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const windows = rows[i].windows;
+      if (!isPlainObject(windows) || compteDeLigne(rows[i]) !== compte) {
+        continue;
+      }
+      return {
+        ts: isNonEmptyString(rows[i].ts) ? (rows[i].ts as string) : null,
+        fiveHourPct: pctAvecPlancher(rows, i, compte, "five_hour"),
+        sevenDayPct: pctAvecPlancher(rows, i, compte, "seven_day"),
+      };
     }
-    return {
-      ts: isNonEmptyString(rows[i].ts) ? (rows[i].ts as string) : null,
-      fiveHourPct: windowUtilization(windows.five_hour),
-      sevenDayPct: windowUtilization(windows.seven_day),
-    };
+    if (!truncated) break;
+  }
+  return null;
+}
+
+/** Deux dates de réinitialisation à moins d'une minute désignent la même fenêtre. */
+export function memeReset(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return false;
+  const ecart = Math.abs(Date.parse(a) - Date.parse(b));
+  return Number.isFinite(ecart) && ecart < 60_000;
+}
+
+/**
+ * T-192 — plancher anti-recul pour le débord. Le relevé servi à l'UI est déjà
+ * protégé (`appliquerPlancher`, en mémoire), mais le débord lit l'HISTORIQUE brut,
+ * où un relevé en retard (23 % puis 11 % dans la même fenêtre) peut être le dernier.
+ * Plutôt qu'un second état à persister, le plancher se DÉRIVE de l'historique,
+ * qui survit déjà au redémarrage : valeur la plus haute de la fenêtre dans les
+ * relevés du compte qui précèdent, en remontant jusqu'à la première
+ * réinitialisation différente. Une fenêtre absente du relevé retenu reste `null`.
+ */
+function pctAvecPlancher(
+  rows: Record<string, unknown>[],
+  dernier: number,
+  compte: CompteId,
+  cle: string,
+): number | null {
+  const fenetreDe = (row: Record<string, unknown>): Record<string, unknown> | null => {
+    const w = isPlainObject(row.windows) ? row.windows[cle] : null;
+    return isPlainObject(w) ? w : null;
+  };
+  const courante = fenetreDe(rows[dernier]);
+  let pct = windowUtilization(courante);
+  if (pct === null || !courante) return pct;
+  const reset = typeof courante.resetsAt === "string" ? courante.resetsAt : null;
+  for (let j = dernier - 1; j >= 0; j--) {
+    if (compteDeLigne(rows[j]) !== compte) continue;
+    const f = fenetreDe(rows[j]);
+    if (!f) continue;
+    if (!memeReset(reset, typeof f.resetsAt === "string" ? f.resetsAt : null)) break;
+    const avant = windowUtilization(f);
+    if (avant !== null && avant > pct) pct = avant;
+  }
+  return pct;
+}
+
+
+/** Une fenêtre telle qu'écrite dans claude-windows.jsonl (`resetsAt` en camelCase, voir `signatureFenetres`). */
+export interface FenetreReleve {
+  utilization: number;
+  resetsAt: string | null;
+}
+
+/**
+ * T-202 — dernier relevé du `compte`, TOUTES fenêtres comprises (5 h, 7 jours
+ * et celles propres à un modèle, `Fable`…), pour l'outil `lire_usage`. Variante
+ * de `readLatestClaudeWindows`, qui ne rend que 5 h et 7 j pour le débord et
+ * reste inchangée. Même lecture par la fin, même élargissement unique.
+ * `null` si aucun relevé du compte ; une erreur de lecture se propage.
+ */
+export async function readLatestClaudeReleve(compte: CompteId = COMPTE_PAR_DEFAUT): Promise<{
+  ts: string | null;
+  windows: Record<string, FenetreReleve>;
+} | null> {
+  for (const octets of [TAIL_READ_BYTES, TAIL_ELARGIE_BYTES]) {
+    const { rows, truncated } = await readJsonlTailWithInfo(claudeWindowsPath(), octets);
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const brut = rows[i].windows;
+      if (!isPlainObject(brut) || compteDeLigne(rows[i]) !== compte) {
+        continue;
+      }
+      const windows: Record<string, FenetreReleve> = {};
+      for (const [cle, valeur] of Object.entries(brut)) {
+        // T-192 — même plancher anti-recul que le débord : l'agent ne doit pas
+        // lire 11 % quand la jauge a déjà vu 23 % dans la même fenêtre.
+        const utilization = pctAvecPlancher(rows, i, compte, cle);
+        if (utilization === null) continue;
+        const reprise = (valeur as Record<string, unknown>).resetsAt;
+        windows[cle] = { utilization, resetsAt: isNonEmptyString(reprise) ? reprise : null };
+      }
+      return { ts: isNonEmptyString(rows[i].ts) ? (rows[i].ts as string) : null, windows };
+    }
+    if (!truncated) break;
   }
   return null;
 }
@@ -173,9 +280,16 @@ export async function handleUsageClaudeHistory(
   const rawDays = params.days;
   const days = typeof rawDays === "number" && Number.isFinite(rawDays) && rawDays > 0 ? Math.floor(rawDays) : 30;
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  // Un historique par compte : `perso` par défaut, un id inconnu est refusé.
+  const compte = compteDemande(params.compte);
+  if (!compte) {
+    emitter.error(id, `params.compte inconnu : « ${String(params.compte)} »`);
+    return;
+  }
 
   const rows = await readJsonlTolerant(claudeWindowsPath());
   const snapshots = rows
+    .filter((r) => compteDeLigne(r) === compte)
     .map((r) => {
       if (!isNonEmptyString(r.ts)) {
         return null;

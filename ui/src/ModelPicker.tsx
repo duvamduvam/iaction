@@ -7,12 +7,7 @@
  * rendu par le système : ni prix, ni contexte, ni étoile de favori. Le
  * confort ici n'est pas décoratif — choisir un modèle, c'est arbitrer un coût.
  *
- * ── Pourquoi un portail ────────────────────────────────────────────────
- * Le sélecteur vit dans `.sidebar-section`, qui porte `overflow: hidden`
- * (App.css) : un popover en `position: absolute` y serait COUPÉ. Il est donc
- * rendu dans `document.body` en `position: fixed`, aux coordonnées du bouton
- * — recalculées au défilement et au redimensionnement plutôt que fermées,
- * pour que la liste ne disparaisse pas sous le doigt.
+ * Le portail, sa position et son suivi sont dans ancrePopover.ts.
  *
  * Toute la décision (filtres, groupes, ordre) est dans modelPickerCalc.ts, testée
  * sans fenêtre. Ce fichier ne fait que du DOM, du focus et du clavier.
@@ -27,6 +22,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { conteneurPopover, useAncrePopover, type GabaritPopover } from "./ancrePopover";
+import { Deroulant } from "./Deroulant";
 import { fuzzyScore } from "./fuzzy";
 import { formatContext, formatPricing, MODEL_SORT_OPTIONS, type ModelSortKey } from "./modelCatalog";
 import {
@@ -72,27 +69,8 @@ interface ModelPickerProps {
   rechercheWebActive?: boolean;
 }
 
-/** Hauteur maximale du popover, en px — sert aussi à décider s'il s'ouvre vers le haut. */
-const HAUTEUR_MAX = 460;
-const LARGEUR_MIN = 360;
-
-interface Position {
-  left: number;
-  width: number;
-  /** L'un des deux seulement : `top` (ouverture vers le bas) ou `bottom` (vers le haut). */
-  top?: number;
-  bottom?: number;
-}
-
-function calculerPosition(bouton: HTMLElement): Position {
-  const rect = bouton.getBoundingClientRect();
-  const width = Math.max(rect.width, LARGEUR_MIN);
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-  const placeEnDessous = window.innerHeight - rect.bottom;
-  return placeEnDessous >= HAUTEUR_MAX || placeEnDessous >= rect.top
-    ? { left, width, top: rect.bottom + 4 }
-    : { left, width, bottom: window.innerHeight - rect.top + 4 };
-}
+/** Hauteur max : sert aussi à décider si le popover s'ouvre vers le haut. */
+const GABARIT: GabaritPopover = { largeurMin: 360, hauteurMax: 460 };
 
 /**
  * Ligne rendue. Les en-têtes ne sont pas dans la navigation par flèches —
@@ -127,11 +105,14 @@ export function ModelPicker({
    * la recherche ne pourrait plus être replié à la main.
    */
   const [choixPli, setChoixPli] = useState<Record<string, boolean>>({});
-  const [position, setPosition] = useState<Position | null>(null);
-  const boutonRef = useRef<HTMLButtonElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
   const listeRef = useRef<HTMLUListElement>(null);
   const baseId = useId();
+
+  const surDehors = useCallback(() => {
+    setOuvert(false);
+    setFiltre(FILTRE_INITIAL);
+  }, []);
+  const { boutonRef, popoverRef, position, positionner } = useAncrePopover(ouvert, GABARIT, surDehors);
 
   const parId = useMemo(() => new Map(models.map((m) => [m.id, m])), [models]);
   const epingleCourant = epingles.find((o) => o.value === value);
@@ -219,12 +200,10 @@ export function ModelPicker({
     setFiltre(FILTRE_INITIAL);
     setChoixPli({});
     boutonRef.current?.focus();
-  }, []);
+  }, [boutonRef]);
 
   const ouvrir = useCallback(() => {
-    const bouton = boutonRef.current;
-    if (!bouton) return;
-    setPosition(calculerPosition(bouton));
+    positionner();
     setFiltre(FILTRE_INITIAL);
     // Le pli repart à zéro à chaque ouverture : la liste s'ouvre toujours de la
     // même façon, plutôt que dans l'état où une consultation précédente l'a
@@ -232,40 +211,7 @@ export function ModelPicker({
     // à survivre au choix qui l'a conclu.
     setChoixPli({});
     setOuvert(true);
-  }, []);
-
-  // Position suivie plutôt que figée : la barre latérale défile, et un popover
-  // `fixed` resterait sinon accroché à la place que le bouton occupait.
-  useEffect(() => {
-    if (!ouvert) return;
-    const suivre = (e: Event) => {
-      // Le défilement DANS la liste ne déplace pas le bouton : l'ignorer,
-      // sinon chaque cran de molette recalcule pour rien.
-      if (e.type === "scroll" && popoverRef.current?.contains(e.target as Node)) return;
-      const bouton = boutonRef.current;
-      if (bouton) setPosition(calculerPosition(bouton));
-    };
-    window.addEventListener("scroll", suivre, true);
-    window.addEventListener("resize", suivre);
-    return () => {
-      window.removeEventListener("scroll", suivre, true);
-      window.removeEventListener("resize", suivre);
-    };
-  }, [ouvert]);
-
-  // Clic hors du popover ET hors du bouton : fermeture. `mousedown` plutôt que
-  // `click` pour fermer avant qu'un autre contrôle ne prenne le focus.
-  useEffect(() => {
-    if (!ouvert) return;
-    const dehors = (e: MouseEvent) => {
-      const cible = e.target as Node;
-      if (popoverRef.current?.contains(cible) || boutonRef.current?.contains(cible)) return;
-      setOuvert(false);
-      setFiltre(FILTRE_INITIAL);
-    };
-    document.addEventListener("mousedown", dehors);
-    return () => document.removeEventListener("mousedown", dehors);
-  }, [ouvert]);
+  }, [positionner]);
 
   // L'ouverture positionne la sélection sur le modèle courant : la liste
   // s'ouvre sur « où j'en suis », pas en haut d'un catalogue de 300 entrées.
@@ -297,7 +243,7 @@ export function ModelPicker({
 
   /*
    * Navigation : portée par le CHAMP de recherche, pas par le popover entier.
-   * Sur le conteneur, les flèches captureraient aussi celles du `<select>` de
+   * Sur le conteneur, les flèches captureraient aussi celles de la liste de
    * tri et casseraient son propre clavier. Home/End ne sont volontairement PAS
    * détournés : dans un champ texte, ils appartiennent au curseur.
    */
@@ -382,13 +328,10 @@ export function ModelPicker({
           aria-controls={`${baseId}-liste`}
           aria-activedescendant={options.length > 0 ? `${baseId}-opt-${actif}` : undefined}
         />
-        <select
+        <Deroulant
           className="model-picker__tri"
           value={filtre.tri}
-          onChange={(e) => {
-            const tri = e.currentTarget.value as ModelSortKey;
-            setFiltre((f) => ({ ...f, tri }));
-          }}
+          onChange={(tri) => setFiltre((f) => ({ ...f, tri: tri as ModelSortKey }))}
           aria-label="Trier les modèles"
         >
           {MODEL_SORT_OPTIONS.map((o) => (
@@ -396,7 +339,7 @@ export function ModelPicker({
               {o.label}
             </option>
           ))}
-        </select>
+        </Deroulant>
       </div>
 
       <div className="model-picker__puces">
@@ -573,7 +516,7 @@ export function ModelPicker({
           ▾
         </span>
       </button>
-      {popover && createPortal(popover, document.body)}
+      {popover && createPortal(popover, conteneurPopover(boutonRef.current))}
     </>
   );
 }

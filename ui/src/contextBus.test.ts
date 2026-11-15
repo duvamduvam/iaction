@@ -40,7 +40,9 @@ describe("contextWindowFor", () => {
     expect(contextWindowFor("claude-sonnet-5-5")).toBe(1_000_000);
     // Sorti du sélecteur le 2026-10-06, encore épinglé sur des fils : il garde SA fenêtre.
     expect(contextWindowFor("claude-sonnet-5")).toBe(1_000_000);
-    // Le seul resté à 200 k — c'est lui qui rend le test non tautologique.
+    expect(contextWindowFor("claude-haiku-5-5")).toBe(1_000_000);
+    // Sorti du sélecteur le 2026-11-07, encore épinglé sur des fils : il garde
+    // SES 200 k — c'est lui qui rend le test non tautologique.
     expect(contextWindowFor("claude-haiku-4-5")).toBe(200_000);
   });
 
@@ -52,10 +54,10 @@ describe("contextWindowFor", () => {
     expect(contextWindowFor("claude-opus-4-1")).toBe(200_000);
   });
 
-  it("« claude-fable-5-1 » l'emporte sur le préfixe « claude-fable » qu'il contient", () => {
+  it("« claude-fable-5-2 » (entrée exacte de la liste) l'emporte sur le préfixe « claude-fable » qu'il contient", () => {
     // Les deux valent 1 M aujourd'hui : ce test garde l'ORDRE, pour que le
     // jour où les paliers divergeront, c'est l'entrée exacte qui gagne.
-    const table = contextWindowFor("claude-fable-5-1");
+    const table = contextWindowFor("claude-fable-5-2");
     expect(table).toBe(1_000_000);
   });
 

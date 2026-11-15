@@ -20,13 +20,13 @@
  */
 
 import os from "node:os";
-import { pathToFileURL } from "node:url";
 import { isNonEmptyString, isPlainObject } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import { validateAttachments, type Attachment } from "./attachments.js";
 import * as journal from "./journal.js";
 import { createTurnPrompt } from "./claudeTurnPrompt.js";
-import { buildAskUserMcpServer, type AskUserAnswer } from "./askUser.js";
+import { buildStudioMcpServer, outilStudioSansValidation, type AskUserAnswer } from "./askUser.js";
+import { appliquerSurQuery, executerClaudeSetModel, type PontChangerModele } from "./changerModele.js";
 import { buildKnowledgeMcpServer } from "./knowledge.js";
 import {
   buildRuntimeSnapshot,
@@ -40,20 +40,23 @@ import { ASK_USER_TOOL_NAME, composerInstructionSysteme, resumerPalette } from "
 import { ensureProjectDoc } from "./projectDoc.js";
 import { recordUsageEvent } from "./usageStats.js";
 import { recordClaudeWindowsSnapshot } from "./fenetresAbonnement.js";
+import { metaAvecCompte, resoudreCompte } from "./compteClaude.js";
 import { extractModelUsage } from "./claudeVentilation.js";
 import { executerClaudeCommands } from "./claudeCommands.js";
 import { resolveQueryFn } from "./claudeQueryFn.js";
+import { executerClaudeTitreDiscussion } from "./titreDiscussion.js";
 import { creerRegistrePushes, executerClaudePush, signalerPushesPerdus } from "./poussesEnAttente.js";
-import { decorerErreurClaude, texteMessageAssistant } from "./diagnosticErreurClaude.js";
+import { champsErreurApi, decorerErreurClaude, estMessageSynthetique, texteMessageAssistant } from "./diagnosticErreurClaude.js";
 import { origineMessage } from "./claudeSousAgents.js";
 import { armerAttenteTachesDeFond, BACKGROUND_WAIT_TIMEOUT_MS } from "./attenteTachesDeFond.js";
 import { creerSuiviSousAgents, estLanceurSousAgent } from "./sousAgentsJournal.js";
 import { creerRegistreRappels, preparerRappelSurAbandon, type DemandeurAbandon } from "./rappelInterruption.js";
-import { effortValide } from "./claudeEffort.js";
+import { effortValide, type NiveauEffort } from "./claudeEffort.js";
 import {
   armerPlafondSilence,
   cloturerTourSansResultatFinal,
   enregistrerResultatFinal,
+  diagnostiquerResultat,
   subtypePourInterface,
   type Interruption,
   type ResultatDeTour,
@@ -62,216 +65,27 @@ import {
   captureUsageSnapshot,
   executerClaudeUsage,
   executerClaudeUsageInit,
-  type ClaudeUsageSnapshot,
+  creerDepotUsage,
   type DepotUsageClaude,
 } from "./claudeUsage.js";
 
-// ---------------------------------------------------------------------------
-// Types minimalistes pour le sous-ensemble du SDK utilisé ici.
-//
-// Basés sur les .d.ts réels de @anthropic-ai/claude-agent-sdk v0.3.x
-// (node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts) :
-//   - query(params: {prompt, options}): Query
-//   - Query extends AsyncGenerator<SDKMessage, void> avec interrupt(): Promise<...>
-//   - CanUseTool: (toolName, input, options: {signal, toolUseID, ...}) => Promise<PermissionResult | null>
-//   - PermissionResult: {behavior:"allow", updatedInput?} | {behavior:"deny", message: string, ...}
-//   - messages : {type:"system", subtype:"init", session_id, model, ...}
-//                {type:"stream_event", event: BetaRawMessageStreamEvent, ...}
-//                {type:"assistant", message: {content: BetaContentBlock[]}, ...}
-//                {type:"user", message: {content: (tool_result|...)[]}, ...}
-//                {type:"result", subtype, result?, usage (snake_case: input_tokens,
-//                 output_tokens, cache_read_input_tokens, ...), total_cost_usd, session_id}
-// On reste volontairement en unknown/Record<string, unknown> + narrowing plutôt
-// que d'importer les types réels du SDK, pour ne pas coupler ce module à sa
-// surface complète (des dizaines de types non utilisés ici).
-// ---------------------------------------------------------------------------
-
-export interface PermissionResultAllow {
-  behavior: "allow";
-  updatedInput?: Record<string, unknown>;
-}
-
-export interface PermissionResultDeny {
-  behavior: "deny";
-  message: string;
-}
-
-export type PermissionResult = PermissionResultAllow | PermissionResultDeny;
-
-export type CanUseTool = (
-  toolName: string,
-  input: Record<string, unknown>,
-  options: { signal: AbortSignal; toolUseID: string; [key: string]: unknown },
-) => Promise<PermissionResult | null>;
-
-export interface ClaudeQueryOptions {
-  cwd?: string;
-  resume?: string;
-  model?: string;
-  /** Niveau d'effort de raisonnement (voir claudeEffort.ts) — absent = réglage global. */
-  effort?: string;
-  permissionMode?: string;
-  systemPrompt?: import("./paletteTour.js").InstructionSysteme;
-  includePartialMessages?: boolean;
-  env?: Record<string, string | undefined>;
-  canUseTool?: CanUseTool;
-  /**
-   * Jeu d'outils intégrés disponibles. `[]` = aucun outil (mode chat pur :
-   * le modèle ne voit même pas les outils, il répond directement).
-   */
-  tools?: string[];
-  /**
-   * Serveurs MCP à exposer au SDK (voir docs/protocol.md, section claude.start
-   * § MCP). Config stdio ({command, args?, env?}) ou distante ({type, url,
-   * headers?}) — passée telle quelle au SDK sans re-validation de schéma.
-   * Absent en mode chatOnly.
-   */
-  mcpServers?: Record<string, unknown>;
-  /**
-   * Sources de réglages filesystem chargées par le SDK (`user` = ~/.claude,
-   * `project` = <cwd>/.claude, `local` = settings.local). Omis = toutes les
-   * sources (défaut CLI). On passe les trois pour le moteur projet : les
-   * skills GLOBAUX du poste (~/.claude/skills : grill-me, maison…) et les
-   * commandes globales (~/.claude/commands) sont volontairement hérités par
-   * tous les projets — décision du 2026-08-03, qui remplace l'isolation
-   * stricte d'origine (voir docs/protocol.md, claude.start). `'project'` doit
-   * rester présent pour que CLAUDE.md du projet soit chargé.
-   */
-  settingSources?: ("user" | "project" | "local")[];
-  /**
-   * Outils intégrés retirés du contexte du modèle. On y met `AskUserQuestion` :
-   * son formulaire interactif ne peut PAS être rendu ni répondu via l'API
-   * programmatique du SDK v0.3.x (vérifié : ni `canUseTool` — qui ne peut que
-   * autoriser/refuser, jamais fournir de réponse — ni le dialogue
-   * `onUserDialog`, jamais émis par le CLI bundlé, ne remontent la question).
-   * L'outil s'affichait alors en bloc `tool_use` brut puis retournait un
-   * résultat vide, et le modèle réexpliquait sa question en texte. En le
-   * retirant, le modèle pose directement ses questions en texte dans le chat —
-   * l'utilisateur y répond dans le composeur, ce qui fonctionne réellement.
-   */
-  disallowedTools?: string[];
-}
-
-/** Le sous-ensemble de `Query` (AsyncGenerator<SDKMessage, void> + interrupt()) qu'on utilise. */
-export interface ClaudeQuery {
-  [Symbol.asyncIterator](): AsyncIterator<unknown>;
-  interrupt(): Promise<unknown>;
-  /**
-   * Voie officielle mais instable du SDK pour récupérer l'usage de session +
-   * l'utilisation des fenêtres de rate-limit d'abonnement (SDKControlGetUsageResponse,
-   * voir node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts ~L2417/L3151).
-   * Optionnelle : le faux SDK utilisé par la plupart des tests ne l'implémente pas.
-   */
-  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(): Promise<unknown>;
-  /**
-   * Liste des slash-commands / skills disponibles pour la session, capturée à
-   * l'initialisation (voir node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts
-   * ~L2378, type `SlashCommand`). Optionnelle : le faux SDK des tests ne
-   * l'implémente pas forcément.
-   */
-  supportedCommands?(): Promise<
-    Array<{ name: string; description?: string; argumentHint?: string; aliases?: string[] }>
-  >;
-}
-
-/**
- * `prompt` accepte aussi un flux asynchrone d'un unique message utilisateur à
- * blocs de contenu (`AsyncIterable<Record<string, unknown>>`) — c'est la forme
- * `SDKUserMessage` du SDK (voir node_modules/@anthropic-ai/claude-agent-sdk/
- * sdk.d.ts : `query(prompt: string | AsyncIterable<SDKUserMessage>)`), utilisée
- * uniquement quand des pièces jointes sont présentes (voir buildAttachedPrompt
- * plus bas). Sans pièces jointes, le chemin chaîne reste inchangé.
- */
-export type ClaudeQueryFn = (params: {
-  prompt: string | AsyncIterable<Record<string, unknown>>;
-  options?: ClaudeQueryOptions;
-}) => ClaudeQuery;
+export type {
+  CanUseTool,
+  ClaudeQuery,
+  ClaudeQueryFn,
+  ClaudeQueryOptions,
+  PermissionResult,
+  PermissionResultAllow,
+  PermissionResultDeny,
+} from "./claudeTypes.js";
+export { extractContextTokens, extractUsage, summarizeToolResult, type Usage } from "./claudeMesures.js";
+import type { CanUseTool, ClaudeQuery, ClaudeQueryFn, ClaudeQueryOptions, PermissionResult } from "./claudeTypes.js";
+import { extractContextTokens, extractUsage, summarizeToolResult } from "./claudeMesures.js";
 
 // ---------------------------------------------------------------------------
 // Utilitaires
 // ---------------------------------------------------------------------------
 
-
-const MAX_SUMMARY = 500;
-
-/** Résumé textuel borné du contenu d'un tool_result (string ou tableau de blocs). */
-export function summarizeToolResult(content: unknown): string {
-  let text: string;
-  if (typeof content === "string") {
-    text = content;
-  } else if (Array.isArray(content)) {
-    text = content
-      .map((block) => {
-        if (isPlainObject(block) && typeof block.text === "string") {
-          return block.text;
-        }
-        try {
-          return JSON.stringify(block);
-        } catch {
-          return String(block);
-        }
-      })
-      .join("\n");
-  } else if (content === null || content === undefined) {
-    text = "";
-  } else {
-    try {
-      text = JSON.stringify(content);
-    } catch {
-      text = String(content);
-    }
-  }
-  return text.length > MAX_SUMMARY ? text.slice(0, MAX_SUMMARY) + "…" : text;
-}
-
-export interface Usage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadInputTokens?: number;
-}
-
-/** Le SDK expose l'usage en snake_case (hérité de l'API Anthropic). */
-export function extractUsage(usage: unknown): Usage | null {
-  if (!isPlainObject(usage)) {
-    return null;
-  }
-  const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-  const result: Usage = { inputTokens, outputTokens };
-  if (typeof usage.cache_read_input_tokens === "number") {
-    result.cacheReadInputTokens = usage.cache_read_input_tokens;
-  }
-  return result;
-}
-
-/**
- * Occupation de la FENÊTRE de contexte d'UN appel API, d'après l'usage d'un
- * message `assistant` (une réponse modèle = un appel). C'est la taille du PROMPT
- * de cet appel : tokens frais + préfixe relu du cache + préfixe nouvellement mis
- * en cache. Ces trois composantes partitionnent le prompt, dont la somme est
- * bornée par la fenêtre du modèle (sinon l'API refuse) → jauge ≤ 100 %.
- *
- * On N'AJOUTE PAS `output_tokens` : la sortie ne compte pas dans la fenêtre
- * d'ENTRÉE (elle se génère par-dessus), et elle est de toute façon ré-incluse
- * dans le `cache_read` de l'appel suivant — l'additionner ici la compterait
- * double et ferait dépasser 100 % (input quasi plein + sortie ⇒ ~140 %).
- *
- * ⚠ NE PAS confondre avec l'usage du message `result` : celui-ci CUMULE toutes
- * les requêtes du tour agentique (N appels d'outils) — son
- * `cache_read_input_tokens` additionne N fois le même préfixe et dépasse alors
- * largement la fenêtre (d'où un « contexte » à plusieurs centaines de %). Pour
- * la jauge, seul le PROMPT du DERNIER appel compte, pas le cumul.
- */
-export function extractContextTokens(usage: unknown): number | null {
-  if (!isPlainObject(usage)) return null;
-  const input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const cacheRead =
-    typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0;
-  const cacheCreation =
-    typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : 0;
-  const total = input + cacheRead + cacheCreation;
-  return total > 0 ? total : null;
-}
 
 /**
  * Décoration d'un message d'erreur du moteur. Le classement vit désormais dans
@@ -325,6 +139,8 @@ interface RunState {
   closePrompt: () => void;
   /** S3/T-064 — glisse un message et ses pièces jointes dans le tour EN COURS. */
   pushPrompt: (text: string, attachments: Attachment[]) => void;
+  /** T-207 — change modèle (+ effort) sur la query vivante : outil `changer_modele` ET requête `claude.setModel` (Annuler). Rejette si le SDK refuse. */
+  appliquerModele: (modele: string, effort: NiveauEffort | null | undefined) => Promise<void>;
 }
 
 export interface ClaudeEngine {
@@ -338,6 +154,7 @@ export interface ClaudeEngine {
   handleClaudeAbort(id: string, params: Record<string, unknown>, emitter: EngineEmitter): void;
   handleClaudePush(id: string, params: Record<string, unknown>, emitter: EngineEmitter): void;
   handleClaudeRelease(id: string, params: Record<string, unknown>, emitter: EngineEmitter): void;
+  handleClaudeSetModel(id: string, params: Record<string, unknown>, emitter: EngineEmitter): Promise<void>;
   handleClaudeUsage(id: string, params: Record<string, unknown>, emitter: EngineEmitter): void;
   handleClaudeUsageInit(
     id: string,
@@ -345,6 +162,11 @@ export interface ClaudeEngine {
     emitter: EngineEmitter,
   ): Promise<void>;
   handleClaudeCommands(
+    id: string,
+    params: Record<string, unknown>,
+    emitter: EngineEmitter,
+  ): Promise<void>;
+  handleClaudeTitreDiscussion(
     id: string,
     params: Record<string, unknown>,
     emitter: EngineEmitter,
@@ -360,9 +182,6 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
   /** Tours en cours, indexés par l'id de la requête claude.start correspondante. */
   const runs = new Map<string, RunState>();
   const rappelsInterruption = creerRegistreRappels(); // T-102 — rappel du tour suivant après un abandon (rappelInterruption.ts)
-
-  /** Dernier instantané connu des limites d'abonnement (voir usage.claude). */
-  let lastUsageSnapshot: ClaudeUsageSnapshot | null = null;
 
   function denyAllPending(run: RunState, message: string): void {
     for (const pending of run.pendingPermissions.values()) {
@@ -410,6 +229,9 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     // Un humain est-il devant l'écran pour répondre à une question de l'agent ?
     // Armé par la page Projets uniquement (voir askUser.ts).
     const interactive = params.interactive === true && !chatOnly;
+    // T-207 — agent préréglé à modèle fixe (sélecteur grisé côté UI) : l'outil
+    // `changer_modele` n'est pas exposé, pas de faux espoir pour le modèle.
+    const modeleVerrouille = params.modeleVerrouille === true;
     // En mode chat pur, aucun outil ne touche au disque : un cwd neutre
     // (répertoire personnel) suffit si l'appelant n'en fournit pas.
     let cwd: string | null = null;
@@ -433,6 +255,11 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       emitter.error(id, attachmentsValidation.message);
       return;
     }
+    // Compte du tour (absent = perso) : inconnu ou indisponible, le tour est refusé.
+    const compte = resoudreCompte(params.compte);
+    if (!compte.ok) { emitter.error(id, compte.message); return; }
+    journal.info("claude", "compte du tour", { reqId: id, fields: { compte: compte.compte } });
+    const metaTour = metaAvecCompte(params.meta, compte.compte); // T-191 : l'événement d'usage porte le compte hors perso
     const sessionIdParam = params.sessionId;
     const modelParam = params.model;
     const permissionModeParam = params.permissionMode;
@@ -458,11 +285,6 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
         ? { servers: null, disabled: [], missingSecrets: [], disallowedTools: [] }
         : await prepareMcpForTurn(cwd);
     const mcpServers = preparedMcp.servers;
-    // R5 — RAG local : serveur MCP in-process `iaction` (outil
-    // `mcp__iaction__search_knowledge`, voir knowledge.ts), exposé SEULEMENT
-    // quand l'index du projet existe — même flux de permission que les autres
-    // outils MCP (canUseTool). Jamais en mode chat pur.
-    const knowledgeServer = chatOnly ? null : await buildKnowledgeMcpServer(cwd);
 
     // T-087 — comptabilité des push non acquittés de CE tour (voir poussesEnAttente.ts).
     const registrePushes = creerRegistrePushes();
@@ -476,6 +298,8 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       interruption: null, abortDemandeur: null,
       waitingBackground: false,
       closePrompt: turnPrompt.close,
+      // Posé juste après `queryFn` (le serveur MCP naît avant la query).
+      appliquerModele: () => Promise.reject(new Error("le tour n'est pas encore démarré")),
       pushPrompt: (text, pushedAttachments) => {
         turnPrompt.push(text, pushedAttachments);
         registrePushes.enregistrer(text, pushedAttachments.length > 0);
@@ -506,12 +330,35 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     // (`interactive`). Un tour headless (orchestration, planificateur) resterait
     // bloqué sur une question que personne ne verrait — là, le modèle doit
     // continuer à poser ses questions en texte.
-    const askServer = interactive ? await buildAskUserMcpServer(askUser) : null;
+    // T-207 — le même serveur `studio` porte aussi `changer_modele`. ÉCART à la
+    // spec, assumé : réservé aux tours `interactive` (page Projets, un humain
+    // voit le bandeau « Annuler »). Un tour headless (orchestration,
+    // planificateur) changerait de modèle sans personne pour le voir, et sans
+    // que `modeleVerrouille` (envoyé par la seule UI) protège le modèle fixé
+    // par le manifeste de l'agent. Pour l'ouvrir aux tours headless : remplacer
+    // `interactive` par `!chatOnly` dans la condition ci-dessous. T-216 :
+    // `compacter` suit `interactive` mais PAS `modeleVerrouille` (compacterOutil.ts).
+    let effortCourant: string | null = effortValide(params.effort) ?? null;
+    const pontModele: PontChangerModele = {
+      etat: () => ({ model: lastModel, effort: effortCourant }),
+      appliquer: (modele, effortDemande) => runState.appliquerModele(modele, effortDemande),
+      emettre: (changement) => emitter.chunk(id, { kind: "model_change", ...changement }),
+      sessionId: () => lastSessionId,
+    };
+    const studio = await buildStudioMcpServer({
+      ask: interactive ? askUser : null,
+      changerModele: interactive && !modeleVerrouille ? pontModele : null,
+      compacter: interactive ? { emettre: (raison) => emitter.chunk(id, { kind: "compaction_demandee", raison }), sessionId: () => lastSessionId } : null,
+    });
+    // R5 — RAG local : serveur MCP in-process `iaction` (outil
+    // `mcp__iaction__search_knowledge`, voir knowledge.ts), exposé SEULEMENT
+    // quand l'index du projet existe — même flux de permission que les autres
+    // outils MCP (canUseTool). Jamais en mode chat pur. T-185 : pont de question pour les sessions distantes.
+    const knowledgeServer = chatOnly ? null : await buildKnowledgeMcpServer(cwd, { ...(interactive ? { demanderUtilisateur: askUser } : {}), compte: compte.compte, ...(isPlainObject(params.meta) && isNonEmptyString(params.meta.conversationId) ? { conversationId: params.meta.conversationId } : {}) }); // T-180 : conversation IAction = clé des sessions distantes sur relais
 
     const canUseTool: CanUseTool = (toolName, toolInput, toolOptions) => {
-      // L'outil de question EST déjà une interaction humaine : demander en plus
-      // l'autorisation de l'utiliser afficherait deux modales à la suite.
-      if (toolName === ASK_USER_TOOL_NAME) {
+      // `ask_user`, `changer_modele`, `compacter` : sans modale (raisons dans askUser.ts).
+      if (outilStudioSansValidation(toolName)) {
         return Promise.resolve({ behavior: "allow" });
       }
       return new Promise<PermissionResult>((resolve) => {
@@ -544,6 +391,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       permissionMode: isNonEmptyString(permissionModeParam) ? permissionModeParam : "default",
       env: {
         ...process.env,
+        ...compte.env, // CLAUDE_CONFIG_DIR du compte choisi (vide pour perso) — seul ajout, aucun jeton
         // Une question posée à l'humain occupe l'outil `ask_user` le temps
         // qu'il réponde : sans plafond relevé, le délai d'exécution des outils
         // MCP du CLI couperait la question au bout de quelques dizaines de
@@ -566,6 +414,11 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       // globaux (~/.claude/settings.json : permissions, effortLevel) entrent
       // aussi dans les tours de l'app. 'project' → CLAUDE.md du projet.
       options.settingSources = ["user", "project", "local"];
+      // T-205 — Claude in Chrome TOUJOURS activé pour le moteur projet
+      // (décision de David, 2026-11-07, risque accepté : un agent autonome
+      // pilote le vrai Chrome et ses sessions ouvertes). Sans `--chrome`, le
+      // CLI n'expose aucun outil `mcp__claude-in-chrome__*`.
+      options.extraArgs = { chrome: null };
       // AskUserQuestion retiré : non fonctionnel via le SDK (voir le champ
       // `disallowedTools`) — le modèle pose ses questions en texte, ce qui
       // marche. Le mode chat pur n'a de toute façon aucun outil. S'y ajoutent
@@ -601,15 +454,15 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     }
     const effort = effortValide(params.effort); // effort de raisonnement, posé seulement s'il est valide (claudeEffort.ts)
     if (effort) options.effort = effort;
-    // Instruction système, voir paletteTour.ts : preset Claude Code hors chat pur (T-052), annonce de l'outil de question si armé (T-019).
-    const instr = composerInstructionSysteme(isNonEmptyString(systemPromptParam) ? systemPromptParam : null, askServer !== null, !chatOnly);
+    // Instruction système, voir paletteTour.ts : preset Claude Code hors chat pur (T-052), annonce des outils `studio` armés (T-019, T-210).
+    const instr = composerInstructionSysteme(isNonEmptyString(systemPromptParam) ? systemPromptParam : null, studio?.ask === true, !chatOnly, studio);
     if (instr) options.systemPrompt = instr;
-    if (!chatOnly && (mcpServers || knowledgeServer || askServer)) {
+    if (!chatOnly && (mcpServers || knowledgeServer || studio)) {
       // Les serveurs in-process s'ajoutent à ceux déclarés dans .mcp.json ;
       // un serveur du projet de même nom prime (pas d'écrasement).
       options.mcpServers = {
         ...(knowledgeServer ? { iaction: knowledgeServer } : {}),
-        ...(askServer ? { studio: askServer } : {}),
+        ...(studio ? { studio: studio.serveur } : {}),
         ...(mcpServers ?? {}),
       };
     }
@@ -623,6 +476,12 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       return;
     }
     runState.query = query;
+    // T-207 — la cible du pont de `changer_modele` : la query vient de naître.
+    runState.appliquerModele = async (modele, effortDemande) => {
+      await appliquerSurQuery(query, { model: lastModel, effort: effortCourant }, modele, effortDemande);
+      lastModel = modele;
+      if (effortDemande !== undefined) effortCourant = effortDemande;
+    };
     runs.set(id, runState);
 
     let lastSessionId: string | null = isNonEmptyString(sessionIdParam) ? sessionIdParam : null;
@@ -733,8 +592,8 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       captureUsageSnapshot(query)
         .then((snapshot) => {
           if (snapshot) {
-            lastUsageSnapshot = snapshot;
-            recordClaudeWindowsSnapshot(snapshot.windows);
+            depotUsage.ecrire(snapshot, compte.compte);
+            recordClaudeWindowsSnapshot(snapshot.windows, compte.compte);
           }
         })
         .finally(() => {
@@ -746,7 +605,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     // sans le moindre message, pas même `system:init`, faisait attendre
     // l'interface pour toujours. Armé ici, désarmé au PREMIER message reçu.
     const plafondSilence = armerPlafondSilence({
-      id, emitter, model: lastModel, sessionId: lastSessionId, meta: params.meta, auSilence: nettoyerFinDeTour,
+      id, emitter, model: lastModel, sessionId: lastSessionId, meta: metaTour, auSilence: nettoyerFinDeTour,
     });
 
     try {
@@ -898,7 +757,9 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
                 // CLI (« API Error: 529 Overloaded », model "<synthetic>"),
                 // qui étaient invisibles dans l'UI (« terminé sans résultat »).
                 if (block.type === "text" && !sawTextDeltaForCall && !deSousAgent) {
-                  const text = texteMessageAssistant(inner, typeof block.text === "string" ? block.text : "");
+                  const brut = typeof block.text === "string" ? block.text : "";
+                  const text = texteMessageAssistant(inner, brut);
+                  if (estMessageSynthetique(inner)) journal.warn("claude", "erreur d'API (message synthétique du CLI)", { reqId: id, fields: { ...champsErreurApi(brut), compte: compte.compte, model: lastModel, sessionId: lastSessionId } }); // T-215
                   if (text.trim()) { sawAssistantOutput = true; emitter.chunk(id, { kind: "text", delta: text }); }
                 }
                 if (block.type === "tool_use") {
@@ -976,16 +837,12 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
             }
             const resultSubtype = typeof message.subtype === "string" ? message.subtype : "unknown";
             const resultUsage = extractUsage(message.usage);
+            const diagnostic = diagnostiquerResultat(message, isNonEmptyString(sessionIdParam), runState.interruption); // T-187
             const doneData = {
               sessionId: lastSessionId,
-              // T-102 — `error_during_execution` est ambigu (panne OU tour
-              // coupé, voir claudeFinDeTour.ts) : sur un ABANDON explicite
-              // (claude.abort), l'UI reçoit la classe déjà connue ici
-              // (`runState.interruption`), jamais le subtype brut du SDK — voir
-              // `subtypePourInterface`, volontairement borné à l'abandon.
-              // `enregistrerResultatFinal` ci-dessous continue de recevoir
-              // `resultSubtype` (inchangé) : le journal et l'usage gardent la
-              // cause technique exacte, y compris pour un refus.
+              // T-102 — sur un abandon, l'UI reçoit la classe connue ici, jamais le
+              // subtype brut (voir `subtypePourInterface`) ; le journal et l'usage
+              // gardent `resultSubtype`, la cause technique exacte.
               subtype: subtypePourInterface(resultSubtype, runState.interruption),
               result: typeof message.result === "string" ? message.result : null,
               usage: resultUsage,
@@ -994,6 +851,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
               // extractContextTokens. `null` si aucun appel modèle sur ce tour.
               contextTokens: lastContextTokens,
               totalCostUsd: typeof message.total_cost_usd === "number" ? message.total_cost_usd : null,
+              ...diagnostic,
             };
 
             // Tour du modèle terminé mais des tâches de fond vivent encore :
@@ -1052,10 +910,11 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
             // claudeFinDeTour.ts, qui décide seul « panne ou interruption ».
             enregistrerResultatFinal({
               id,
-              meta: params.meta,
+              meta: metaTour,
               model: lastModel,
               sessionId: lastSessionId,
               subtype: resultSubtype,
+              erreurs: diagnostic.erreurs,
               interruption: runState.interruption,
               usage: resultUsage,
               ventilation: extractModelUsage(message.modelUsage, lastModel),
@@ -1067,8 +926,8 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
             emitter.done(id, doneData);
             const snapshot = await captureUsageSnapshot(query);
             if (snapshot) {
-              lastUsageSnapshot = snapshot;
-              recordClaudeWindowsSnapshot(snapshot.windows);
+              depotUsage.ecrire(snapshot, compte.compte);
+              recordClaudeWindowsSnapshot(snapshot.windows, compte.compte);
             }
             // `result` final = fin du tour dans notre contrat (un tour = un
             // claude.start). Sans sortie EXPLICITE de la boucle, le `break`
@@ -1112,7 +971,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
           // L4 — message brut de l'exception (la décoration d'auth ci-dessous
           // est une aide d'affichage, pas la cause).
           errorMessage: message,
-          meta: params.meta,
+          meta: metaTour,
         });
         // Une exception qui remonte du flux SDK est la façon la plus brutale
         // dont un tour meurt : elle DOIT laisser une pile dans le journal
@@ -1158,7 +1017,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       cloturerTourSansResultatFinal({
         id,
         emitter,
-        meta: params.meta,
+        meta: metaTour,
         model: lastModel,
         sessionId: lastSessionId,
         contextTokens: lastContextTokens,
@@ -1296,19 +1155,17 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     emitter.done(id, { released: true });
   }
 
+  // T-207 — `claude.setModel` (bouton « Annuler » du bandeau de changement de
+  // modèle) : porté par `executerClaudeSetModel`, voir changerModele.ts.
+
   /**
    * Étape 9 — usage et commands vivent désormais dans claudeUsage.ts /
    * claudeCommands.ts. La fermeture ne garde que ce qu'elle POSSÈDE :
-   * `lastUsageSnapshot` (écrit aussi par handleClaudeStart en fin de tour)
-   * exposé via un dépôt lire/ecrire, `queryFn` et `apiKey` injectés à
+   * le dépôt d'instantanés (un relevé PAR COMPTE, écrit aussi par
+   * handleClaudeStart en fin de tour), `queryFn` et `apiKey` injectés à
    * l'appel — UNE seule instance moteur, jamais d'état dupliqué.
    */
-  const depotUsage: DepotUsageClaude = {
-    lire: () => lastUsageSnapshot,
-    ecrire: (snapshot) => {
-      lastUsageSnapshot = snapshot;
-    },
-  };
+  const depotUsage: DepotUsageClaude = creerDepotUsage();
 
   return {
     handleClaudeConfigure,
@@ -1316,12 +1173,15 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     handleClaudePermission,
     handleClaudeAbort,
     handleClaudePush: (id, params, emitter) => executerClaudePush(runs, id, params, emitter),
+    handleClaudeSetModel: (id, params, emitter) => executerClaudeSetModel(runs, id, params, emitter),
     handleClaudeRelease,
     handleClaudeUsage: (id, params, emitter) => executerClaudeUsage(depotUsage, id, params, emitter),
     handleClaudeUsageInit: (id, params, emitter) =>
       executerClaudeUsageInit({ queryFn, depot: depotUsage }, id, params, emitter),
     handleClaudeCommands: (id, params, emitter) =>
       executerClaudeCommands({ queryFn, apiKey: () => apiKey, decorerErreurAuth: decorateAuthError }, id, params, emitter),
+    handleClaudeTitreDiscussion: (id, params, emitter) =>
+      executerClaudeTitreDiscussion({ queryFn }, id, params, emitter),
   };
 }
 
@@ -1383,6 +1243,15 @@ export async function handleClaudeRelease(
   engine.handleClaudeRelease(id, params, emitter);
 }
 
+export async function handleClaudeSetModel(
+  id: string,
+  params: Record<string, unknown>,
+  emitter: EngineEmitter,
+): Promise<void> {
+  const engine = await enginePromise;
+  await engine.handleClaudeSetModel(id, params, emitter);
+}
+
 export async function handleClaudeUsage(
   id: string,
   params: Record<string, unknown>,
@@ -1399,6 +1268,15 @@ export async function handleClaudeUsageInit(
 ): Promise<void> {
   const engine = await enginePromise;
   await engine.handleClaudeUsageInit(id, params, emitter);
+}
+
+export async function handleClaudeTitreDiscussion(
+  id: string,
+  params: Record<string, unknown>,
+  emitter: EngineEmitter,
+): Promise<void> {
+  const engine = await enginePromise;
+  await engine.handleClaudeTitreDiscussion(id, params, emitter);
 }
 
 export async function handleClaudeCommands(

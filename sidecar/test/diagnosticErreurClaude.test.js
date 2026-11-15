@@ -11,7 +11,7 @@
 
 import { lancer, assert, moduleCompile } from "./harness.mjs";
 
-const { classerErreurClaude, decorerErreurClaude, texteMessageAssistant } = await import(
+const { champsErreurApi, classerErreurClaude, decorerErreurClaude, texteMessageAssistant } = await import(
   moduleCompile("diagnosticErreurClaude.js")
 );
 
@@ -86,6 +86,20 @@ function testImageRefusee() {
   console.log("OK: image refusée → conseil de nouvelle session, seulement sur un message synthétique");
 }
 
+function testCloudflare() {
+  const brut =
+    "Failed to authenticate. API Error: 403 <!DOCTYPE html><title>Attention Required! | Cloudflare</title>";
+  assert(classerErreurClaude(brut) === "cloudflare", `cloudflare attendu, reçu ${classerErreurClaude(brut)}`);
+  const decore = decorerErreurClaude(brut);
+  assert(!decore.includes("claude login"), "un blocage Cloudflare ne doit pas conseiller claude login");
+  assert(decore.includes("Cloudflare") && decore.includes("identifiants ne sont pas en cause"), "le conseil nomme le blocage amont");
+  const champs = champsErreurApi(brut);
+  assert(champs.famille === "cloudflare" && champs.statut === 403, `champs de journal inattendus : ${JSON.stringify(champs)}`);
+  assert(champsErreurApi("x".repeat(500)).extrait.length === 300, "l'extrait journalisé est borné");
+  assert(classerErreurClaude("Failed to authenticate. API Error: 401 invalid x-api-key") === "authentification");
+  console.log("OK: blocage Cloudflare → conseil amont, statut et famille journalisables");
+}
+
 await lancer(
   "T-118 — classer une erreur du moteur Claude",
   testCasWindows,
@@ -95,4 +109,5 @@ await lancer(
   testInconnueRenduTelQuel,
   testAutresSignaturesReseau,
   testImageRefusee,
+  testCloudflare,
 );

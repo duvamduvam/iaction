@@ -9,8 +9,8 @@
  * seules sorties étaient « Répondre » et « Ignorer ». Trois leviers désormais :
  *   - l'overlay ne capte plus les clics (`--flottant`) : l'app reste utilisable
  *     pendant que l'agent attend ;
- *   - le panneau se DÉPLACE par sa barre de titre et se MET DE CÔTÉ en pastille
- *     (les réponses déjà cochées survivent — le composant reste monté) ;
+ *   - le panneau se DÉPLACE par sa barre de titre et se MET DE CÔTÉ (T-181 : la
+ *     demande attend dans « En attente de vous », panneau de droite ; les réponses déjà cochées survivent — le composant reste monté) ;
  *   - chaque question peut porter un `context` (voir sidecar/src/askUser.ts),
  *     rendu en Markdown (tableaux, listes, blocs de code — T-145) : de quoi
  *     trancher sans aller voir ailleurs. La modale s'élargit quand il y en a.
@@ -272,10 +272,15 @@ function useDeplacement() {
 export function PermissionModal({
   item,
   extraCount,
+  replie,
+  onMettreDeCote,
   onDecide,
 }: Readonly<{
   item: PermissionRequestItem;
   extraCount: number;
+  /** Mise de côté (T-181) : la modale reste montée, invisible, pour garder les choix cochés ; la demande attend dans « En attente de vous ». */
+  replie: boolean;
+  onMettreDeCote: () => void;
   onDecide: (decision: "allow" | "deny", message: string, rememberTool: boolean) => void;
 }>) {
   const [reason, setReason] = useState("");
@@ -283,10 +288,6 @@ export function PermissionModal({
   const [customs, setCustoms] = useState<AskCustomAnswers>({});
   const [note, setNote] = useState("");
   const [rememberTool, setRememberTool] = useState(false);
-  // Mise de côté : le panneau se replie en pastille SANS répondre ni ignorer.
-  // L'agent attend toujours — c'est l'écran qu'on libère, pas le tour qu'on
-  // termine. Le composant reste monté : les choix déjà cochés survivent.
-  const [deCote, setDeCote] = useState(false);
   const deplacement = useDeplacement();
   const isAskQuestion = isAskQuestionTool(item.toolName);
   const askQuestions = isAskQuestion ? parseAskQuestions(item.toolInput) : [];
@@ -298,8 +299,6 @@ export function PermissionModal({
     setCustoms({});
     setNote("");
     setRememberTool(false);
-    // Nouvelle demande : on la montre, même si la précédente était de côté.
-    setDeCote(false);
   }, [item.permissionId]);
 
   /** Ouvre/ferme la réponse libre d'une question. À l'ouverture, en choix
@@ -371,24 +370,9 @@ export function PermissionModal({
   // sans réponse, et le bouton d'envoi reste bloqué.
   const allAnswered = askQuestions.every((q) => Boolean(finalAnswers[q.question]));
 
-  // Replié : plus rien ne couvre l'app, une pastille rappelle que l'agent
-  // attend. Elle reste au-dessus de tout pour ne pas se perdre en naviguant.
-  if (deCote) {
-    return (
-      <button
-        type="button"
-        className="question-pastille"
-        onClick={() => setDeCote(false)}
-        title="Reprendre : l'agent attend toujours votre réponse"
-      >
-        <span className="question-pastille__icone" aria-hidden="true">
-          ?
-        </span>
-        <span>{isAskQuestion ? "Question de l'agent en attente" : permissionTitle(item)}</span>
-        {extraCount > 0 && <span className="permission-modal__badge">+{extraCount}</span>}
-      </button>
-    );
-  }
+  // Mis de côté : plus rien ne couvre l'app. L'agent attend toujours ; la
+  // demande se retrouve (et se rouvre) dans « En attente de vous », à droite.
+  if (replie) return null;
 
   return (
     <div className="permission-overlay permission-overlay--flottant">
@@ -462,8 +446,8 @@ export function PermissionModal({
           <button
             type="button"
             className="btn btn--ghost permission-modal__aside"
-            onClick={() => setDeCote(true)}
-            title="Replier en pastille pour consulter le projet — vos choix sont conservés, l'agent attend."
+            onClick={onMettreDeCote}
+            title="Replier pour consulter le projet — la demande reste dans « En attente de vous » (panneau de droite), vos choix sont conservés, l'agent attend."
           >
             Mettre de côté
           </button>

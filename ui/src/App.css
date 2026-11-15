@@ -298,6 +298,14 @@
   color: var(--text-0);
 }
 
+/* Nom du compte Claude suivi par les jauges (affiché seulement hors compte principal). */
+.usage-widget__compte {
+  color: var(--text-1);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  cursor: default;
+}
+
 /* Alerte « fenêtre saturée » dans l'encart conso (voir pickSaturatedWindow). */
 .usage-widget__alert {
   padding: 1px 8px;
@@ -594,16 +602,14 @@
   color: var(--text-0);
 }
 
-/* ---------- Contrôles de formulaire (select / input / textarea unifiés) ----------
+/* ---------- Contrôles de formulaire (input / textarea unifiés) ----------
    Mêmes métriques partout dans l'app (Chat, Projets, Configuration, palette
    Ctrl+Maj+P) : hauteur ~34px, padding, fond --bg-inset, bordure --border-0 →
-   --border-cyan + glow discret au focus, radius --radius-sm, police mono
-   pour les valeurs techniques des <select> (modèles/fournisseurs), flèche
-   personnalisée, état disabled distinct. `:where()` = spécificité nulle :
+   --border-cyan + glow discret au focus, radius --radius-sm, état disabled
+   distinct (listes déroulantes : voir Deroulant.tsx). `:where()` = spécificité nulle :
    n'importe quelle règle plus spécifique déjà en place (ex. .cmdk-input,
    volontairement différent) continue à primer sans changement. */
 :where(
-    select,
     input:not([type="checkbox"]):not([type="radio"]),
     textarea
   ) {
@@ -628,31 +634,12 @@
   resize: vertical;
 }
 
-:where(select) {
-  /* Valeurs techniques (ids de modèles/fournisseurs) : police mono. */
-  font-family: var(--font-mono);
-  appearance: none;
-  cursor: pointer;
-  padding-right: calc(var(--space-3) + 18px);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238b96ab' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right var(--space-3) center;
-  background-size: 10px 6px;
-}
-
-:where(select option) {
-  font-family: var(--font-mono);
-  background: var(--bg-1);
-  color: var(--text-0);
-}
-
 :where(input:not([type="checkbox"]):not([type="radio"]))::placeholder,
 :where(textarea)::placeholder {
   color: var(--text-2);
 }
 
 :where(
-    select:hover:not(:disabled),
     input:not([type="checkbox"]):not([type="radio"]):hover:not(:disabled),
     textarea:hover:not(:disabled)
   ) {
@@ -660,7 +647,6 @@
 }
 
 :where(
-    select:focus,
     input:not([type="checkbox"]):not([type="radio"]):focus,
     textarea:focus
   ) {
@@ -670,7 +656,6 @@
 }
 
 :where(
-    select:disabled,
     input:not([type="checkbox"]):not([type="radio"]):disabled,
     textarea:disabled
   ) {
@@ -1953,6 +1938,31 @@
   max-width: 8.5rem;
 }
 
+/* Écarts de Deroulant.tsx par rapport au sélecteur de modèle, dont il reprend
+   les classes. Largeur `auto` : comme un <select>, le bouton suit son contenu
+   dans une barre d'outils, et un `.field` (colonne) l'étire de lui-même. */
+.deroulant__bouton {
+  width: auto;
+  max-width: 100%;
+}
+
+.deroulant__bouton:focus-visible {
+  outline: none;
+  border-color: var(--neon-cyan);
+  box-shadow: var(--glow-cyan);
+}
+
+/* Au-dessus du popover du ModelPicker, qui contient une de ces listes (tri). */
+.deroulant__popover {
+  z-index: 310;
+  padding: var(--space-2);
+}
+
+.deroulant__option--desactivee {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .model-picker__puces {
   display: flex;
   flex-wrap: wrap;
@@ -2010,10 +2020,6 @@
   border-bottom: 1px solid var(--border-0);
   text-align: left;
   cursor: pointer;
-  text-transform: inherit;
-  letter-spacing: inherit;
-  font-size: inherit;
-  color: inherit;
 }
 
 .model-picker__entete--pliable:hover {
@@ -3347,6 +3353,34 @@
   }
 }
 
+/* T-199 — le bouton est posé sur l'enveloppe, pas dans le `pre` : le `pre` défile
+   horizontalement, et un bouton à l'intérieur partirait avec le texte. */
+.md__code {
+  position: relative;
+}
+
+.md__code pre {
+  padding-right: 5.5rem; /* la fin d'une longue ligne reste lisible à côté du bouton */
+}
+
+.md__copier {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  padding: 2px var(--space-2);
+  font-size: 0.75rem;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.md__copier:hover,
+.md__copier:focus-visible {
+  border-color: var(--cyan, currentColor);
+}
+
 .md pre {
   position: relative;
   margin: var(--space-2) 0;
@@ -3921,7 +3955,7 @@
   gap: var(--space-2);
 }
 
-.sidebar-project-row select {
+.sidebar-project-row .deroulant__bouton {
   flex: 1;
   width: auto;
   min-width: 0;
@@ -3939,7 +3973,7 @@
 /* Section « LLM » : champs empilés pleine largeur + indicateurs compacts.
    `textarea` : nécessaire pour le prompt système du Chat (ex-`.system-prompt
    textarea`, supprimée — cette section couvre désormais aussi ce cas). */
-.sidebar-section__body .field select,
+.sidebar-section__body .field .deroulant__bouton,
 .sidebar-section__body .field input:not([type="checkbox"]),
 .sidebar-section__body .field textarea {
   width: 100%;
@@ -3958,7 +3992,7 @@
 }
 
 /* Sélecteur d'agent (« LLM » → Agent, étude orchestration phase O2) : ligne
-   « Configuré par l'agent … » sous le select, une fois une préconfiguration
+   « Configuré par l'agent … » sous la liste, une fois une préconfiguration
    appliquée — bouton ✕ compact pour revenir au mode manuel. */
 .agent-preset__applied {
   display: flex;
@@ -4189,6 +4223,20 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+/* T-197 — recherche au-dessus de la liste, bouton de rattrapage en bas. */
+.session-recherche {
+  width: 100%;
+  margin-bottom: var(--space-2);
+}
+
+.session-rattrapage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 /* Bouton « + Nouvelle session » en tête de la section Sessions. */
@@ -5364,40 +5412,46 @@
 
 /* Panneau replié : la pastille est le seul rappel que l'agent attend. Elle
    flotte au-dessus de tout et suit l'écran, pas le défilement. */
-.question-pastille {
-  position: fixed;
-  right: var(--space-5);
-  bottom: var(--space-5);
-  z-index: 100;
+/* T-181 — section « En attente de vous » du panneau de droite : une ligne par
+   question/permission en attente, cliquable pour rouvrir la modale. */
+.attente-liste {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.attente-ligne {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
   padding: var(--space-2) var(--space-3);
   background: var(--bg-1);
   border: 1px solid var(--border-magenta);
-  border-radius: var(--radius-lg);
-  box-shadow:
-    0 12px 32px #01030a99,
-    var(--glow-magenta);
+  border-radius: var(--radius-sm);
   color: var(--text-1);
   font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
-.question-pastille:hover {
+.attente-ligne:hover {
   border-color: var(--neon-magenta);
 }
 
-.question-pastille__icone {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.4rem;
-  height: 1.4rem;
-  border-radius: 50%;
-  border: 1px solid var(--border-magenta);
+.attente-ligne__type {
   color: var(--neon-magenta);
+  font-size: 0.75rem;
   font-weight: 700;
+  text-transform: uppercase;
+}
+
+.attente-ligne__lieu {
+  color: var(--text-2);
+  font-size: 0.8rem;
 }
 
 /* Faits joints à une question (T-089) : de quoi trancher sans aller voir

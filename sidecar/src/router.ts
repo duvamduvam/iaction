@@ -71,7 +71,7 @@ export const TIER_ORDER: Record<RouteTier, number> = {
  * manquant ou invalide d'un `router.set` partiel.
  */
 export const DEFAULT_ROUTING_TABLE: RoutingTable = {
-  trivial: { engine: "claude", model: "claude-haiku-4-5" },
+  trivial: { engine: "claude", model: "claude-haiku-5-5" },
   simple: { engine: "claude", model: "claude-sonnet-5-5" },
   moyen: { engine: "claude", model: "claude-opus-5-5" },
   // T-078 — sommet à `opus-5`, pas `fable-5` : la stratégie descendante des

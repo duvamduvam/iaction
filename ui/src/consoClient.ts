@@ -17,6 +17,10 @@
  *   protocole pour qu'il cesse d'écrire 1 197 lignes rouges par mois.
  */
 import { request, type RequestOptions } from "./sidecar";
+import type { CompteClaude } from "./comptesClaude";
+
+/** Paramètre `compte` des méthodes d'usage : omis pour `perso`, comme avant (docs/spec-deux-comptes.md). */
+const paramCompte = (compte: CompteClaude): Record<string, unknown> => (compte === "perso" ? {} : { compte });
 
 export interface ClaudeUsageWindow {
   utilization: number;
@@ -65,8 +69,8 @@ function parseUsageWindow(value: unknown): ClaudeUsageWindow | null {
  * 5h / 7j). `available: false` tant qu'aucun tour Claude n'a été joué dans
  * cette session sidecar (ou fournisseur clé API, sans limites applicables).
  */
-export async function usageClaude(): Promise<ClaudeUsageSnapshot> {
-  const { done } = request("usage.claude", {});
+export async function usageClaude(compte: CompteClaude = "perso"): Promise<ClaudeUsageSnapshot> {
+  const { done } = request("usage.claude", paramCompte(compte));
   return parseClaudeUsageSnapshot(await done);
 }
 
@@ -75,8 +79,11 @@ export async function usageClaude(): Promise<ClaudeUsageSnapshot> {
  * (haiku, chat pur — voir docs/protocol.md § usage.claude.init). À réserver à
  * une action explicite de l'utilisateur.
  */
-export async function usageClaudeInit(options: RequestOptions = {}): Promise<ClaudeUsageSnapshot> {
-  const { done } = request("usage.claude.init", {}, options);
+export async function usageClaudeInit(
+  options: RequestOptions = {},
+  compte: CompteClaude = "perso",
+): Promise<ClaudeUsageSnapshot> {
+  const { done } = request("usage.claude.init", paramCompte(compte), options);
   return parseClaudeUsageSnapshot(await done);
 }
 

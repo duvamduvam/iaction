@@ -40,8 +40,8 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     rows: [
       {
         combos: [["Ctrl", "1"]],
-        action: "Aller à une page par son numéro (1 à 7)",
-        note: "Ctrl+1 Projets · 2 Chat · 3 Orchestration · 4 Supervision · 5 Configuration · 6 Système · 7 Sessions Claude. Fonctionne au pavé numérique comme à la rangée de chiffres, verrouillage numérique éteint compris.",
+        action: "Aller à une page par son numéro (1 à 6)",
+        note: "Ctrl+1 Projets · 2 Chat · 3 Orchestration · 4 Supervision · 5 Configuration · 6 Système. Fonctionne au pavé numérique comme à la rangée de chiffres, verrouillage numérique éteint compris.",
       },
       { combos: [["Ctrl", "P"]], action: "Aller à la page Projets" },
       { combos: [["Ctrl", "H"]], action: "Aller à la page Chat" },

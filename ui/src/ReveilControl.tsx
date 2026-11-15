@@ -160,9 +160,12 @@ export function ReveilControl({
   reveils,
   historique,
   brouillon,
+  compte = "perso",
   onEnregistrer,
   onSupprimer,
 }: Readonly<{
+  /** Compte Claude de la session : « au reset » vise la réouverture de CE compte (docs/spec-deux-comptes.md). */
+  compte?: "perso" | "teams";
   /** Réveils actuellement armés sur cette conversation (liste vide = aucun). */
   reveils: Reveil[];
   /** Réveils déjà passés, du plus ancien au plus récent — un réveil ne sert qu'une fois. */
@@ -234,7 +237,7 @@ export function ReveilControl({
   }, [doitBattre]);
 
   const maintenant = Date.now();
-  const reouverture = instantReouvertureQuota(maintenant);
+  const reouverture = instantReouvertureQuota(maintenant, compte);
   const prochaine = prochaineEcheanceListe(reveils, maintenant);
 
   /** Formulaire vierge, message prérempli avec le brouillon en cours : « ce que je viens d'écrire, envoie-le à 3 h ».

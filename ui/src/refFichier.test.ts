@@ -301,6 +301,16 @@ describe("répertoires vus dans le fil (basesDuFil, T-105)", () => {
     ).toEqual(["/rangement/dossier final"]);
   });
 
+  it("suit une variable shell affectée puis citée (T-182)", () => {
+    const command =
+      'set -e; O=~/boulot/transport/2026-10; mkdir -p "$O"; cp /tmp/a.pdf "${O}/b.pdf"';
+    expect(basesDuFil([tour([outil({ command })])], "/home/moi")).toEqual(["/home/moi/boulot/transport/2026-10", "/tmp"]);
+  });
+
+  it("ne développe pas une variable entre guillemets simples (T-182)", () => {
+    expect(basesDuFil([tour([outil({ command: "O=/a/b; echo '$O/c'" })])], null)).toEqual(["/a/b"]);
+  });
+
   it("ignore un jeton qui n'est pas absolu", () => {
     expect(basesDuFil([tour([outil({ command: "ls docs/plan.md" })])], null)).toEqual([]);
   });
