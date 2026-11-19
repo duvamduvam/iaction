@@ -168,7 +168,7 @@ function AddConnectorModal({
           {selected?.fields.some((f) => f.secret) && (
             <p className="empty-hint">
               Les valeurs marquées comme secrètes ne sont PAS écrites dans le projet : elles vont dans le coffre
-              local (fichier 600 hors du dépôt) et .mcp.json ne porte qu'une référence.
+              de secrets de ce poste et .mcp.json ne porte qu'une référence.
             </p>
           )}
           {selected?.note && <p className="empty-hint">{selected.note}</p>}

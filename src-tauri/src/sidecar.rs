@@ -463,6 +463,7 @@ fn supervise(app: AppHandle, origine: &'static str) {
             guard.child = Some(child);
             emit_status(&app, &guard);
         }
+        crate::coffre_commandes::pousser_au_sidecar(&app); // il naît sans secrets
 
         // État de sortie constaté, s'il a pu l'être : `None` quand la mort est
         // déduite (échec de `try_wait`, handle disparu) plutôt qu'observée.
@@ -537,6 +538,7 @@ fn supervise(app: AppHandle, origine: &'static str) {
 
         let uptime = started_at.elapsed();
         journaliser_mort(&app, pid, fin, uptime, &tampon);
+        crate::coffre_commandes::sidecar_perdu(&app); // plus aucun tour : fermeture due achevée
         if register_failure(&app, uptime) {
             continue;
         } else {
@@ -654,6 +656,10 @@ fn spawn_stdout_reader(app: AppHandle, stdout: Option<ChildStdout>) {
             };
             match serde_json::from_str::<Value>(&line) {
                 Ok(value) => {
+                    // Adressée au coffre (porte parfois une valeur) : jamais relayée.
+                    if crate::coffre_commandes::intercepter_sortie_sidecar(&app, &value) {
+                        continue;
+                    }
                     if let Err(err) = app.emit("sidecar:event", value) {
                         eprintln!("[sidecar] échec de l'émission de sidecar:event : {err}");
                         log_app(

@@ -25,6 +25,7 @@ import type { EngineEmitter } from "./engine.js";
 import { validateAttachments, type Attachment } from "./attachments.js";
 import * as journal from "./journal.js";
 import { createTurnPrompt } from "./claudeTurnPrompt.js";
+import { OUTILS_CRON_INTERDITS } from "./reveilOutil.js";
 import { buildStudioMcpServer, outilStudioSansValidation, type AskUserAnswer } from "./askUser.js";
 import { appliquerSurQuery, executerClaudeSetModel, type PontChangerModele } from "./changerModele.js";
 import { buildKnowledgeMcpServer } from "./knowledge.js";
@@ -32,7 +33,7 @@ import {
   buildRuntimeSnapshot,
   ensureMcpDoc,
   logMcpCall,
-  prepareMcpForTurn,
+  prepareMcpForTurn, avisMcpEcartes,
   splitMcpToolName,
   writeMcpRuntime,
 } from "./mcp.js";
@@ -81,11 +82,11 @@ export type {
 export { extractContextTokens, extractUsage, summarizeToolResult, type Usage } from "./claudeMesures.js";
 import type { CanUseTool, ClaudeQuery, ClaudeQueryFn, ClaudeQueryOptions, PermissionResult } from "./claudeTypes.js";
 import { extractContextTokens, extractUsage, summarizeToolResult } from "./claudeMesures.js";
+import { crochetsSecrets } from "./gardeSecrets.js";
 
 // ---------------------------------------------------------------------------
 // Utilitaires
 // ---------------------------------------------------------------------------
-
 
 /**
  * Décoration d'un message d'erreur du moteur. Le classement vit désormais dans
@@ -96,17 +97,11 @@ import { extractContextTokens, extractUsage, summarizeToolResult } from "./claud
 export const decorateAuthError = decorerErreurClaude;
 
 // ---------------------------------------------------------------------------
-// Support MCP — la lecture de <cwd>/.mcp.json, les interrupteurs locaux, les
-// secrets et l'allowlist d'outils vivent dans mcp.ts (prepareMcpForTurn) ; ce
-// module ne fait que consommer le résultat et rapporter l'état constaté.
-// Invariant conservé : un fichier absent, invalide ou mal formé ne fait
-// JAMAIS échouer le tour (voir docs/protocol.md, claude.start § MCP).
+// Moteur : createClaudeEngine({queryFn}) — état en mémoire isolé, injectable.
+// MCP : lecture de .mcp.json, interrupteurs, secrets et allowlist vivent dans
+// mcp.ts (prepareMcpForTurn) ; un fichier absent, invalide ou mal formé ne
+// fait JAMAIS échouer le tour (docs/protocol.md, claude.start § MCP).
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Moteur : createClaudeEngine({queryFn}) — état en mémoire isolé, injectable
-// ---------------------------------------------------------------------------
-
 
 interface PendingPermission {
   resolve: (result: PermissionResult) => void;
@@ -285,6 +280,8 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
         ? { servers: null, disabled: [], missingSecrets: [], disallowedTools: [] }
         : await prepareMcpForTurn(cwd);
     const mcpServers = preparedMcp.servers;
+    const avisEcartes = avisMcpEcartes(preparedMcp); // serveur écarté faute de secret : dit DANS le tour
+    if (avisEcartes) emitter.chunk(id, avisEcartes);
 
     // T-087 — comptabilité des push non acquittés de CE tour (voir poussesEnAttente.ts).
     const registrePushes = creerRegistrePushes();
@@ -337,7 +334,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     // que `modeleVerrouille` (envoyé par la seule UI) protège le modèle fixé
     // par le manifeste de l'agent. Pour l'ouvrir aux tours headless : remplacer
     // `interactive` par `!chatOnly` dans la condition ci-dessous. T-216 :
-    // `compacter` suit `interactive` mais PAS `modeleVerrouille` (compacterOutil.ts).
+    // `compacter` et `programmer_reveil` (T-219) suivent `interactive` mais PAS `modeleVerrouille` (compacterOutil.ts).
     let effortCourant: string | null = effortValide(params.effort) ?? null;
     const pontModele: PontChangerModele = {
       etat: () => ({ model: lastModel, effort: effortCourant }),
@@ -349,6 +346,8 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       ask: interactive ? askUser : null,
       changerModele: interactive && !modeleVerrouille ? pontModele : null,
       compacter: interactive ? { emettre: (raison) => emitter.chunk(id, { kind: "compaction_demandee", raison }), sessionId: () => lastSessionId } : null,
+      reveil: interactive ? { emettre: (demande) => emitter.chunk(id, { kind: "reveil_demande", ...demande }), sessionId: () => lastSessionId } : null,
+      secrets: !chatOnly,
     });
     // R5 — RAG local : serveur MCP in-process `iaction` (outil
     // `mcp__iaction__search_knowledge`, voir knowledge.ts), exposé SEULEMENT
@@ -357,7 +356,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     const knowledgeServer = chatOnly ? null : await buildKnowledgeMcpServer(cwd, { ...(interactive ? { demanderUtilisateur: askUser } : {}), compte: compte.compte, ...(isPlainObject(params.meta) && isNonEmptyString(params.meta.conversationId) ? { conversationId: params.meta.conversationId } : {}) }); // T-180 : conversation IAction = clé des sessions distantes sur relais
 
     const canUseTool: CanUseTool = (toolName, toolInput, toolOptions) => {
-      // `ask_user`, `changer_modele`, `compacter` : sans modale (raisons dans askUser.ts).
+      // `ask_user`, `changer_modele`, `compacter`, `programmer_reveil` : sans modale (raisons dans askUser.ts).
       if (outilStudioSansValidation(toolName)) {
         return Promise.resolve({ behavior: "allow" });
       }
@@ -402,7 +401,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
           : {}),
         ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
       },
-      canUseTool,
+      canUseTool, hooks: chatOnly ? undefined : crochetsSecrets(cwd), // T-220 : garde des fichiers de secrets (gardeSecrets.ts)
     };
     if (chatOnly) {
       options.tools = webSearch ? ["WebSearch", "WebFetch"] : [];
@@ -425,7 +424,8 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       // les outils MCP exclus par une allowlist locale (mcp.ts) : c'est le
       // seul levier pour n'exposer que 2 outils d'un serveur qui en a 15, donc
       // pour rendre au contexte ce que les serveurs bavards lui prennent.
-      options.disallowedTools = ["AskUserQuestion", ...preparedMcp.disallowedTools];
+      // T-219 — outils Cron du CLI interdits : ils meurent avec le tour (reveilOutil.ts).
+      options.disallowedTools = ["AskUserQuestion", ...OUTILS_CRON_INTERDITS, ...preparedMcp.disallowedTools];
       // O1/T-003 — allowlist `tools:` du manifeste d'agent, enfin APPLIQUÉE :
       // elle était purement déclarative jusqu'au 2026-08-07 (un agent en
       // lecture seule recevait Write/Edit/Bash malgré tout, et les tâches de

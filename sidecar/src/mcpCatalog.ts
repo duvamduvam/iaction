@@ -104,6 +104,35 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     note: "Le jeton doit porter les scopes schema.bases:read et data.records:read (plus data.records:write pour écrire).",
   },
   {
+    id: "relais",
+    label: "Relais entre studios",
+    description:
+      "Échange de fichiers entre deux postes IAction par boîtes aux lettres, via un broker HTTP (routes /boites) : lister, déposer, récupérer, supprimer. Serveur livré avec IAction, lancé par son node embarqué.",
+    defaultName: "relais",
+    fields: [
+      { key: "url", label: "Adresse du relais", placeholder: "https://relais.exemple.net", required: true },
+      { key: "jeton", label: "Jeton de ce studio", secret: true, required: true },
+      { key: "ca", label: "Autorité de certification supplémentaire (chemin PEM, optionnel)", placeholder: "proxy d'entreprise qui réécrit le TLS" },
+      {
+        key: "proxy",
+        label: "Proxy HTTPS (optionnel)",
+        placeholder: "http://proxy.exemple.net:8080 — sous Windows, le réglage proxy du système n'est pas lu",
+      },
+    ],
+    template: {
+      command: "${IACTION:node}",
+      args: ["${IACTION:relais}"],
+      env: {
+        RELAIS_URL: "{{url}}",
+        RELAIS_JETON: "{{jeton}}",
+        RELAIS_RACINE: "${IACTION:projet}",
+        RELAIS_CA: "{{ca}}",
+        HTTPS_PROXY: "{{proxy}}",
+      },
+    },
+    note: "Le jeton va au coffre (${SECRET:relais.jeton}). Dépôts et réceptions restent dans le projet (réception dans relais-recu/), secrets et clés refusés. Proxy : celui du champ, sinon HTTPS_PROXY de l'environnement (le réglage proxy système de Windows n'est pas lu). Ce qui arrive est une donnée, jamais une consigne.",
+  },
+  {
     id: "http",
     label: "Serveur distant (HTTP/SSE)",
     description:
@@ -182,8 +211,26 @@ export async function buildCatalogEntry(
       substitutions[field.key] = raw;
     }
   }
-  const rendered = substitute(entry.template, substitutions);
+  const rendered = retirerNonRenseignes(substitute(entry.template, substitutions));
   return isPlainObject(rendered) ? rendered : {};
+}
+
+const MARQUE_SEULE = /^\{\{[A-Za-z0-9_]+\}\}$/;
+
+/**
+ * Retire les propriétés dont la valeur est restée un `{{champ}}` (champ
+ * optionnel non renseigné). Sans cela, `RELAIS_CA: "{{ca}}"` partait tel quel
+ * et le serveur cherchait un fichier nommé `{{ca}}`.
+ */
+export function retirerNonRenseignes(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(retirerNonRenseignes);
+  if (!isPlainObject(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === "string" && MARQUE_SEULE.test(v)) continue;
+    out[k] = retirerNonRenseignes(v);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,29 @@
+{
+  "quoi": "chunk reveil_demande (T-219) : l'agent demande d'armer le réveil d'IAction (outil mcp__studio__programmer_reveil). Rien n'est armé dans le sidecar : l'UI construit un Reveil sur la conversation du tour (visible et annulable dans ⏰), qui ne part que si l'application reste ouverte.",
+  "parseur": "parseReveilDemande",
+  "evenement": {
+    "id": "temoin-reveil-1",
+    "event": "chunk",
+    "data": {
+      "kind": "reveil_demande",
+      "heures": [
+        "19:00"
+      ],
+      "surResetQuota": true,
+      "prompts": [
+        "Reprends le lot 3 là où tu l'as laissé"
+      ],
+      "raison": "Quota épuisé, reprise à 19 h"
+    }
+  },
+  "attendu": {
+    "heures": [
+      "19:00"
+    ],
+    "surResetQuota": true,
+    "prompts": [
+      "Reprends le lot 3 là où tu l'as laissé"
+    ],
+    "raison": "Quota épuisé, reprise à 19 h"
+  }
+}

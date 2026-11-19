@@ -26,6 +26,7 @@ import {
 import { toMessage } from "./base";
 import { notifyProvidersPushed } from "./providersBus";
 import { subscribeReady } from "./sidecar";
+import { ecouterEtatCoffre } from "./coffreClient";
 
 export type ProvidersLoadState = "loading" | "ready" | "error";
 
@@ -77,6 +78,15 @@ export function useProviders(): UseProvidersResult {
         setErrorMessage(toMessage(err));
       });
     });
+    // Coffre de secrets : une clé qui n'existe que dans le coffre se lit
+    // `null` tant qu'il est fermé. À chaque changement d'état (ouverture
+    // surtout), la table est relue et repoussée.
+    const finCoffre = ecouterEtatCoffre(() => {
+      if (providersRef.current.length === 0) return;
+      pushWithState(providersRef.current).catch((err) => {
+        setErrorMessage(toMessage(err));
+      });
+    });
 
     // L'init ne tourne qu'une fois. ATTENTION StrictMode : le premier effet
     // est démonté/remonté mais l'ÉTAT du composant survit — il ne faut donc
@@ -123,7 +133,10 @@ export function useProviders(): UseProvidersResult {
       })();
     }
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      finCoffre();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

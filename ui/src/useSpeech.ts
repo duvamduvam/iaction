@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { toMessage } from "./base";
 import { enregistrerTraitantConfigVoix, publierMicroCourant } from "./busMicro";
 import { subscribeReady } from "./sidecar";
+import { ecouterEtatCoffre } from "./coffreClient";
 import {
   DEFAULT_SPEECH_CONFIG,
   deleteSpeechKey,
@@ -87,6 +88,12 @@ export function useSpeech(): UseSpeechResult {
     const unsubscribe = subscribeReady(() => {
       pushWithState().catch((err) => setErrorMessage(toMessage(err)));
     });
+    // Coffre de secrets : les clés `speech:*` qui n'existent qu'au coffre se
+    // lisent `null` tant qu'il est fermé ; à chaque changement d'état
+    // (ouverture surtout), elles sont relues et repoussées.
+    const finCoffre = ecouterEtatCoffre(() => {
+      pushWithState().catch((err) => setErrorMessage(toMessage(err)));
+    });
 
     // L'init ne tourne qu'une fois — voir l'avertissement StrictMode dans
     // useProviders : l'état du composant survit au démontage du premier effet,
@@ -118,7 +125,10 @@ export function useSpeech(): UseSpeechResult {
       })();
     }
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      finCoffre();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

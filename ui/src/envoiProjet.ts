@@ -45,6 +45,8 @@ import {
 } from "./agentTurns";
 import { changementDepuisChunk, choixApresChangement, withChangementModele, type ChoixModele } from "./changementModele";
 import { avecCompactionDemandee } from "./compactionDemandee";
+import { traiterReveilDemande } from "./reveilDemande";
+import { avecMessageInjecte } from "./injectionEnCoursDeTour";
 import { buildKnowledgeBlock, instructionsSysteme, type PinnedDoc } from "./connaissances";
 import { rangerPushPerdu, retirerPiecesOrphelines } from "./pushPerdu";
 import { recordModelUsage } from "./fableUsage";
@@ -336,6 +338,8 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
           updateTurnsFor(convId, (prev) =>
             prev.map((t) => (t.id === target.id ? { ...t, backgroundTimeout: { count, plafondMs } } : t)),
           ),
+        onMcpEcartes: (serveurs, coffreVerrouille) =>
+          updateTurnsFor(convId, (prev) => prev.map((t) => (t.id === target.id ? { ...t, mcpEcartes: { serveurs, coffreVerrouille } } : t))),
         onCompact: (trigger, preTokens) =>
           updateTurnsFor(convId, (prev) =>
             prev.map((t) => (t.id === target.id ? { ...t, compacted: { trigger, preTokens } } : t)),
@@ -352,6 +356,7 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
         },
         // T-216 — comme le bouton « Compacter » pendant un tour : « /compact » en file (une fois), avis sur la bulle.
         onCompactionDemandee: (raison) => updateRuntime(convId, (r) => avecCompactionDemandee(r, target.id, raison)),
+        onReveilDemande: (demande) => traiterReveilDemande(demande, convId, compte, updateRuntime), // T-219 — l'agent arme le réveil ⏰
       },
     );
     return handle;
@@ -669,29 +674,10 @@ export function creerEnvoiProjet(deps: DepsEnvoiProjet): {
     if (engine === "claude") {
       injectorsRef.current.set(convId, (text: string, injectedAttachments?: SentAttachment[]) => {
         const nextAssistantId = nextId("a");
-        // La bulle en cours est close (`continued`) avant la redirection :
-        // plus rien ne la repassera à « done » ensuite (le `done` du tour ne
-        // patche que la DERNIÈRE cible) — laissée en streaming, elle
-        // clignotait à vie et disparaissait à la persistance.
-        updateTurnsFor(convId, (prev) => [
-          ...prev.map((t) =>
-            t.id === streamTarget.id && t.status === "streaming" ? { ...t, status: "done" as const, continued: true } : t,
-          ),
-          {
-            id: nextId("u"),
-            role: "user",
-            content: text,
-            displayContent: text,
-            status: "done",
-            injected: true,
-            // T-064 — vignette comme pour un message normal, si le push en portait.
-            ...(injectedAttachments && injectedAttachments.length > 0 ? { attachments: injectedAttachments } : {}),
-          },
-          // `suiteDeTour` : le fournisseur a déjà répondu plus haut dans ce
-          // tour — cette bulle attend le prochain outil, pas le premier octet
-          // (T-027, sinon l'avis « aucune donnée reçue » s'y affichait).
-          { id: nextAssistantId, role: "assistant", blocks: [], status: "streaming", suiteDeTour: true },
-        ]);
+        // Bulle close, message, bulle neuve ; les tâches de fond suivent (T-222).
+        updateTurnsFor(convId, (prev) =>
+          avecMessageInjecte(prev, streamTarget.id, { utilisateur: nextId("u"), assistant: nextAssistantId }, text, injectedAttachments),
+        );
         streamTarget.id = nextAssistantId;
         collerEnBas();
       });

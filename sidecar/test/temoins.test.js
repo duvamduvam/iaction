@@ -294,6 +294,47 @@ async function testTemoinCompactionDemandee() {
   }
 }
 
+/*
+ * Chunk `reveil_demande` (T-219) — l'agent arme le réveil d'IAction. Même faux
+ * SDK, qui appelle le VRAI gestionnaire de `programmer_reveil`.
+ */
+async function testTemoinReveilDemande() {
+  const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "iaction-temoin-reveil-"));
+  try {
+    await avecSidecar(
+      async ({ send, waitFor }) => {
+        send({
+          id: "temoin-reveil-1",
+          method: "claude.start",
+          params: {
+            cwd,
+            prompt: JSON.stringify({
+              reveil: [
+                {
+                  heures: ["19:00"],
+                  surResetQuota: true,
+                  prompts: ["Reprends le lot 3 là où tu l'as laissé"],
+                  raison: "Quota épuisé, reprise à 19 h",
+                },
+              ],
+            }),
+            model: "claude-opus-5-5",
+            interactive: true,
+          },
+        });
+        const chunk = await waitFor(
+          (e) => e.id === "temoin-reveil-1" && e.event === "chunk" && e.data.kind === "reveil_demande",
+          "chunk reveil_demande",
+        );
+        await confronter("claude-reveil-demande-chunk", chunk);
+      },
+      { IACTION_FAKE_CLAUDE_MODULE: path.join(dossierTest, "fakeClaudeModele.mjs"), IACTION_FAKE_CLAUDE_STUDIO: "1" },
+    );
+  } finally {
+    await fsp.rm(cwd, { recursive: true, force: true });
+  }
+}
+
 async function testTemoinErreur() {
   await avecSidecar(async ({ send, waitFor }) => {
     send({ id: "temoin-erreur-1", method: "methode.inconnue", params: {} });
@@ -310,5 +351,6 @@ await lancer(
   testTemoinTitreDiscussion,
   testTemoinModelChange,
   testTemoinCompactionDemandee,
+  testTemoinReveilDemande,
   testTemoinErreur,
 );

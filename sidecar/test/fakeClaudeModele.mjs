@@ -3,6 +3,7 @@
 // Le prompt du tour est un JSON décrivant le scénario :
 //   { "appels": [{ modele, effort?, raison }, ...],  // appels de l'outil, dans l'ordre
 //     "compacter": [{ raison }, ...],                 // T-216 : appels de l'outil `compacter`
+//     "reveil": [{ heures, surResetQuota, prompts, raison }, ...],  // T-219 : appels de `programmer_reveil`
 //     "echec": "setModel" | "applyFlagSettings",      // fait lever le faux SDK
 //     "attente": true }                                // garde le tour ouvert jusqu'à un 2e message
 //
@@ -59,6 +60,11 @@ export function fakeQuery({ prompt, options }) {
       const handler = outils.compacter;
       resultatsCompacter.push(handler ? await handler(appel) : { absent: true });
     }
+    const resultatsReveil = [];
+    for (const appel of scenario.reveil ?? []) {
+      const handler = outils.programmer_reveil;
+      resultatsReveil.push(handler ? await handler(appel) : { absent: true });
+    }
 
     if (scenario.attente && !interrupted) {
       // Garde le tour ouvert jusqu'à un message poussé (ou la fermeture de l'entrée).
@@ -75,6 +81,8 @@ export function fakeQuery({ prompt, options }) {
         outils: Object.keys(outils),
         resultats,
         resultatsCompacter,
+        resultatsReveil,
+        disallowedTools: options?.disallowedTools ?? null,
         recus,
         systemPrompt: options?.systemPrompt ?? null,
       }),

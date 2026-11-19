@@ -273,21 +273,23 @@ async function loadTacheEntry(dirPath: string, dirName: string): Promise<TacheLi
   return { ...result.value, path: dirPath };
 }
 
+/** Toutes les tâches déclarées, triées (invalides comprises). */
+export async function listerTaches(): Promise<TacheListEntry[]> {
+  const root = tachesRoot();
+  const dirNames = await listTacheDirNames(root);
+  const entries: TacheListEntry[] = [];
+  for (const dirName of dirNames) {
+    entries.push(await loadTacheEntry(path.join(root, dirName), dirName));
+  }
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function handleTachesList(
   id: string,
   _params: Record<string, unknown>,
   emitter: EngineEmitter,
 ): Promise<void> {
-  const root = tachesRoot();
-  const dirNames = await listTacheDirNames(root);
-
-  const entries: TacheListEntry[] = [];
-  for (const dirName of dirNames) {
-    entries.push(await loadTacheEntry(path.join(root, dirName), dirName));
-  }
-  entries.sort((a, b) => a.name.localeCompare(b.name));
-
-  emitter.done(id, { taches: entries });
+  emitter.done(id, { taches: await listerTaches() });
 }
 
 // ---------------------------------------------------------------------------

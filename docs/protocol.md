@@ -423,7 +423,7 @@ par `sessionId` : le SDK recharge tout le contexte via `resume`).
   (sélecteur grisé côté UI) → l'outil `mcp__studio__changer_modele` n'est PAS
   exposé (§ Changement de modèle par l'agent plus bas). Absent = `false`.
   N'agit pas sur `mcp__studio__compacter` (T-216) : le verrou porte sur le
-  modèle, pas sur le contexte.
+  modèle, pas sur le contexte. Ni sur `mcp__studio__programmer_reveil` (T-219).
 
 **Sources de réglages** (hors chat pur) : `settingSources: ['user', 'project',
 'local']`. Un tour de projet hérite donc des skills et commandes **globaux du
@@ -502,10 +502,13 @@ filtres** (voir « Méthodes MCP » plus bas) :
    `<cwd>/.iaction/mcp.local.json` n'est pas transmis du tout (donc zéro coût
    de contexte) ;
 2. **secrets** — toute chaîne `${SECRET:nom}` de l'entrée (dans `env`,
-   `headers`, `args`, `url`…) est remplacée par sa valeur, lue dans
-   `<config>/mcp-secrets.json` (fichier 0600, hors projet, hors git). Une
+   `headers`, `args`, `url`…) est remplacée par sa valeur, lue dans la table
+   du coffre poussée par la coquille (voir « Coffre de secrets »), complétée
+   par l'ancien `<config>/mcp-secrets.json` jusqu'à la migration. Une
    référence introuvable **écarte le serveur** (avertissement au journal,
-   scope `mcp`) plutôt que de lancer un serveur à moitié configuré ;
+   scope `mcp`) plutôt que de lancer un serveur à moitié configuré, et le
+   tour reçoit un chunk `{kind:"mcp_ecartes", serveurs[], coffreVerrouille}`
+   émis avant `init` : l'interface dit la cause sous la réponse ;
 3. **allowlist d'outils** — `allowedTools` de `mcp.local.json`
    (`{serveur: [outils courts]}`) ajoute les outils NON retenus à
    `disallowedTools` des Options, en s'appuyant sur les outils constatés au
@@ -557,6 +560,7 @@ Les traces `console.log` des bibliothèques tierces vont sur stderr, jamais sur 
 | `compact` | `{trigger, preTokens}` | compaction de contexte terminée (`trigger` = `manual` pour « /compact », `auto` pour la compaction automatique du CLI ; `preTokens` = contexte avant compaction, `null` si inconnu) — un tour « /compact » ne produit AUCUN texte : sans ce chunk, l'UI n'a aucun signal de fin de travail |
 | `model_change` | `{from, to, effortFrom, effortTo, raison}` | T-207 — l'agent vient de changer lui-même de modèle (et/ou d'effort) via l'outil `mcp__studio__changer_modele`. **Déjà appliqué** au moteur (`setModel` / `applyFlagSettings`) quand le chunk part, dans le tour en cours : l'UI n'a qu'à aligner ses sélecteurs (les tours suivants partent avec) et afficher le bandeau « L'agent est passé à … · Annuler ». `from`/`effortFrom` = valeurs d'avant (`null` = inconnu ou défaut), `to`/`effortTo` = valeurs d'après (`effortTo` = `effortFrom` si l'agent n'a pas touché à l'effort), `raison` = la phrase de l'agent. Jamais émis si le moteur a refusé le changement (l'agent reçoit alors une erreur d'outil) ni quand le modèle demandé est déjà en place. Témoin : `fixtures/protocole/claude-model-change-chunk.json` |
 | `compaction_demandee` | `{raison}` | T-216 — l'agent a programmé le compactage de sa conversation via l'outil `mcp__studio__compacter`. **Rien n'est compacté** dans le tour : l'UI met `/compact` en file pour la conversation (une fois au plus, comme le bouton « Compacter » pendant un tour en cours) et affiche l'avis « L'agent a demandé un compactage — il partira à la fin du tour · Annuler » ; « Annuler » retire `/compact` de la file. La commande part quand le tour rend vraiment la main (après les rapports de tâches de fond, ou « Rendre la main ») ; « Arrêter » vide la file, elle comprise. `raison` = la phrase de l'agent (chaîne vide tolérée : la demande reste valable). Témoin : `fixtures/protocole/claude-compaction-demandee-chunk.json` |
+| `reveil_demande` | `{heures, surResetQuota, prompts, raison}` | T-219 — l'agent demande d'armer le réveil d'IAction via `mcp__studio__programmer_reveil`. **Rien n'est armé** dans le sidecar : l'UI construit un `Reveil` (`ui/src/reveil.ts`, T-120) sur la conversation du tour, comme le contrôle ⏰ (cible de réouverture du quota figée à l'armement, repère d'armement à l'instant), avec une notice dans le fil et une entrée de journal canal `reveil`. Il est visible et annulable dans ⏰ et ne part que si l'application reste ouverte (T-121). `heures` = uniquement des « HH:MM » valides (le sidecar écarte les autres), `prompts` non vide. Côté UI, un réveil sans échéance calculable (pas d'heure, `surResetQuota` sans réouverture connue) est refusé : notice + `warn`. Témoin : `fixtures/protocole/claude-reveil-demande-chunk.json` |
 | `push_perdu` | `{contenu, avaitPieces}` | T-087 — un `claude.push` jamais injecté (aucun `tool_result` du fil depuis) ressort ici, **avant** le `done`/`error` de clôture : l'UI repose `contenu` en file d'attente et marque la bulle « en cours de tour » correspondante comme reportée ; `avaitPieces` commande la restauration des pièces jointes (voir § `claude.push`) |
 | `sous_agent_battement` | `{toolUseId, outils, dernierOutil, instant}` | T-102 — un sous-agent (`Task`/`Agent`, en vol) vient d'utiliser un outil de plus. `toolUseId` = id du `Task`/`Agent` LANCEUR (le même que son `tool_use` dans le fil, pas celui de l'outil intérieur) ; `outils` = compteur CUMULÉ d'outils vus chez ce sous-agent ; `dernierOutil` = nom du dernier outil observé ; `instant` = epoch ms de cette observation. Ne réintroduit PAS le détail que T-092 a retiré du fil (jamais l'entrée/sortie de l'outil) : sert uniquement à faire battre une ligne discrète sous l'appel `Agent`, pour qu'un sous-agent qui tourne plusieurs dizaines de minutes reste distinguable d'un blocage |
 
@@ -780,6 +784,20 @@ l'agent », `raison` et `sessionId`), et le modèle lit « Compactage programmé
 il partira dès la fin de ce tour. Termine ton tour normalement (résumé court
 de l'état si utile). ». Exposé aux tours `interactive` seulement, hors chat
 pur — mais AUSSI sous `modeleVerrouille`.
+
+**Réveil armé par l'agent** (T-219) : le même serveur `studio` porte l'outil
+`programmer_reveil` (`mcp__studio__programmer_reveil`, auto-autorisé : pas de
+modale). Entrée : `heures` (tableau de « HH:MM », peut être vide),
+`surResetQuota` (booléen, faux par défaut), `prompts` (tableau non vide),
+`raison` (une phrase). Effet : chunk `reveil_demande`, entrée de journal `info`
+(« réveil demandé par l'agent »), et le modèle lit que le réveil est armé,
+visible et annulable dans ⏰, et qu'il ne part que si l'application reste
+ouverte. Refus (résultat d'outil `isError`, journal `warn`, aucun chunk) : aucun
+prompt, ou aucune heure valide sans `surResetQuota`. Exposé aux tours
+`interactive` seulement, hors chat pur, et AUSSI sous `modeleVerrouille`. Les
+outils du CLI `CronCreate`, `CronList`, `CronDelete` et `ScheduleWakeup` sont
+ajoutés à `disallowedTools` des tours SDK : ils meurent avec le processus du
+tour et ne déclenchent rien.
 
 **Outils `studio` jamais différés** (T-210) : le serveur est créé avec
 `createSdkMcpServer({ …, alwaysLoad: true })` — option documentée par le SDK
@@ -2772,8 +2790,10 @@ Trois fichiers, trois rôles — à ne pas confondre :
 | `<projet>/.iaction/mcp.local.json` | préférences locales : `{disabled[], allowedTools{}}` | non |
 | `<projet>/.iaction/mcp.runtime.json` | état CONSTATÉ au dernier tour (généré) | non |
 
-Les secrets ne vivent dans aucun des trois : ils sont dans
-`<config>/mcp-secrets.json` (mode 0600), référencés depuis `.mcp.json` par
+Les secrets ne vivent dans aucun des trois : ils sont dans le coffre chiffré
+du poste (voir « Coffre de secrets »), ou dans l'ancien
+`<config>/mcp-secrets.json` (mode 0600) tant que le coffre n'est pas créé,
+référencés depuis `.mcp.json` par
 `${SECRET:<nom>}`. **Aucune méthode ne renvoie jamais la valeur d'un secret** —
 seuls les noms circulent, et uniquement dans le sens UI → sidecar pour les
 poser.
@@ -2828,9 +2848,15 @@ effacerait des serveurs que l'utilisateur croit déclarés. `done` :
 
 ### `mcp.secrets` / `mcp.secretSet` / `mcp.secretDelete`
 
-`mcp.secrets` → `{names[], path}` (noms seulement).
-`mcp.secretSet {name, value}` pose/écrase (fichier créé en 0600).
-`mcp.secretDelete {name}` → `{name, removed}`.
+`mcp.secrets` → `{names[], path, coffre}` (noms seulement ; `coffre` =
+`absent` | `verrouille` | `ouvert`).
+`mcp.secretSet {name, value}` pose/écrase : coffre ouvert, la valeur part à la
+coquille (`coffre:ecrire`) et `done` n'arrive qu'à son **accusé** (`coffre.ecrit`,
+après écriture et relecture du coffre) — un échec de la coquille, ou 15 s sans
+accusé, donne une `error` ; coffre absent, dans l'ancien fichier (0600) ; coffre
+verrouillé, **erreur** « coffre verrouillé : … ». `mcp.add` n'écrit
+`${SECRET:…}` dans `.mcp.json` qu'après cet accusé.
+`mcp.secretDelete {name}` → `{name, removed}` (même règle ; erreur si verrouillé).
 
 ### Serveurs distants en attente d'authentification
 
@@ -3193,14 +3219,211 @@ Le Rust expose aussi, en dehors du protocole sidecar :
   - Contenu Lot 1 : `{"providers": [{id, label, baseUrl, needsKey, headers?}]}` —
     **jamais de clé API dedans**.
 
-Flux des clés : l'UI lit la clé au trousseau (`secret_get`) au démarrage / après
-saisie dans l'admin, et l'injecte dans `providers.set`. La clé ne transite qu'en
-mémoire (IPC local), n'est jamais écrite ailleurs que dans le trousseau.
+Flux des clés : l'UI lit la clé (`secret_get`) au démarrage / après saisie dans
+l'admin / à chaque changement d'état du coffre, et l'injecte dans
+`providers.set`. La clé ne transite qu'en mémoire (IPC local).
+
+Depuis le coffre de secrets, les trois commandes `secret_*` gardent leur
+signature côté UI mais choisissent leur dorsal selon l'état du coffre :
+
+| Coffre | `secret_get` | `secret_set` / `secret_delete` |
+|---|---|---|
+| absent (pas créé) | trousseau | trousseau |
+| ouvert | coffre (classe `coffre`), sinon trousseau (`sans-fenetre`, ou pas encore migré) | coffre ; la copie au trousseau est retirée après l'écriture réussie |
+| verrouillé | trousseau seulement (`None` pour une clé qui n'existe que dans le coffre) | **erreur** « coffre verrouillé : … » |
+
+## Coffre de secrets (docs/etude-coffre-secrets.md)
+
+La coquille Rust est le gardien : seule à connaître la clé, seule à
+déchiffrer. Fichiers dans `{app_config_dir}` : `coffre.age` (table chiffrée
+pour une identité X25519), `coffre.cle.age` (cette identité chiffrée par le mot
+de passe, scrypt), `coffre.age.prec` (version précédente de la table).
+
+### Commandes Tauri
+
+- `coffre_etat() -> {etat, attente, repliPrecedent}` — `etat` : `"absent"` |
+  `"verrouille"` | `"ouvert"` ; `attente` : `null` ou `{cause, tours}`
+  (fermeture automatique différée) ; `repliPrecedent` : vrai si `coffre.age`
+  était illisible et que le coffre s'est ouvert sur `coffre.age.prec` (la
+  dernière modification est perdue ; `.prec` n'est alors pas écrasé par le
+  fichier abîmé). Un `coffre.cle.age` abîmé rend une erreur « fichier de clé du
+  coffre abîmé… : ouvre le coffre par la clé de secours », jamais « mot de passe
+  incorrect », et ne compte pas comme un essai. Clé présente sans table
+  (création interrompue) : le coffre s'ouvre vide.
+- `coffre_creer(motDePasse) -> String` — crée et ouvre ; renvoie la **clé de
+  secours** (`AGE-SECRET-KEY-1…`), seule valeur sensible qui sorte jamais d'une
+  commande, à afficher une fois. Mot de passe : 8 caractères au moins.
+- `coffre_deverrouiller(motDePasse)`, `coffre_deverrouiller_secours(cle)` —
+  erreurs « mot de passe incorrect », « clé de secours invalide pour ce
+  coffre », « trop d'essais : nouvel essai possible dans N s » (délai doublé à
+  partir du 3e échec consécutif, plafonné à 300 s, en mémoire).
+- `coffre_verrouiller()` — immédiat (geste manuel).
+- `coffre_changer_mot_de_passe(ancien: Option, nouveau)` — `ancien` exigé, sauf
+  coffre ouvert par la clé de secours ; sa vérification est soumise au même
+  délai d'essais que l'ouverture. Ne réécrit que `coffre.cle.age`.
+
+Événement Tauri **`coffre:etat`** : même charge que `coffre_etat`, publié à
+chaque ouverture, fermeture et pendant une attente de fermeture.
+
+Gestion (lot 2, coffre ouvert sauf mention) — aucune ne rend de valeur :
+
+- `coffre_secrets() -> [{nom, classe, cree}]` — `classe` : `"coffre"` |
+  `"sans-fenetre"`.
+- `coffre_reclasser(nom, classe)` — la valeur change de place (coffre chiffré
+  ⇄ trousseau, écrite à la nouvelle place AVANT d'être retirée de l'ancienne),
+  l'index `{app_config_dir}/coffre-sans-fenetre.json` (noms seulement) est mis
+  à jour, la table est repoussée au sidecar.
+- `coffre_poste_domaine() -> bool | null` — Windows joint à un domaine
+  (`NetGetJoinInformation`) ; `null` = indéterminé ; `false` hors Windows.
+- `coffre_migration_candidats(comptes) -> [{compte, source}]` — parmi
+  `comptes` (fournisseurs, voix, nommés par l'interface), ceux présents au
+  trousseau (`source: "trousseau"`), plus le contenu de l'ancien
+  `mcp-secrets.json` (`"fichier-mcp"`, compte `mcp:<nom>` ; `"reliquat-mcp"`
+  si le coffre a déjà ce nom : seule la copie en clair est retirée, le coffre
+  fait foi). Les comptes du trousseau que le coffre connaît déjà sont omis.
+- `coffre_migrer(choix: [{compte, classe}]) -> {migres, echecs, fichierMcpSupprime}`
+  — verse au coffre, **relit `coffre.age` sur le disque**, puis supprime les
+  originaux des seuls secrets relus à l'identique (copie au trousseau d'un
+  secret `coffre`, entrée de l'ancien fichier, fichier supprimé s'il est vide).
+  Un `sans-fenetre` reste au trousseau, par définition.
+
+### Coquille ⇄ sidecar
+
+Requêtes émises par la coquille sur le stdin du sidecar (identifiants
+`coffre-…`) ; leurs réponses sont traitées par Rust et **jamais relayées** à
+l'interface :
+
+- `coffre.charger {etat, secrets}` — à chaque naissance du sidecar, à
+  l'ouverture, à la fermeture et après chaque écriture. `secrets` =
+  `{nom: valeur}` des secrets MCP (compte `mcp:<nom>` du coffre ↔
+  `${SECRET:<nom>}`) : ceux de classe `coffre` si le coffre est ouvert, et
+  ceux de classe `sans-fenetre` (lus au trousseau) dans tous les cas.
+  Verrouillé, le sidecar ne sert donc que les `sans-fenetre`. `absent` :
+  table vide, le sidecar lit l'ancien `mcp-secrets.json` (poste sans coffre).
+  `done` : `{etat, secrets: <nombre>}` — ni nom ni valeur.
+- `coffre.attendreFin {}` — chunk `{tours}` à chaque changement du nombre de
+  tours en cours (`claude.start`, `neutral.start`, `orch.run`, `chat.send`
+  ouverts et pas encore terminés par `done`/`error`), puis `done {tours:0}`.
+  Sans tour : `done` immédiat.
+
+Événements émis par le sidecar à l'adresse de la coquille (sans `id`),
+interceptés par Rust et **jamais relayés** (ils portent une valeur) :
+
+- `{"event":"coffre:ecrire","data":{"demande","nom","valeur"}}` —
+  `mcp.secretSet`, le catalogue MCP, la migration d'un `.env`, coffre ouvert.
+  La coquille écrit `mcp:<nom>` au coffre, le **relit sur le disque**, repousse
+  la table réelle, puis acquitte par la requête
+  `coffre.ecrit {demande, ok, erreur?}` (identifiant `coffre-ecrit-…`, réponse
+  interceptée). Côté sidecar, l'écriture n'est réussie qu'à cet accusé.
+- `{"event":"coffre:retirer","data":{"demande","nom"}}` — `mcp.secretDelete` ;
+  même accusé (relecture : le nom est absent du disque). Retirer un secret le
+  retire aussi de l'index `coffre-sans-fenetre.json`.
+
+### Méthodes du sidecar pour l'interface (lot 2)
+
+- `coffre.referencesTaches {}` → `done {noms}` — noms `${SECRET:…}` du
+  `.mcp.json` de chaque tâche programmée `local` (son `cwd`, sinon son
+  dossier), désactivées comprises : la classe `sans-fenetre` leur est proposée
+  à la migration.
+- `coffre.tachesSansSecrets {}` → `done {taches: [{tache, noms}]}` — tâches
+  `local` actives dont un `${SECRET:…}` ne sera pas servi sans fenêtre (ni
+  `sans-fenetre`, ni encore dans l'ancien fichier) ; vide sans coffre.
+  L'interface l'affiche au lancement.
+- `coffre.inventaireEnv {projets: [chemin absolu]}` → `done {fichiers: [{projet,
+  fichier, cles, ambigues}]}` — `.env`, `.env.*` hors `.env.example`, `*.env`,
+  profondeur 5, `node_modules`/`.git`/`dist`… ignorés ; noms des variables,
+  jamais les valeurs. Lecture STRICTE : guillemets simples (littéraux) et
+  doubles (`\n \r \t \" \\`), commentaire de fin ` # …` ; guillemet non
+  fermé, valeur sur plusieurs lignes, texte après le guillemet fermant, blanc
+  intérieur hors guillemets ou interpolation `${…}` → clé dans `ambigues`,
+  jamais versée.
+- `coffre.migrerEnv {projet, fichier, cle, nom, serveur?, variable?}` → `done
+  {nom, serveur}` — coffre ouvert seulement (sinon `error` : jamais vers
+  l'ancien fichier en clair) ; clé ambiguë refusée. La valeur part à la
+  coquille (`coffre:ecrire`) ; `done` après son accusé seulement. Avec
+  `serveur`, l'entrée de `.mcp.json` reçoit `env[variable ?? cle] =
+  ${SECRET:nom}` — après l'accusé, jamais avant.
+- `coffre.supprimerEnv {projet, fichier, versements: [{cle, nom}]}` → `done
+  {supprime}` — un fichier `.env*` DANS le projet, coffre ouvert, et seulement
+  si CHAQUE variable non vide du fichier est au coffre sous le nom déclaré avec
+  la même valeur (comparaison en mémoire) et qu'aucune n'est ambiguë ; sinon
+  `error` qui nomme les clés manquantes. L'interface demande confirmation avant.
+
+Sidecar lancé **sans coquille** (tâche de fond) : si `coffre.cle.age` existe, il
+lit les secrets `sans-fenetre` listés par l'index (`mcp:*` seulement) au
+trousseau par `secret-tool lookup service iaction username mcp:<nom>` (Linux,
+seul système des minuteurs). Écriture d'un secret refusée (« coffre
+indisponible hors de l'application »).
+
+**Repli sur l'ancien fichier** : tant que `<config>/mcp-secrets.json` existe
+(migration pas faite ou partielle), il est lu pour les noms que le coffre (ou
+l'index `sans-fenetre`) ne sert pas, quel que soit l'état du coffre ; le coffre
+prime. La migration le vide puis le supprime.
+
+### Agents : consigne, outil, garde d'écriture (T-220)
+
+- Outil `mcp__studio__secrets_lister` (serveur `studio`, tout tour projet
+  Claude, sans validation) : état du coffre et NOMS des secrets MCP
+  disponibles, avec la forme `${SECRET:nom}`. Exposé ⇒ la consigne
+  `CONSIGNE_SECRETS` s'ajoute à l'instruction système (paletteTour.ts).
+- Garde d'écriture : crochet SDK `PreToolUse` (matcher
+  `Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|mcp__.+__relais_deposer`),
+  appelé quel que soit le mode — `bypassPermissions` compris, où `canUseTool`
+  ne l'est pas. Décision `deny` pour `.env`, `.env.*` (sauf `.env.example`),
+  `*.env`, `*.pem`, `*.key` situés dans le projet ; Bash et PowerShell : cibles
+  de `>`, `>>`, `>|`, `&>`, `tee`, et des cmdlets `Set-Content`, `Add-Content`,
+  `Out-File`, `New-Item`, `Copy-Item`, `Move-Item` (contournable, assumé).
+  Dépôt par le relais : refusé si le fichier contient une valeur servie par
+  le coffre (comparaison en mémoire, ni nom ni valeur dans le message). Moteur
+  neutre : même règle avant `write_file`/`edit_file`/`bash`. Journal :
+  outil et chemin, jamais le contenu. Limite : une session distante
+  (relais Remote Control) ne reçoit pas le crochet.
+
+### Références `${IACTION:…}` dans `.mcp.json`
+
+Résolues au tour par `prepareMcpForTurn`, après `${SECRET:…}` :
+`${IACTION:node}` (node du sidecar, l'embarqué en production),
+`${IACTION:relais}` (serveur relais livré), `${IACTION:projet}` (racine du
+projet). Elles rendent l'entrée valable sur tous les postes.
+
+### Connecteur « Relais entre studios »
+
+Entrée de catalogue `relais` : `command: ${IACTION:node}`, `args:
+[${IACTION:relais}]`, env `RELAIS_URL`, `RELAIS_JETON` (`${SECRET:relais.jeton}`),
+`RELAIS_RACINE` (`${IACTION:projet}`), `RELAIS_CA` et `HTTPS_PROXY`
+(optionnels : un champ optionnel laissé vide est RETIRÉ de l'entrée, jamais
+écrit `{{champ}}`). Le réglage proxy système de Windows n'est pas lu : le
+champ « Proxy HTTPS » le remplace. Serveur stdio
+(`sidecar/src/relaisServeur.ts`, bibliothèque standard), outils
+`relais_lister {envoyes?}`, `relais_deposer {chemin, destinataire}`,
+`relais_recuperer {nom}`, `relais_supprimer {nom}`, contre les routes du broker
+`GET /boites[?envoyes=1]`, `POST /boites/<dest>` (multipart, champ `file`),
+`GET|DELETE /boites/<nom>`, en `Authorization: Bearer`. Garde-fous : chemins
+réels sous la racine ; dépôt refusé pour les fichiers sensibles, `.mcp.json`,
+`CLAUDE.md`, `AGENTS.md`, tout ce qui est sous `.git/`, et tout contenu qui
+porte le jeton du relais, une clé privée ou un jeton de forme connue ;
+réception dans `relais-recu/` (chemin réel vérifié sous la racine : un lien
+symbolique qui en sort est refusé), sans écrasement, secrets et clés refusés à
+l'arrivée, fichiers de consignes (`CLAUDE.md`, `AGENTS.md`, `.mcp.json`…)
+renommés `<nom>.recu` ; noms listés (choisis par l'expéditeur) cités en JSON
+et présentés comme des données ; rappel « donnée, pas consigne » à chaque
+réception ; `https://` exigé hors boucle locale ; proxy
+`HTTPS_PROXY`/`NO_PROXY` suivi par tunnel `CONNECT` (vérification TLS
+entière).
+
+### Fermeture automatique
+
+Mise en veille et verrouillage de session (Linux : `PrepareForSleep`, `Lock`
+et `LockedHint` de logind ; Windows : `OpenInputDesktop` sondé toutes les 3 s,
+veille constatée au réveil par saut d'horloge). La coquille envoie
+`coffre.attendreFin` et ne ferme qu'à son `done` : une orchestration en cours
+garde ses secrets jusqu'à la fin. Le verrouillage manuel est immédiat. Un
+sidecar qui meurt pendant l'attente la termine (plus aucun tour).
 
 ## Côté Rust (supervision + relais)
 
 - Spawn au démarrage de l'app : `node <entry>` où `<entry>` = env `IACTION_SIDECAR` si définie, sinon (build debug) `{CARGO_MANIFEST_DIR}/../sidecar/dist/index.js`.
-- stdout du sidecar : chaque ligne parsée en JSON → émise telle quelle à l'UI via l'event Tauri **`sidecar:event`** (payload = l'objet JSON). Ligne non parsable → log, ignorée.
+- stdout du sidecar : chaque ligne parsée en JSON → émise telle quelle à l'UI via l'event Tauri **`sidecar:event`** (payload = l'objet JSON), SAUF les lignes adressées à la coquille (`coffre:ecrire`, `coffre:retirer`, réponses aux identifiants `coffre-…`, voir « Coffre de secrets »). Ligne non parsable → log, ignorée.
 - stderr du sidecar : relayé en log Rust (`eprintln`) et émis via l'event Tauri **`sidecar:log`** (payload = string).
 - Supervision : si le process meurt, redémarrage avec backoff exponentiel (500 ms, ×2, plafond 8 s) ; compteur remis à zéro après 30 s de stabilité ; après 5 échecs consécutifs → état `dead`, plus de redémarrage.
 - État publié via l'event Tauri **`sidecar:status`**, payload `{"state": "starting"|"running"|"restarting"|"dead", "pid": number|null, "attempts": number}`. `running` = process vivant (dès le spawn réussi).

@@ -293,6 +293,25 @@ L'alternative — rendre `handleSend` capable de cibler une conversation
 d'arrière-plan avec SES réglages — reste la vraie réponse, et reste un
 chantier à part entière.
 
+### 5.2 Armement par l'agent (T-219)
+
+L'agent peut armer un réveil lui-même, via l'outil `mcp__studio__programmer_reveil`
+(sans validation, tours `interactive` seulement). Avant lui, invité à « se
+réveiller à 19 h », il appelait `CronCreate` — un outil du CLI qui meurt avec le
+processus du tour SDK : rien ne partait. Ces outils (`CronCreate`, `CronList`,
+`CronDelete`, `ScheduleWakeup`) sont désormais interdits sur les tours SDK.
+
+L'outil n'arme rien lui-même : il émet le chunk `reveil_demande`
+([protocol.md](protocol.md)), et l'UI (`ui/src/reveilAgent.ts`, câblé dans
+`envoiProjet.ts`) construit un `Reveil` avec la MÊME fonction que le contrôle ⏰
+(`construireReveil`, `reveil.ts`) : cible de réouverture figée à l'armement,
+`dernierDeclenchement` = maintenant, identifiant neuf. Le réveil rejoint
+`reveils` de la conversation du tour : visible et annulable dans ⏰, déclenché
+par le battement habituel, persisté à la fin du tour. Mêmes règles de refus que
+le contrôle manuel : pas de message, ou pas d'échéance calculable ; l'UI le dit
+alors par une notice et un `warn` du canal `reveil`. Le réveil ne part, comme
+tous les réveils V1, que si l'application reste ouverte (§ 9).
+
 ## 6. Le compte rendu
 
 L'utilisateur choisit un réveil pour ne PAS être devant l'écran ; il doit

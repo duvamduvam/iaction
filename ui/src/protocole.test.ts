@@ -16,7 +16,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseChatDone, parseClaudeDone, parseCompactionDemandee, parseModelChange, parseNeutralDone } from "./protocole";
+import { parseChatDone, parseClaudeDone, parseCompactionDemandee, parseModelChange, parseNeutralDone, parseReveilDemande } from "./protocole";
 import { parseComptes } from "./comptesClaude";
 import { parseTitreDiscussion } from "./titresDiscussions";
 
@@ -24,13 +24,13 @@ const dossier = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 
 interface Temoin {
   quoi: string;
-  parseur: "parseChatDone" | "parseClaudeDone" | "parseNeutralDone" | "parseComptes" | "parseTitreDiscussion" | "parseModelChange" | "parseCompactionDemandee" | null;
+  parseur: "parseChatDone" | "parseClaudeDone" | "parseNeutralDone" | "parseComptes" | "parseTitreDiscussion" | "parseModelChange" | "parseCompactionDemandee" | "parseReveilDemande" | null;
   evenement: { id: string; event: string; data: Record<string, unknown> };
   attendu: unknown;
 }
 
 // `parseComptes` prend le `data` brut du done, comme les autres.
-const PARSEURS = { parseChatDone, parseClaudeDone, parseNeutralDone, parseComptes, parseTitreDiscussion, parseModelChange, parseCompactionDemandee } as const;
+const PARSEURS = { parseChatDone, parseClaudeDone, parseNeutralDone, parseComptes, parseTitreDiscussion, parseModelChange, parseCompactionDemandee, parseReveilDemande } as const;
 
 const temoins = readdirSync(dossier)
   .filter((f) => f.endsWith(".json"))
@@ -112,6 +112,16 @@ describe("cas défensifs — formes que le sidecar n'émet pas, à tolérer sans
   it("parseCompactionDemandee : raison absente ou non textuelle ⇒ chaîne vide, la demande n'est jamais jetée (T-216)", () => {
     expect(parseCompactionDemandee({ kind: "compaction_demandee" })).toEqual({ raison: "" });
     expect(parseCompactionDemandee({ raison: 42 })).toEqual({ raison: "" });
+  });
+
+  it("parseReveilDemande : champs absents ou mal typés ⇒ valeurs vides, éléments non textuels écartés (T-219)", () => {
+    expect(parseReveilDemande({ kind: "reveil_demande" })).toEqual({ heures: [], surResetQuota: false, prompts: [], raison: "" });
+    expect(parseReveilDemande({ heures: ["19:00", 7, null], surResetQuota: "oui", prompts: [{}, "go"], raison: 3 })).toEqual({
+      heures: ["19:00"],
+      surResetQuota: false,
+      prompts: ["go"],
+      raison: "",
+    });
   });
 
   it("parseNeutralDone : mêmes champs que Claude, sessionId et coût toujours null", () => {

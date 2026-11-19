@@ -9,6 +9,38 @@ versions selon [SemVer](https://semver.org/lang/fr/).
 > Les entrées commencent à la 0.3.0 ; les versions antérieures ne sont pas
 > reconstituées après coup.
 
+## [0.8.0] — 2026-11-19
+
+Depuis la 0.7.0 (2026-11-16) : **un coffre de secrets chiffré par mot de
+passe**, des agents qui ne peuvent plus poser un jeton ailleurs, et **un
+relais de fichiers entre deux postes IAction**.
+
+### Ajouté
+
+- **Coffre de secrets par poste**, chiffré par ton mot de passe (format `age`,
+  déchiffrable à la main si IAction casse), gardé par la coquille et déverrouillé
+  au lancement. Clé de secours affichée une seule fois. Il se referme à la mise
+  en veille et au verrouillage de session, après les tours en cours (T-221).
+- **Écran « Secrets du coffre »** : liste des noms, classes `coffre` et
+  `sans-fenetre` (secrets disponibles pour les tâches programmées), migration
+  guidée du trousseau, de l'ancien fichier de secrets MCP et des `.env` des
+  projets, changement de mot de passe (T-221).
+- **Les agents trouvent le coffre** : consigne dans l'instruction système et
+  outil `secrets_lister` (noms seulement). L'écriture de `.env`, `*.pem` et
+  `*.key` dans un projet leur est bloquée (T-220).
+- **Connecteur « Relais entre studios »** : échange de fichiers entre deux
+  postes IAction par boîtes aux lettres, via un broker HTTP. Le jeton vient du
+  coffre ; dépôts et réceptions restent dans le projet, secrets refusés à
+  l'aller comme au retour, fichiers de consignes reçus renommés `.recu` (T-221).
+- **L'agent arme lui-même le réveil** d'IAction (outil `programmer_reveil`),
+  visible et annulable dans ⏰, au lieu de promettre une reprise par des outils
+  du CLI qui meurent avec le tour (T-219).
+
+### Corrigé
+
+- Un agent de fond ne disparaît plus du fil quand un message est glissé
+  pendant le tour (T-222).
+
 ## [0.7.0] — 2026-11-16
 
 Depuis la 0.6.1 (2026-10-21) : **l'agent règle lui-même sa conversation**

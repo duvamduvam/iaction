@@ -29,6 +29,7 @@ import { BandeauCoquilleMuette, SidecarMortBanner } from "./bandeaux";
 import { Nav } from "./barreNavigation";
 import { basculerTousPanneaux } from "./panneauxLateraux";
 import { UsageWidget } from "./encartConso";
+import { CoffreControle } from "./CoffreControle";
 
 /* ---------- Sonde système (CPU / RAM / GPU) ---------- */
 
@@ -266,6 +267,7 @@ function Header({
           <ContextWidget source={contextSourceFor(page)} />
           <SystemStatsWidget />
           <UsageWidget />
+          <CoffreControle />
         </div>
       </div>
       <Nav active={page} onSelect={onSelectPage} onOpenTerminal={onOpenTerminal} orchestrationAlert={orchestrationAlert} />
