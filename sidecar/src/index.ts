@@ -51,7 +51,22 @@ import { handleLogAppend, handleLogPurge, handleLogRead, handleLogStats } from "
 import { handleKnowledgeIndex, handleKnowledgeSearch, handleKnowledgeStatus } from "./knowledge.js";
 import { handleMcpSetServer, handleMcpStatus } from "./mcp.js";
 import { handleMcpAdd, handleMcpCatalog, handleMcpRemove } from "./mcpCatalog.js";
-import { handleMcpSecretDelete, handleMcpSecretSet, handleMcpSecretsList } from "./mcpSecrets.js";
+import {
+  definirCanalCoquille,
+  handleCoffreCharger,
+  handleCoffreEcrit,
+  handleMcpSecretDelete,
+  handleMcpSecretSet,
+  handleMcpSecretsList,
+} from "./mcpSecrets.js";
+import {
+  handleInventaireEnv,
+  handleMigrerEnv,
+  handleReferencesTaches,
+  handleSupprimerEnv,
+  handleTachesSansSecrets,
+} from "./inventaireEnv.js";
+import { fermer as fermerTour, handleCoffreAttendreFin, ouvrirSiTour } from "./toursActifs.js";
 import { handleProjectEnsureDoc } from "./projectDoc.js";
 import { handleNeutralAbort, handleNeutralPermission, handleNeutralStart } from "./neutralAgent.js";
 import { handleRouterRoute, handleRouterSet } from "./router.js";
@@ -114,7 +129,9 @@ redirigerConsoleVersStderr();
 // Émission d'événements (stdout uniquement)
 // ---------------------------------------------------------------------------
 
-type EventName = "ready" | "chunk" | "done" | "error";
+// `coffre:ecrire` / `coffre:retirer` : demandes adressées à la COQUILLE (coffre
+// de secrets), interceptées par Rust et jamais relayées à l'interface.
+type EventName = "ready" | "chunk" | "done" | "error" | "coffre:ecrire" | "coffre:retirer";
 
 interface OutgoingEvent {
   id?: string;
@@ -124,6 +141,10 @@ interface OutgoingEvent {
 
 function emit(evt: OutgoingEvent): void {
   process.stdout.write(JSON.stringify(evt) + "\n");
+  // Fin d'une requête : si c'était un tour, il ne compte plus (toursActifs.ts).
+  if (evt.id !== undefined && (evt.event === "done" || evt.event === "error")) {
+    fermerTour(evt.id);
+  }
 }
 
 function emitDone(id: string, data: unknown = {}): void {
@@ -270,6 +291,32 @@ async function dispatch(
         break;
       case "mcp.secretSet":
         await handleMcpSecretSet(id, params, engineEmitter);
+        break;
+      // Réservées à la coquille : coffre de secrets (docs/protocol.md).
+      case "coffre.charger":
+        handleCoffreCharger(id, params, engineEmitter);
+        break;
+      case "coffre.attendreFin":
+        handleCoffreAttendreFin(id, engineEmitter);
+        break;
+      case "coffre.ecrit":
+        handleCoffreEcrit(id, params, engineEmitter);
+        break;
+      // Inventaire et migration guidée des .env (inventaireEnv.ts).
+      case "coffre.inventaireEnv":
+        await handleInventaireEnv(id, params, engineEmitter);
+        break;
+      case "coffre.migrerEnv":
+        await handleMigrerEnv(id, params, engineEmitter);
+        break;
+      case "coffre.supprimerEnv":
+        await handleSupprimerEnv(id, params, engineEmitter);
+        break;
+      case "coffre.referencesTaches":
+        await handleReferencesTaches(id, engineEmitter);
+        break;
+      case "coffre.tachesSansSecrets":
+        await handleTachesSansSecrets(id, engineEmitter);
         break;
       case "mcp.secretDelete":
         await handleMcpSecretDelete(id, params, engineEmitter);
@@ -491,6 +538,7 @@ function handleLine(line: string): void {
 
   const params = isPlainObject(parsed.params) ? parsed.params : {};
 
+  ouvrirSiTour(id, method);
   // Traitement asynchrone, sans attendre : deux requêtes concurrentes s'exécutent en parallèle.
   void dispatch(id, method, params);
 }
@@ -511,6 +559,9 @@ function main(): void {
       fields: { deplaces: migration.deplaces, conflits: migration.conflits },
     });
   }
+
+  // Coffre de secrets : les écritures de secrets MCP partent à la coquille.
+  definirCanalCoquille((event, data) => emit({ event: event as EventName, data }));
 
   emit({ event: "ready", data: { version: VERSION, pid: process.pid } });
 

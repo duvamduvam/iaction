@@ -272,6 +272,36 @@ export function nouvelIdReveil(): string {
   return crypto.randomUUID();
 }
 
+/**
+ * Construit le réveil à ARMER — partagé par le contrôle ⏰ (ReveilControl.tsx)
+ * et par l'armement demandé par l'agent (reveilAgent.ts, T-219) : un seul
+ * endroit fige la cible de réouverture et pose le repère d'armement.
+ *
+ * - `cibleReouverture` : FIGÉE ici (voir l'en-tête), jamais redemandée au monde ;
+ *   `reouverture` est l'instant (epoch ms) connu à l'armement, ou `null`.
+ * - `dernierDeclenchement` = `maintenant`, pas `null` : sans ça, un réveil tout
+ *   juste créé se croirait en retard sur l'occurrence de LA VEILLE de chaque
+ *   heure armée (`estDu` remonte à la dernière occurrence passée).
+ */
+export function construireReveil(entree: {
+  id: string;
+  heures: string[];
+  surResetQuota: boolean;
+  prompts: string[];
+  reouverture: number | null;
+  maintenant: number;
+}): Reveil {
+  return {
+    id: entree.id,
+    heures: entree.heures,
+    surResetQuota: entree.surResetQuota,
+    cibleReouverture:
+      entree.surResetQuota && entree.reouverture !== null ? new Date(entree.reouverture).toISOString() : null,
+    prompts: entree.prompts,
+    dernierDeclenchement: new Date(entree.maintenant).toISOString(),
+  };
+}
+
 /** `unknown` → `Reveil` valide, ou `null` (absent, corrompu, ou d'une forme antérieure à ce champ). */
 export function toReveil(value: unknown): Reveil | null {
   if (typeof value !== "object" || value === null) return null;

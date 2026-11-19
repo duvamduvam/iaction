@@ -25,11 +25,9 @@ import { buildHeaders, getProvider, joinUrl, type EngineEmitter, type Provider }
 import { formatSearchResults, sanitizeTopK, searchKnowledge } from "./knowledge.js";
 import { recordUsageEvent, type UsageStatus } from "./usageStats.js";
 import { libelleAbandonUtilisateur } from "./claudeFinDeTour.js";
+import { refusOutilNeutre } from "./gardeSecrets.js";
 
-// ---------------------------------------------------------------------------
-// Utilitaires
-// ---------------------------------------------------------------------------
-
+// --- Utilitaires -----------------------------------------------------------
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -530,6 +528,8 @@ export function resolveAllowedTools(declared: unknown): Set<string> | null {
 /** Exécution d'un outil, jamais levée : toute exception inattendue devient un tool_result isError. */
 async function safeExecuteTool(toolName: string, toolInput: unknown, cwd: string): Promise<ToolExecResult> {
   try {
+    const refus = refusOutilNeutre(cwd, toolName, toolInput); // T-220 : jamais de .env/.pem/.key écrit par l'agent
+    if (refus) return refus;
     switch (toolName) {
       case "read_file":
         return await toolReadFile(cwd, toolInput);

@@ -83,7 +83,7 @@ export const ANNONCE_QUESTION_INTERACTIVE = [
 ].join(" ");
 
 /**
- * T-210 — les deux outils d'action du serveur `studio`, annoncés seulement
+ * T-210 — les outils d'action du serveur `studio` (T-219 : `programmer_reveil` aussi), annoncés seulement
  * quand ils sont exposés. Constat du 2026-11-08 : l'agent écrivait « Opus
  * suffit » ou « tu peux lancer /compact » au lieu d'appeler l'outil. La
  * consigne globale du poste lui demande de SIGNALER ; ces phrases lui disent
@@ -93,11 +93,16 @@ export const ANNONCE_CHANGER_MODELE =
   "Quand le modèle n'est pas le bon pour la demande, appelle `mcp__studio__changer_modele` au lieu de signaler le changement en texte.";
 export const ANNONCE_COMPACTER =
   "Quand le contexte doit être compacté, appelle `mcp__studio__compacter` au lieu de demander à l'utilisateur de taper /compact.";
+export const ANNONCE_REVEIL =
+  "Pour reprendre à une heure donnée ou au reset du quota, appelle `mcp__studio__programmer_reveil` (jamais CronCreate ni ScheduleWakeup, qui ne déclenchent rien) ; le réveil ne part que si l'application IAction reste ouverte.";
 
 /** Ce que le serveur `studio` expose réellement au tour (voir `ServeurStudio`, askUser.ts). */
 export interface OutilsAnnonces {
   changerModele: boolean;
   compacter: boolean;
+  reveil: boolean;
+  /** T-220 — `secrets_lister` exposé : la consigne du coffre l'accompagne. */
+  secrets?: boolean;
 }
 
 /** Forme acceptée par le SDK : prompt propre, ou preset Claude Code + ajout. */
@@ -145,6 +150,8 @@ export function composerInstructionSysteme(
     annoncerQuestion ? ANNONCE_QUESTION_INTERACTIVE : null,
     outilsStudio?.changerModele ? ANNONCE_CHANGER_MODELE : null,
     outilsStudio?.compacter ? ANNONCE_COMPACTER : null,
+    outilsStudio?.reveil ? ANNONCE_REVEIL : null,
+    outilsStudio?.secrets ? CONSIGNE_SECRETS : null, // T-220, dite avec l'outil qui la sert
   ].filter(
     (m): m is string => typeof m === "string" && m.trim().length > 0,
   );
@@ -154,3 +161,12 @@ export function composerInstructionSysteme(
   }
   return ajout || undefined;
 }
+
+/**
+ * T-220 — consigne du coffre (docs/etude-coffre-secrets.md § 6.1). Un agent
+ * avait posé un jeton dans un `.env` faute de savoir qu'un coffre existait.
+ * Dite avec `secrets_lister`, donc à chaque tour de projet ; le garde d'écriture (gardeSecrets.ts) refuse
+ * de toute façon la voie du fichier, et ce texte dit où est l'autre.
+ */
+export const CONSIGNE_SECRETS =
+  "Secrets : un jeton ou une clé ne s'écrit jamais dans un fichier du projet (`.env`, `*.pem`, `*.key` sont refusés). Il se déclare au coffre d'IAction et se référence `${SECRET:nom}` dans l'entrée du serveur de `.mcp.json` (env, headers, args) ; `mcp__studio__secrets_lister` donne les noms disponibles. Un script qui a besoin d'un jeton devient un serveur MCP déclaré ; un secret absent se demande à l'utilisateur.";

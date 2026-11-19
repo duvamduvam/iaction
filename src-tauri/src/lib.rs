@@ -1,5 +1,10 @@
 mod audio_peripheriques;
 mod clipboard;
+mod coffre;
+mod coffre_commandes;
+mod coffre_gestion;
+mod coffre_migration;
+mod coffre_veille;
 mod config_store;
 pub mod demarrage;
 mod fenetres;
@@ -154,6 +159,7 @@ pub fn run() {
         .plugin(garde_navigation::init())
         .manage(sidecar::managed_state())
         .manage(fenetres::managed_state())
+        .manage(coffre_commandes::managed_state())
         .setup(|app| {
             // Premier jalon : il clôt tout ce qui précède le code applicatif
             // (chargement des bibliothèques, init Tauri/GTK) — le segment qui
@@ -165,6 +171,9 @@ pub fn run() {
             // sa propre résurrection.
             session_vie::ouvrir(app.handle());
             sidecar::spawn_supervisor(app.handle().clone(), sidecar::ORIGINE_PREMIER_DEMARRAGE);
+            // Coffre de secrets : fermeture à la veille et au verrouillage de
+            // session (docs/etude-coffre-secrets.md § 4.3).
+            coffre_veille::demarrer(app.handle());
             // Micro et surveillance de la webview : câblés par fenêtre depuis
             // T-062 (deux fenêtres, un seul sidecar). La fenêtre `main` est
             // déclarée dans `tauri.conf.json` et existe donc déjà à ce stade ;
@@ -246,6 +255,18 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_get,
             secrets::secret_delete,
+            coffre_commandes::coffre_etat,
+            coffre_commandes::coffre_creer,
+            coffre_commandes::coffre_deverrouiller,
+            coffre_commandes::coffre_deverrouiller_secours,
+            coffre_commandes::coffre_verrouiller,
+            coffre_commandes::coffre_changer_mot_de_passe,
+            coffre_gestion::coffre_secrets,
+            coffre_gestion::coffre_reclasser,
+            coffre_gestion::coffre_poste_domaine,
+            coffre_gestion::coffre_migration_candidats,
+            coffre_gestion::coffre_migrer,
+            coffre_gestion::coffre_chercher_en_clair,
             config_store::config_read,
             config_store::config_write,
             fs_browse::fs_list_dir,

@@ -94,8 +94,8 @@ async function testMcpCatalog() {
     assert(doneCat1.event === "done", `cat1 attendu 'done', reçu '${doneCat1.event}': ${JSON.stringify(doneCat1.data)}`);
     const ids = doneCat1.data.entries.map((e) => e.id).sort();
     assert(
-      JSON.stringify(ids) === JSON.stringify(["airtable", "http", "imap"]),
-      `cat1 : connecteurs attendus imap/airtable/http, reçu ${JSON.stringify(ids)}`,
+      JSON.stringify(ids) === JSON.stringify(["airtable", "http", "imap", "relais"]),
+      `cat1 : connecteurs attendus imap/airtable/http/relais, reçu ${JSON.stringify(ids)}`,
     );
     const imap = doneCat1.data.entries.find((e) => e.id === "imap");
     assert(

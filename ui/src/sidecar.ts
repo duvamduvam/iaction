@@ -336,7 +336,7 @@ export interface ChatOptions {
   maxTokens?: number;
 }
 
-import { toRouteDebord, isRouteTier, toRouteTarget, parseCompactionDemandee, parseModelChange, type ModelChangeData } from "./protocole";
+import { toRouteDebord, isRouteTier, toRouteTarget, parseCompactionDemandee, parseModelChange, parseReveilDemande, type ReveilDemandeData, type ModelChangeData } from "./protocole";
 
 export {
   parseChatDone,
@@ -747,6 +747,9 @@ export interface ClaudeStartCallbacks {
   onModelChange?: (changement: ModelChangeData) => void;
   /** T-216 — l'agent a programmé le compactage (outil `compacter`) : « /compact » à mettre en file, rien n'est encore compacté. */
   onCompactionDemandee?: (raison: string) => void;
+  onReveilDemande?: (demande: ReveilDemandeData) => void; // T-219 — outil `programmer_reveil` : rien n'est armé, la page le fait
+  /** Coffre de secrets — serveurs MCP écartés faute de secret (`coffreVerrouille` : cause connue). */
+  onMcpEcartes?: (serveurs: string[], coffreVerrouille: boolean) => void;
   /** T-087 — un `claude.push` jamais injecté (aucun retour d'outil depuis) : à reposer en file, jamais perdu en silence. */
   onPushPerdu?: (contenu: string, avaitPieces: boolean) => void;
 }
@@ -787,8 +790,7 @@ const CLAUDE_CHUNK_HANDLERS: Record<string, ClaudeChunkHandler> = {
     const delta = str(data, "delta");
     if (delta) callbacks.onThinking?.(delta);
   },
-  tool_use: (data, callbacks) =>
-    callbacks.onToolUse?.(str(data, "toolUseId"), str(data, "toolName", "outil"), data.toolInput),
+  tool_use: (data, callbacks) => callbacks.onToolUse?.(str(data, "toolUseId"), str(data, "toolName", "outil"), data.toolInput),
   tool_result: (data, callbacks) =>
     callbacks.onToolResult?.(str(data, "toolUseId"), data.isError === true, str(data, "summary")),
   permission_request: (data, callbacks) =>
@@ -804,13 +806,14 @@ const CLAUDE_CHUNK_HANDLERS: Record<string, ClaudeChunkHandler> = {
   background_tasks: (data, callbacks) => callbacks.onBackgroundTasks?.(num(data, "count"), strs(data.descriptions)),
   background_wait: (data, callbacks) => callbacks.onBackgroundWait?.(num(data, "count"), strs(data.descriptions)),
   background_timeout: (data, callbacks) => callbacks.onBackgroundTimeout?.(num(data, "count"), num(data, "plafondMs")),
-  compact: (data, callbacks) =>
-    callbacks.onCompact?.(str(data, "trigger", "manual"), typeof data.preTokens === "number" ? data.preTokens : null),
+  compact: (data, callbacks) => callbacks.onCompact?.(str(data, "trigger", "manual"), typeof data.preTokens === "number" ? data.preTokens : null),
+  mcp_ecartes: (data, callbacks) => callbacks.onMcpEcartes?.(strs(data.serveurs), data.coffreVerrouille === true),
   model_change: (data, callbacks) => {
     const changement = parseModelChange(data);
     if (changement) callbacks.onModelChange?.(changement);
   },
   compaction_demandee: (data, callbacks) => callbacks.onCompactionDemandee?.(parseCompactionDemandee(data).raison),
+  reveil_demande: (data, callbacks) => callbacks.onReveilDemande?.(parseReveilDemande(data)),
   push_perdu: (data, callbacks) => callbacks.onPushPerdu?.(str(data, "contenu"), data.avaitPieces === true),
 };
 
@@ -987,8 +990,7 @@ const NEUTRAL_CHUNK_HANDLERS: Record<string, NeutralChunkHandler> = {
     const delta = str(data, "delta");
     if (delta) callbacks.onText?.(delta);
   },
-  tool_use: (data, callbacks) =>
-    callbacks.onToolUse?.(str(data, "toolUseId"), str(data, "toolName", "outil"), data.toolInput),
+  tool_use: (data, callbacks) => callbacks.onToolUse?.(str(data, "toolUseId"), str(data, "toolName", "outil"), data.toolInput),
   tool_result: (data, callbacks) =>
     callbacks.onToolResult?.(str(data, "toolUseId"), data.isError === true, str(data, "summary")),
   permission_request: (data, callbacks) =>

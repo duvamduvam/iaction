@@ -31,6 +31,8 @@
 import * as journal from "./journal.js";
 import { CHANGER_MODELE_TOOL_NAME, creerOutilChangerModele, type PontChangerModele, type SdkTool } from "./changerModele.js";
 import { COMPACTER_TOOL_NAME, creerOutilCompacter, type PontCompacter } from "./compacterOutil.js";
+import { creerOutilReveil, REVEIL_TOOL_NAME, type PontReveil } from "./reveilOutil.js";
+import { creerOutilSecretsLister, SECRETS_LISTER_TOOL_NAME } from "./outilSecrets.js";
 import { ASK_USER_TOOL_NAME } from "./paletteTour.js";
 
 /** Réponse de l'humain, telle que rendue au modèle. */
@@ -140,6 +142,10 @@ export interface OutilsStudio {
   changerModele: PontChangerModele | null;
   /** T-216 — pont de `compacter` — `null` : chat pur ou tour headless (le verrou du modèle ne le retire pas). */
   compacter: PontCompacter | null;
+  /** T-219 — pont de `programmer_reveil` — `null` : chat pur ou tour headless (le verrou du modèle ne le retire pas). */
+  reveil: PontReveil | null;
+  /** T-220 — `secrets_lister` : tout tour projet (absent ou `false` en chat pur). */
+  secrets?: boolean;
 }
 
 /** Le serveur construit, et ce qu'il expose réellement (pour l'annonce système). */
@@ -149,6 +155,8 @@ export interface ServeurStudio {
   ask: boolean;
   changerModele: boolean;
   compacter: boolean;
+  reveil: boolean;
+  secrets?: boolean;
 }
 
 /**
@@ -158,9 +166,12 @@ export interface ServeurStudio {
  * - `changer_modele` (T-207) — décision de David : SANS validation, le
  *   bandeau « Annuler » de l'UI informe après coup.
  * - `compacter` (T-216) — même patron : l'avis « Annuler » de la bulle.
+ * - `programmer_reveil` (T-219) — même patron : le réveil armé est visible et
+ *   annulable dans ⏰.
  */
 export function outilStudioSansValidation(toolName: string): boolean {
-  return toolName === ASK_USER_TOOL_NAME || toolName === CHANGER_MODELE_TOOL_NAME || toolName === COMPACTER_TOOL_NAME;
+  // `secrets_lister` (T-220) : ne lit que des noms, rien à valider.
+  return toolName === ASK_USER_TOOL_NAME || toolName === CHANGER_MODELE_TOOL_NAME || toolName === COMPACTER_TOOL_NAME || toolName === REVEIL_TOOL_NAME || toolName === SECRETS_LISTER_TOOL_NAME;
 }
 
 /**
@@ -180,7 +191,7 @@ export function outilStudioSansValidation(toolName: string): boolean {
  * par le vrai sidecar. `ask_user` n'y figure jamais.
  */
 export async function buildStudioMcpServer(outils: OutilsStudio): Promise<ServeurStudio | null> {
-  if (outils.ask === null && outils.changerModele === null && outils.compacter === null) return null;
+  if (outils.ask === null && outils.changerModele === null && outils.compacter === null && outils.reveil === null && outils.secrets !== true) return null;
   const faux = process.env.IACTION_FAKE_CLAUDE === "1";
   if (faux && process.env.IACTION_FAKE_CLAUDE_STUDIO !== "1") return null;
   try {
@@ -195,13 +206,24 @@ export async function buildStudioMcpServer(outils: OutilsStudio): Promise<Serveu
       };
       if (outils.changerModele) creerOutilChangerModele(sdkFactice, z, outils.changerModele);
       if (outils.compacter) creerOutilCompacter(sdkFactice, z, outils.compacter);
-      return { serveur: { outilsFactices }, ask: false, changerModele: outils.changerModele !== null, compacter: outils.compacter !== null };
+      if (outils.reveil) creerOutilReveil(sdkFactice, z, outils.reveil);
+      if (outils.secrets) creerOutilSecretsLister(sdkFactice, z);
+      return {
+        serveur: { outilsFactices },
+        ask: false,
+        changerModele: outils.changerModele !== null,
+        compacter: outils.compacter !== null,
+        reveil: outils.reveil !== null,
+        secrets: outils.secrets === true,
+      };
     }
     const sdk = await import("@anthropic-ai/claude-agent-sdk");
     const tools = [
       ...(outils.ask ? [creerOutilAskUser(sdk, z, outils.ask)] : []),
       ...(outils.changerModele ? [creerOutilChangerModele(sdk, z, outils.changerModele)] : []),
       ...(outils.compacter ? [creerOutilCompacter(sdk, z, outils.compacter)] : []),
+      ...(outils.reveil ? [creerOutilReveil(sdk, z, outils.reveil)] : []),
+      ...(outils.secrets ? [creerOutilSecretsLister(sdk, z)] : []),
     ];
     return {
       // T-210 — `alwaysLoad` : outils jamais DIFFÉRÉS derrière ToolSearch. Sans
@@ -214,6 +236,8 @@ export async function buildStudioMcpServer(outils: OutilsStudio): Promise<Serveu
       ask: outils.ask !== null,
       changerModele: outils.changerModele !== null,
       compacter: outils.compacter !== null,
+      reveil: outils.reveil !== null,
+      secrets: outils.secrets === true,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

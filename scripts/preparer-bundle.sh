@@ -199,10 +199,12 @@ else
     *.zip)
       # PAS `unzip` : ce script tourne sous Git Bash quand la cible est
       # Windows, et Git for Windows ne fournit ni `unzip` ni un `tar` capable
-      # de lire un zip. `Expand-Archive` de PowerShell, lui, est présent
-      # d'origine sur Windows 10 et suivants.
+      # de lire un zip. PAS `Expand-Archive` non plus : sur l'image GitHub du
+      # 2026-11-19, il casse (« Cannot find an overload for ExtractToDirectory
+      # and the argument count: 3 »). On appelle donc la classe .NET
+      # directement, dans sa forme à deux arguments, présente partout.
       powershell.exe -NoProfile -NonInteractive -Command \
-        "Expand-Archive -LiteralPath '$(cygpath -w "$TMP/$ARCHIVE" 2>/dev/null || echo "$TMP/$ARCHIVE")' -DestinationPath '$(cygpath -w "$TMP" 2>/dev/null || echo "$TMP")' -Force"
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('$(cygpath -w "$TMP/$ARCHIVE" 2>/dev/null || echo "$TMP/$ARCHIVE")', '$(cygpath -w "$TMP" 2>/dev/null || echo "$TMP")')"
       cp "$TMP/${ARCHIVE%.zip}/node.exe" "$CIBLE"
       ;;
   esac

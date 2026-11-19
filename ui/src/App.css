@@ -7501,3 +7501,119 @@ html.sonde-nu--3 *:not([data-sonde-frappe]) {
 .bouton-arret:not(:disabled) {
   color: var(--status-error);
 }
+
+/* Coffre de secrets (CoffreControle.tsx) — même vocabulaire que la pastille
+   « Compacter » ; le fermé et l'attente se distinguent par la couleur. */
+.coffre-bouton {
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--border-cyan);
+  background: transparent;
+  color: var(--neon-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.coffre-bouton:hover {
+  background: var(--neon-cyan-dim);
+  color: var(--text-0);
+}
+
+.coffre-bouton--verrouille,
+.coffre-bouton--absent,
+.coffre-bouton--attente {
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+}
+
+.coffre-modal {
+  width: min(560px, 100%);
+}
+
+.coffre-cle {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  padding: var(--space-3);
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-lg);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+
+/* Écran « Secrets du coffre » (SecretsCoffre.tsx, MigrationCoffre.tsx). */
+.coffre-gestion {
+  width: min(760px, 100%);
+}
+
+.coffre-onglets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+}
+
+.coffre-liste {
+  list-style: none;
+  margin: var(--space-2) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.coffre-liste > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.coffre-liste__nom {
+  flex: 1 1 14rem;
+  overflow-wrap: anywhere;
+}
+
+.coffre-liste__date {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-2);
+}
+
+.coffre-classe {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--border-cyan);
+}
+
+.coffre-classe--sans-fenetre {
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+}
+
+.coffre-avertissement {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--neon-magenta);
+  border-radius: var(--radius-lg);
+}
+
+.coffre-avertissement > p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.coffre-env {
+  border: 1px solid var(--border-cyan);
+  border-radius: var(--radius-lg);
+  margin: var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
+}

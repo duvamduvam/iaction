@@ -19,6 +19,7 @@ import { MenuReference } from "./menuReference";
 import type { ForcageOuverture } from "./refFichier";
 import { TtsButton } from "./VoiceControls";
 import { formaterPlafond } from "./consigneTachesDeFond";
+import { texteMcpEcartes } from "./coffreClient";
 import {
   MESSAGE_ATTENTE_FOURNISSEUR,
   enAttenteDuPremierOctet,
@@ -316,6 +317,9 @@ export const AgentTurnView = memo(function AgentTurnView({
             tour se clôt alors qu'il en restait (interrompues avant terme). */}
         {/* T-155 — plafond d'attente expiré : raison précise, et indépendante de
             `backgroundTasks` (que la mort des tâches efface). */}
+        {turn.mcpEcartes && turn.mcpEcartes.serveurs.length > 0 && (
+          <div className="chat-bubble__note">{texteMcpEcartes(turn.mcpEcartes)}</div>
+        )}
         {turn.backgroundTimeout && turn.status !== "streaming" && (
           <div className="chat-bubble__note">
             {`Tâche(s) de fond abandonnée(s) : délai d'attente de ${formaterPlafond(turn.backgroundTimeout.plafondMs)} dépassé (${turn.backgroundTimeout.count}).`}

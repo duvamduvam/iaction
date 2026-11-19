@@ -49,6 +49,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { instantReouvertureQuota } from "./reouvertureQuota";
 import { BATTEMENT_REVEIL_MS } from "./reveilRuntime";
 import {
+  construireReveil,
   estHeureValide,
   heuresAvecSaisie,
   nouvelIdReveil,
@@ -273,21 +274,15 @@ export function ReveilControl({
   // l'intention de l'ajouter (constat du 2026-09-04).
   const heuresEffectives = heuresAvecSaisie(heures, champHeure);
   const promptsCandidats = texte.trim() ? [texte.trim()] : [];
-  const candidat: Reveil = {
+  // Cible figée et repère d'armement : voir `construireReveil` (reveil.ts).
+  const candidat: Reveil = construireReveil({
     id: editionId ?? nouvelIdReveil(),
     heures: heuresEffectives,
     surResetQuota,
-    // Cible FIGÉE à l'armement (voir reveil.ts) : le réveil ne redemandera
-    // jamais cette date au monde, donc elle ne peut plus lui être retirée
-    // sous les pieds — ni sauter à la réouverture suivante.
-    cibleReouverture: surResetQuota && reouverture !== null ? new Date(reouverture).toISOString() : null,
     prompts: promptsCandidats,
-    // Posé à l'instant de l'enregistrement, pas `null` : sans ça, un réveil
-    // tout juste créé se croirait en retard sur l'occurrence de LA VEILLE de
-    // chaque heure armée (`estDu` remonte à la dernière occurrence passée,
-    // quelle que soit son ancienneté) — voir reveilRuntime.test.ts.
-    dernierDeclenchement: new Date(maintenant).toISOString(),
-  };
+    reouverture,
+    maintenant,
+  });
   const echeanceCandidate = prochaineEcheance(candidat, maintenant);
   const saisieEnCours = champHeure.trim();
   const motifRefus =

@@ -79,7 +79,12 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      # Sans CUDA : l'onnxruntime-node embarqué par kokoro-js (voix locale,
+      # exclue du bundle) téléchargeait en plus le binaire GPU, que GitHub sert
+      # en 404 depuis le 2026-11-19 — et `npm ci` échouait avec lui.
       - name: Dépendances npm
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
         run: npm ci
 
       # Les trois vérifications rapides d'abord — échouer en 30 s sur un hook

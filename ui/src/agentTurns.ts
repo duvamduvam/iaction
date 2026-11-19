@@ -96,6 +96,11 @@ export interface AgentTurn {
    */
   backgroundTimeout?: { count: number; plafondMs: number };
   /**
+   * Coffre de secrets — serveurs MCP écartés de ce tour faute de secret
+   * (chunk `mcp_ecartes`). `coffreVerrouille` : la cause est le coffre fermé.
+   */
+  mcpEcartes?: { serveurs: string[]; coffreVerrouille: boolean };
+  /**
    * Compaction de contexte survenue pendant ce tour (« /compact » manuel ou
    * compaction auto du CLI) : affichée comme confirmation de fin de travail —
    * sans elle, un « /compact » se clôturait en « résultat vide du moteur ».

@@ -42,7 +42,8 @@ import path from "node:path";
 import { isNonEmptyString, isPlainObject } from "./base.js";
 import type { EngineEmitter } from "./engine.js";
 import * as journal from "./journal.js";
-import { collectSecretRefs, readSecrets, resolveSecretRefs } from "./mcpSecrets.js";
+import { collectSecretRefs, etatDuCoffre, readSecrets, resolveSecretRefs } from "./mcpSecrets.js";
+import { resoudreIntegres } from "./mcpIntegres.js";
 import { projectDir } from "./appPaths.js";
 
 // ---------------------------------------------------------------------------
@@ -386,10 +387,28 @@ export interface PreparedMcp {
   /** Noms écartés faute de secret (avec le détail dans le journal). */
   missingSecrets: string[];
   /**
+   * Vrai si le coffre était verrouillé quand des serveurs ont été écartés :
+   * la cause probable, à dire dans le tour (chunk `mcp_ecartes`).
+   */
+  coffreVerrouille?: boolean;
+  /**
    * Outils MCP à retirer du contexte du modèle (`options.disallowedTools`) :
    * calculés depuis les allowlists et les outils CONNUS du dernier tour.
    */
   disallowedTools: string[];
+}
+
+/**
+ * Chunk `mcp_ecartes` à émettre dans le tour quand des serveurs ont été
+ * écartés faute de secret (`null` sinon) : le journal ne suffit pas, la cause
+ * — coffre verrouillé le plus souvent — et le remède sont connus et doivent
+ * se voir là où l'on attend l'outil.
+ */
+export function avisMcpEcartes(
+  prepared: PreparedMcp,
+): { kind: "mcp_ecartes"; serveurs: string[]; coffreVerrouille: boolean } | null {
+  if (prepared.missingSecrets.length === 0) return null;
+  return { kind: "mcp_ecartes", serveurs: prepared.missingSecrets, coffreVerrouille: prepared.coffreVerrouille === true };
 }
 
 /**
@@ -427,6 +446,7 @@ export async function prepareMcpForTurn(cwd: string): Promise<PreparedMcp> {
 
   const secrets = await readSecrets();
   const knownSecretNames = Object.keys(secrets);
+  const coffreVerrouille = etatDuCoffre() === "verrouille";
   const out: Record<string, unknown> = {};
   const disabled: string[] = [];
   const missingSecrets: string[] = [];
@@ -444,21 +464,24 @@ export async function prepareMcpForTurn(cwd: string): Promise<PreparedMcp> {
         // `warn` : le tour tourne sans ce serveur — mieux vaut ça qu'un
         // serveur démarré avec un jeton littéral `${SECRET:...}`, qui
         // échouerait à la première requête sans dire pourquoi.
-        journal.warn("mcp", "serveur MCP écarté : secret manquant", {
-          fields: { serveur: name, secrets: missing.join(",") },
-        });
+        journal.warn(
+          "mcp",
+          coffreVerrouille ? "serveur MCP écarté : coffre verrouillé" : "serveur MCP écarté : secret manquant",
+          { fields: { serveur: name, secrets: missing.join(",") } },
+        );
         continue;
       }
-      out[name] = resolveSecretRefs(config, secrets).value;
+      out[name] = resoudreIntegres(resolveSecretRefs(config, secrets).value, cwd);
       continue;
     }
-    out[name] = config;
+    out[name] = resoudreIntegres(config, cwd);
   }
 
   return {
     servers: Object.keys(out).length > 0 ? out : null,
     disabled,
     missingSecrets,
+    ...(missingSecrets.length > 0 && coffreVerrouille ? { coffreVerrouille: true } : {}),
     disallowedTools,
   };
 }

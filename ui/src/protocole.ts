@@ -182,6 +182,29 @@ export function parseCompactionDemandee(data: Record<string, unknown>): Compacti
   return { raison: typeof data.raison === "string" ? data.raison : "" };
 }
 
+/**
+ * T-219 — chunk `reveil_demande` : l'agent demande d'armer un réveil sur sa
+ * conversation (outil `programmer_reveil`). Parsing défensif : heures et
+ * prompts non textuels sont écartés ; la validité (heure bien formée,
+ * échéance calculable) est jugée à l'armement, par reveilAgent.ts.
+ */
+export interface ReveilDemandeData {
+  heures: string[];
+  surResetQuota: boolean;
+  prompts: string[];
+  raison: string;
+}
+
+export function parseReveilDemande(data: Record<string, unknown>): ReveilDemandeData {
+  const textes = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  return {
+    heures: textes(data.heures),
+    surResetQuota: data.surResetQuota === true,
+    prompts: textes(data.prompts),
+    raison: typeof data.raison === "string" ? data.raison : "",
+  };
+}
+
 import type { RouteDebord, RouteTarget, RouteTier } from "./sidecar";
 
 export function isRouteTier(value: unknown): value is RouteTier {

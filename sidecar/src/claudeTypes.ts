@@ -60,6 +60,8 @@ export interface ClaudeQueryOptions {
   abortController?: AbortController;
   env?: Record<string, string | undefined>;
   canUseTool?: CanUseTool;
+  /** Crochets du SDK (`PreToolUse`… : gardeSecrets.ts) — appelés quel que soit le mode, `bypassPermissions` compris. */
+  hooks?: Record<string, unknown>;
   /**
    * Jeu d'outils intégrés disponibles. `[]` = aucun outil (mode chat pur :
    * le modèle ne voit même pas les outils, il répond directement).

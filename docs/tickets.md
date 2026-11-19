@@ -43,7 +43,6 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 | T-113 | bug  | P3   | ouvert    | Le dernier bloc d'un tour en streaming est recopié dans un objet neuf à chaque rendu : son `memo` ne sert à rien, et son Markdown est reparsé même quand le texte n'a pas bougé |
 | T-029 | tech | P2   | en cours  | Démarrage long : aucun budget mesuré entre le lancement et la première image |
 | T-121 | feat | P2   | ouvert    | Le réveil ne vaut que l'application ouverte : la reprise programmée devrait continuer « headless » sur le serveur, poste éteint |
-| T-148 | feat | P2   | en cours  | Choisir le micro ET la sortie audio (casque) depuis le composeur : le réglage du micro était enfoui dans Configuration › Voix, et la dictée au casque Bluetooth partait sur le micro interne coupé |
 | T-150 | bug  | P2   | en cours  | Mode conversation : les hallucinations COMPOSÉES (« Merci.  Merci.  Sous-titrage… ») passaient le filtre et s'empilaient dans le brouillon plus vite qu'on ne les effaçait |
 | T-151 | bug  | P1   | en cours  | Page Projets : au-delà de 30 sessions, les plus anciennes disparaissaient du fichier projet au redémarrage, sans trace ni message — tout l'historique « robot » du projet Didier a été perdu |
 | T-152 | bug  | P3   | en cours  | Page Chat : une conversation au-delà du plafond de 30 reste sur le disque mais n'est plus réécrite — une modification faite dessus (renommage, nouveau message) est perdue au redémarrage |
@@ -53,10 +52,8 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 | T-180 | feat | P2   | en cours  | Une session distante par conversation (et paramètre `fil`), créée à la demande sur le relais en mode serveur ; verrou par session distante |
 | T-183 | bug  | P1   | en cours  | Une image glissée pendant le tour et « non vue » repart sans elle au renvoi automatique : le texte « la » part seul, l'avis du composeur promet le contraire, l'agent répond « pas d'image ni de lien » |
 | T-184 | bug  | P2   | en cours  | Un lien web cliqué s'ouvrait DANS la fenêtre d'IAction, sans retour possible : la webview quittait l'application pour le site, sans barre d'adresse ni « précédent » |
-| T-185 | feat | P2   | en cours  | Session distante (poste du bureau) : fenêtre de question quand elle est mal branchée ou attend une validation, et permissions distantes posées à l'utilisateur au lieu d'être refusées d'office |
 | T-186 | bug  | P1   | en cours  | Une fenêtre qui change de projet peut écraser le fichier d'état du projet qu'elle quitte avec les sessions du projet d'arrivée |
 | T-187 | bug  | P1   | en cours  | Reprendre une session dont le transcript a été purgé échoue sans dire pourquoi, et l'onglet reste bloqué |
-| T-189 | feat | P2   | en cours  | Deux comptes Claude (« Claude Perso » / « Claude Teams ») : sélecteur dans le moteur, conso, historique et débord par compte, compte par défaut d'un projet — invisible sans second compte |
 | T-191 | bug  | P3   | en cours  | `events.jsonl` n'a pas de champ `compte` : les coûts et tours d'un tour Teams se mêlent à ceux de `perso` dans `usage.stats` et la page Supervision |
 | T-192 | bug  | P2   | en cours  | Jauge qui redescend dans une même fenêtre : le point d'usage rend parfois une valeur en retard, qui écrasait le relevé |
 | T-193 | bug  | P3   | en cours  | En-têtes pliables du sélecteur de modèle (éditeurs, ex. « anthropic · 12 ») sans le style des en-têtes fixes (« Favoris ») : ni violet, ni majuscules, ni petite taille |
@@ -66,15 +63,147 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 | T-197 | bug  | P2   | en cours  | Noms de discussions inutilisables : le titre IA est écrasé par le début du premier message, la page Chat ne l'utilise pas, et les listes n'ont pas de recherche |
 | T-200 | bug  | P2   | en cours  | Génération du titre de discussion visée sur `claude-haiku-5-5`, id que le CLI embarqué 0.3.292 ne connaît pas : échec probable en silence (`done {titre:null}`), même piège que T-142 |
 | T-201 | bug  | P2   | en cours  | Seuils de la pyramide de délégation (3 et 12 $/M) calés sur des tarifs « mi-2026 » que les tarifs actuels contredisent : un taux mixte de Sonnet 5.5 passe sous 3 $/M, Opus 5.5 sous 12 $/M |
-| T-202 | feat | P2   | en cours  | Un agent ne voit pas la consommation de l'abonnement que l'interface affiche : outil MCP `lire_usage`, appelé à la demande, sans rien injecter dans le prompt |
 | T-203 | bug  | P2   | en cours  | L'encart « SOUS-AGENTS » affiche le modèle déclaré dans le manifeste (`implementeur · sonnet`) alors que l'appel `Agent` demandait `opus` et que le sous-agent tourne en Opus |
 | T-204 | bug  | P2   | en cours  | Taper « /clear » dans le composeur de la page Projets (moteur Claude Perso) ne vide rien : bulle de réponse vide, transcript conservé, même session reprise au tour suivant |
 | T-206 | bug  | P2   | en cours  | Une tâche de fond `Bash` détachée n'apparaît dans aucun encart de la barre droite : la transcription annonce « en attente des rapports de 1 tâche(s) de fond », la barre LLM n'affiche rien |
-| T-207 | feat | P2   | en cours  | L'agent ajuste lui-même son modèle et son effort (outil `changer_modele`, effet immédiat, bandeau Annuler) au lieu de seulement suggérer le changement |
 | T-210 | bug  | P2   | en cours  | L'agent ne bascule jamais de modèle tout seul : `changer_modele` est exposé mais jamais appelé (il signale « Opus suffit » en texte) |
 | T-211 | bug  | P2   | ouvert    | Relais en mode serveur invisible dès qu'aucune session n'est vivante : « pc-bureau-relais » annoncé déconnecté alors qu'il était actif ; une session créée sur le relais garde son ancien mode de permission |
 | T-214 | bug  | P2   | en cours  | Le bouton « Copier » des blocs de code affiche souvent « Échec » au premier clic (le second marche) ; l'erreur est avalée sans trace |
-| T-216 | feat | P2   | en cours  | L'agent programme lui-même le compactage de sa conversation (outil `compacter`, « /compact » en file, avis Annuler) au lieu de demander à l'utilisateur de taper /compact |
+| T-218 | bug  | P1   | ouvert    | Session neuve sur un relais Remote Control impossible : « Aucun « organizationUuid » dans `.credentials.json` », message qui n'est pas corrigeable par une reconnexion (bloque T-180) |
+| T-223 | bug  | P3   | ouvert    | La sauvegarde de fin de tour recopie `providerId`, `model` et `selectedAgent` depuis l'état d'affichage vers la session active (`buildLiveSessions`) : fermeture périmée, même défaut que celui corrigé pour le compte dans T-189 |
+| T-221 | feat | P1   | en cours  | Coffre de secrets chiffré par mot de passe (0.8.0) : plus aucun secret en clair sur le disque, et des agents qui ne peuvent plus écrire de jeton ailleurs — lots 1 et 2 faits, reste § 9.3 et § 9.4 |
+
+### T-224 — CI de la 0.8.0 : deux pannes d'environnement GitHub et une alerte CodeQL
+
+**Type** bug · **Prio** P1 · **Statut** fait · **Clos** 2026-11-19 · **Créé** 2026-11-19
+
+**Constat** (2026-11-19, PR #69, instantané 0.8.0) : la 0.7.0 passait le 2026-11-15 ; quatre jours plus tard, sans changement des fichiers en cause :
+- Linux, étape « Dépendances npm » : `npm ci` échoue dans `kokoro-js/node_modules/onnxruntime-node` (1.21.0) : « Failed to download the binaries: 404 Not Found » sur `onnxruntime-linux-x64-gpu-1.21.0.tgz` ;
+- Windows, étape « Préparer le bundle » : « Cannot find an overload for "ExtractToDirectory" and the argument count: "3" » dans `Expand-Archive` (PowerShell 7 de l'image GitHub), puis `node.exe` introuvable ;
+- CodeQL : `sidecar/test/coffreLot2.test.js:250`, regex `/boundary=(.+)$/` sur une valeur venue de la requête, lente sur « boundary= » répété (faux broker de test, nouveau en 0.8.0).
+
+**Cause** : les deux premières viennent de l'environnement GitHub (asset GPU retiré, image Windows mise à jour), pas du code ; la troisième est du code neuf.
+
+**Correction** (2026-11-19) : `ONNXRUNTIME_NODE_INSTALL_CUDA=skip` sur `npm ci` (`.github/workflows/version.yml` ; la voix locale est exclue du bundle) ; extraction du zip de Node par `[System.IO.Compression.ZipFile]::ExtractToDirectory` à deux arguments au lieu d'`Expand-Archive` (`scripts/preparer-bundle.sh`) ; frontière multipart lue sans regex dans le test. Vérification : la CI de la PR rejouée.
+
+### T-221 — Coffre de secrets chiffré par mot de passe
+
+**Type** feat · **Prio** P1 · **Statut** en cours · **Créé** 2026-11-18
+
+**Spécification** : `docs/etude-coffre-secrets.md` (grillée le 2026-11-18). Livraison d'un seul tenant en 0.8.0 ; construite en deux lots.
+
+**Lot 1 — fait** (2026-11-18, branche `coffre-secrets`) :
+- coquille : coffre `age` à deux niveaux (`src-tauri/src/coffre.rs`) — `coffre.age` chiffré pour une identité X25519, `coffre.cle.age` = cette identité chiffrée par le mot de passe (scrypt), écriture atomique avec `coffre.age.prec`, valeurs effacées en mémoire (`zeroize`), délai croissant après 3 échecs, clé de secours, changement de mot de passe ;
+- `secret_get/set/delete` : signatures inchangées pour l'interface, dorsal selon l'état du coffre (tableau dans `docs/protocol.md`) ;
+- sidecar : table MCP poussée par la coquille (`coffre.charger`) à chaque naissance du sidecar, ouverture et fermeture ; `mcp.secretSet` part à la coquille (`coffre:ecrire`) ; coffre verrouillé → serveur écarté avec un avis dans le tour (`mcp_ecartes`) ;
+- fermeture à la veille et au verrouillage de session APRÈS les tours en cours (`coffre.attendreFin`, `src-tauri/src/coffre_veille.rs`) ; verrouillage manuel immédiat (bouton d'en-tête) ;
+- interface : modale au lancement (créer / déverrouiller / clé de secours / « Plus tard »), clé de secours affichée une fois avec recopie de sa fin ;
+- tests : `src-tauri/src/coffre/tests.rs` (§ 9.1 : relu à l'identique, mauvais mot de passe, écriture interrompue, changement de mot de passe, clé de secours, déchiffrement hors IAction, aucune valeur dans les erreurs ni sur le disque), `sidecar/test/coffreSidecar.test.js`, `ui/src/coffreClient.test.ts`.
+
+**Limites connues du lot 1** :
+- Windows : la veille est constatée AU RÉVEIL (saut d'horloge), pas avant ; le verrouillage d'écran est sondé toutes les 3 s (`OpenInputDesktop`), confirmé sur deux sondes. Code Windows non compilé localement : la CI le dira.
+- Linux : le verrouillage d'écran repose sur logind (`Lock`, `LockedHint`) ; un verrouilleur qui ne le renseigne pas n'est pas vu (avertissement au journal si la session logind est introuvable).
+- Une fermeture automatique demandée reste due même si l'on revient avant la fin des tours.
+- ~~`mcp-secrets.json` et le trousseau restent lus en repli~~ — levé au lot 2.
+- ~~Les clés de la voix (`speech:*`) ne sont pas repoussées au déverrouillage~~ — levé au lot 2.
+
+**Lot 2 — fait** (2026-11-18, même branche) :
+- écran « Secrets du coffre » (bouton « Secrets… » de l'en-tête ; ouvert sur la migration juste après la création) : liste des noms, classes et dates, reclassement `coffre` ⇄ `sans-fenetre` avec l'avertissement du § 5 (domaine Windows détecté par `NetGetJoinInformation`, avertissement par prudence si indéterminé), changement de mot de passe, recherche de valeurs en clair (§ 9.2, `coffre_chercher_en_clair` : configuration, données, journaux, projets ; rend des chemins) ;
+- index des noms `sans-fenetre` (`coffre-sans-fenetre.json`, sans valeur) : la coquille pousse ces secrets au sidecar même coffre fermé ; un sidecar SANS coquille (tâche de fond) les lit au trousseau par `secret-tool` ; l'ancien `mcp-secrets.json` reste lu en repli tant qu'il existe (corrigé après relecture, I3) ;
+- migration (§ 7) : candidats du trousseau (fournisseurs, voix) et de l'ancien fichier, classe `sans-fenetre` proposée pour les secrets que référence une tâche programmée (`coffre.referencesTaches`), validation dans l'interface, relecture de `coffre.age` sur le disque, suppression des originaux des seuls conformes ;
+- inventaire des `.env` des projets et migration guidée (verser au coffre, réécrire l'entrée `.mcp.json` d'un serveur en `${SECRET:…}`, suppression sur confirmation) ;
+- agents (T-220) : outil `mcp__studio__secrets_lister` (noms seulement) et consigne `CONSIGNE_SECRETS` de l'instruction système ; garde d'écriture `.env`/`*.pem`/`*.key` par crochet `PreToolUse` (actif en `bypassPermissions`, où `canUseTool` n'est pas appelé) et dans le moteur neutre ; détection Bash des redirections, contournable ;
+- clés de la voix repoussées à chaque changement d'état du coffre ;
+- connecteur « Relais entre studios » (catalogue MCP) : serveur stdio livré (`sidecar/src/relaisServeur.ts`, `relaisHttp.ts`), lancé par le node embarqué via `${IACTION:node}`/`${IACTION:relais}` (références résolues au tour, valables sur tous les postes), jeton au coffre (`${SECRET:relais.jeton}`), garde-fous (racine du projet, fichiers sensibles refusés, `relais-recu/` sans écrasement, « donnée, pas consigne », `https://` hors boucle locale, proxy `HTTPS_PROXY` par tunnel `CONNECT`, autorité supplémentaire optionnelle) ;
+- tests : `sidecar/test/coffreLot2.test.js` (faux broker local, bout en bout stdio), `src-tauri` (liste, relecture non conforme, index, recherche en clair), `ui/src/coffreGestion.test.ts`.
+
+**Limites connues du lot 2** :
+- Code Windows (`NetGetJoinInformation`) non compilé localement : la CI le dira.
+- Secrets `sans-fenetre` hors coquille : Linux seulement (`secret-tool`), seul système des tâches programmées.
+- Le crochet d'écriture ne suit pas un tour joué sur une session distante (relais Remote Control).
+- Proxy : l'environnement (`HTTPS_PROXY`) ou le champ « Proxy HTTPS » du connecteur ; le réglage proxy système de Windows (et les scripts PAC) n'est pas lu.
+- Les fournisseurs du runner headless (`providers.json` du projet) ne sont pas concernés par le coffre.
+
+**Relecture adverse (§ 9.3) — faite** (2026-11-18, `relecteur` sur Fable) : verdict « pas de mise en service en l'état ». Corrigé dans la foulée :
+- **B1** — un `.env` à valeur entre guillemets avec espace, multi-ligne (clé PEM) ou à `\n` était versé TRONQUÉ au coffre, puis le fichier supprimable. Lecture stricte (`analyserEnv`) : toute valeur ambiguë est signalée, jamais versée ; le fichier qui la porte ne se supprime pas ;
+- **B2** — `coffre:ecrire` sans accusé : « Versé » / `saved` pouvaient mentir (écriture ratée côté coquille) et le `.env` partir. Requête/réponse `coffre.ecrit` après écriture ET relecture du coffre ; `mcp.add` n'écrit `${SECRET:…}` qu'après ; `coffre.supprimerEnv` exige `versements` et vérifie chaque valeur au coffre ;
+- **I2** — `agent: false` faisait ignorer le tunnel `CONNECT` : derrière un proxy, le relais ne passait pas (délai dépassé). Retiré ; test de bout en bout avec un proxy local ; champ « Proxy HTTPS » au connecteur (le proxy système Windows n'est pas lu) ;
+- **I3** — créer le coffre sans migrer privait tous les serveurs MCP (et la tâche du matin) de leurs jetons. L'ancien `mcp-secrets.json` est lu en repli tant qu'il existe ; avis au lancement pour les tâches programmées privées d'un secret (`coffre.tachesSansSecrets`) ;
+- **I4** — le relais pouvait écrire `relais-recu/CLAUDE.md` (chargé comme consignes), un `.env`, ou sortir du projet par un lien symbolique. Consignes renommées `.recu`, secrets refusés à l'arrivée, chemin réel vérifié, noms listés cités comme données ;
+- mineurs : garde étendue (`PowerShell`, `>|`, `&>`, `*.env`) ; dépôt refusé pour `.git/`, `.mcp.json` et tout contenu portant une valeur du coffre (contrôle dans le sidecar, crochet `PreToolUse`), le jeton du relais, une clé privée ou un jeton de forme connue ; repli sur `.prec` signalé (`repliPrecedent`) sans écraser `.prec` ; clé sans table = coffre vide ; `retirer` met à jour l'index `sans-fenetre` ; reliquats de l'ancien fichier proposés à la migration ; vérification de l'ancien mot de passe soumise au délai ; `coffre.cle.age` abîmé ≠ « mot de passe incorrect » ;
+- bug trouvé au passage : un champ optionnel du catalogue laissé vide partait tel quel (`RELAIS_CA: "{{ca}}"`) et le relais cherchait ce fichier ; les marques non renseignées sont retirées de l'entrée.
+- tests : `sidecar/test/coffreRelecture.test.js`, `src-tauri/src/coffre_migration.rs` (cœur de la migration extrait, faux trousseau), tests de `coffre_commandes.rs` et de `coffre.rs`.
+
+**Arbitrés par David le 2026-11-18, sans code** : I1 — un agent qui réécrit `.mcp.json` peut faire résoudre n'importe quel `${SECRET:…}` dans `command`/`args` d'un serveur à lui : **assumé et écrit** (étude § 2) ; I5 — la fermeture automatique attend sans plafond, y compris un tour suspendu à une question ou une mise en veille : **gardé tel quel** (étude § 4.3). Restent hors lot : rotation de l'identité au changement de mot de passe, ré-affichage de la clé de secours.
+
+**Reste** : § 9.4 essai sur le poste du bureau (consigne du relais : `docs/test-relais-studios.md`).
+
+**Fusion** (2026-11-19) : branche `coffre-secrets` fusionnée dans `deux-comptes` pour la 0.8.0 ; T-220 clos.
+
+### T-223 — Fin de tour : fournisseur, modèle et agent recopiés depuis l'état d'affichage
+
+**Type** bug · **Prio** P3 · **Statut** ouvert · **Créé** 2026-11-19
+
+**Constat** (relevé pendant T-189, consigné le 2026-11-19) : la sauvegarde de fin de tour recopie encore `providerId`, `model` et `selectedAgent` depuis l'état d'affichage vers la session ACTIVE (`buildLiveSessions` d'AgentPage et de ChatPage). Si l'utilisateur a changé d'onglet ou de réglage pendant le tour, la session peut recevoir des valeurs qui ne sont pas les siennes. Même défaut de fermeture périmée que celui corrigé pour le compte dans T-189 (`avecCompteMoteur` / `avecCompteChat`), antérieur à T-189.
+
+**Piste** : poser ces champs SUR la session au geste de l'utilisateur, comme pour le compte, et ne plus les recopier à la sauvegarde.
+
+### T-220 — Jeton d'API posé dans un `.env` de projet : le coffre MCP est introuvable pour un agent
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Clos** 2026-11-19 · **Créé** 2026-11-18
+
+**Constat** (2026-11-18, capture de David, session de projet) : un agent qui livre un script client d'un relais conclut « le jeton ne passe pas par le coffre IAction : je n'ai pas trouvé le format de `mcp-secrets.json` » et fait lire le jeton dans un `.env` à côté du script, en mode 600, ignoré par git. Le projet vit dans le dossier Nextcloud : le `.env` est synchronisé vers le serveur et vers chaque poste.
+
+**Cause** : rien n'indique à un agent que le coffre existe (`sidecar/src/mcpSecrets.ts`), ni la syntaxe `${SECRET:nom}` ; aucun outil ne liste les noms des secrets. L'agent improvise, et le `.gitignore` le rassure à tort : la synchronisation ne le lit pas.
+
+**Correction attendue** : `docs/etude-coffre-secrets.md` § 6 (grillée le 2026-11-18), livrée avec le coffre en **0.8.0** : consigne dans le prompt système, outil `iaction` qui liste les NOMS des secrets, blocage de l'écriture des `.env`/`*.pem`/`*.key` dans les projets, inventaire et migration guidée des `.env` existants. Jusque-là, risque accepté : un agent peut encore écrire un `.env`.
+
+**Clôture** (2026-11-19) : livré avec le coffre (T-221), fusionné pour la 0.8.0 : consigne `CONSIGNE_SECRETS`, outil `mcp__studio__secrets_lister`, écriture de `.env`/`*.pem`/`*.key` bloquée dans les projets.
+
+### T-222 — Agent de fond invisible après un message glissé en cours de tour
+
+**Type** bug · **Prio** P2 · **Statut** fait · **Clos** 2026-11-18 · **Créé** 2026-11-18
+
+**Renuméroté** (2026-11-19) : créé sous le numéro T-220, déjà pris par le ticket du coffre MCP ; le commentaire de `ui/src/envoiProjet.ts` suit.
+
+**Constat** (2026-11-18, capture de David, session de projet) : l'agent lance un sous-agent en arrière-plan (`Agent`, `isolation: worktree`), le tour attend son rapport ; David glisse un message (« non j'arrête pour l'instant »). La bulle précédente affiche « Tâche(s) de fond interrompue(s) avant leur terme (1) », la nouvelle bulle ne montre rien, alors que le sous-agent tourne toujours. « Ça arrive régulièrement que l'agent qui tourne ne donne pas de retour visuel. » Rien dans le panneau de droite non plus : aucun panneau n'y liste les tâches de fond d'un fil (l'onglet Orchestration › Tâches porte les tâches headless, autre chose).
+
+**Cause** : l'injecteur S3 (`ui/src/envoiProjet.ts`) clôt la bulle en cours (`done`, `continued`) et redirige le flux vers une bulle neuve, mais laisse `backgroundTasks` sur l'ancienne. Le rendu (`agentTranscript.tsx`) lit « bulle close + tâches » comme une interruption ; la neuve n'en reçoit qu'au prochain `background_tasks_changed`, qui ne vient qu'à la fin de la tâche.
+
+**Correction** : l'injecteur transfère `backgroundTasks` de l'ancienne bulle vers la nouvelle (les tâches vivent dans le processus du tour, pas dans une bulle). Vérifié par `tsc` et `eslint` ; non vérifié en réel.
+
+**Reste ouvert** (non ticketé tant que non décidé) : un vrai panneau des tâches de fond vivantes, hors du fil.
+
+### T-219 — Réveil promis par l'agent via `CronCreate` : rien ne part
+
+**Type** bug · **Prio** P1 · **Statut** fait · **Clos** 2026-11-18 · **Créé** 2026-11-18
+
+**Constat** (2026-11-18, capture de David, session de projet) : l'agent, invité à se réveiller à 19h pour reprendre un lot, charge `CronCreate` par `ToolSearch`, l'appelle (`"4 19 18 11 *"`), note le plan dans sa mémoire et conclut « je programme moi-même le réveil ». Aucun réveil n'apparaît dans le contrôle ⏰ de la conversation.
+
+**Cause** : `CronCreate`/`CronList`/`CronDelete` (et `ScheduleWakeup`) sont des outils du CLI Claude Code, liés à la vie du processus : ils ne déclenchent que dans une session REPL restée ouverte. Un tour IAction est un `query()` SDK dont le processus s'arrête en fin de tour : la tâche planifiée meurt avec lui, sans erreur. Le réveil d'IAction (T-120, `ui/src/reveil.ts`) n'a, lui, aucun outil exposé au modèle : seul l'humain peut l'armer. Même famille que T-155 (promesse de reprise sans mécanisme).
+
+**Correction attendue** :
+1. Outil `mcp__studio__programmer_reveil` sur le patron de `compacter` (T-216) : heures « HH:MM » et/ou `surResetQuota`, prompt(s) ; émet un chunk `reveil_demande` ; l'UI arme un `Reveil` sur la conversation (visible dans ⏰, annulable) ; tours `interactive` seulement ; `alwaysLoad`.
+2. `disallowedTools` : `CronCreate`, `CronList`, `CronDelete`, `ScheduleWakeup` sur les tours SDK, pour que le modèle ne puisse plus promettre par eux.
+3. Consigne courte au `systemPrompt` (comme T-155) : la seule reprise programmée est cet outil, et il ne vaut que l'application ouverte (T-121).
+
+**Contournement** : armer le réveil à la main par ⏰ dans l'onglet concerné.
+
+**Liens** : T-120 (réveil V1), T-121 (réveil headless), T-155, T-216.
+
+**Fait le 2026-11-18.** Sans validation (décision de David), sur le patron exact de `compacter` (T-216). (1) `sidecar/src/reveilOutil.ts` : outil `programmer_reveil` (`mcp__studio__programmer_reveil`), entrée `heures` (« HH:MM », éventuellement vide), `surResetQuota` (faux par défaut), `prompts` (non vide), `raison`. Sans heure valide et hors `surResetQuota`, ou sans prompt, le modèle reçoit une erreur texte (`isError`) et le journal un `warn`, sans chunk ; sinon chunk `reveil_demande`, journal `info`, réponse « réveil armé, visible et annulable dans ⏰, ne part que si l'application reste ouverte ». Ajouté au serveur `studio` (`alwaysLoad`), auto-autorisé (`outilStudioSansValidation`), tours `interactive` seulement, y compris sous `modeleVerrouille`. (2) `claude.ts` : `CronCreate`, `CronList`, `CronDelete`, `ScheduleWakeup` ajoutés à `disallowedTools` des tours SDK (`OUTILS_CRON_INTERDITS`). (3) `paletteTour.ts` : `ANNONCE_REVEIL`, une phrase au `systemPrompt`. (4) UI : `parseReveilDemande` (`protocole.ts`), callback `onReveilDemande` (`sidecar.ts`), armement dans `envoiProjet.ts` via `ui/src/reveilAgent.ts` (fonctions pures) qui réutilise `construireReveil`, extrait de `ReveilControl.tsx` vers `reveil.ts` pour que le contrôle manuel et l'agent partagent la même logique (cible de réouverture figée, repère d'armement à l'instant) ; notice dans le fil, journal canal `reveil`, persistance à la fin du tour. Tests : `sidecar/test/reveilOutil.test.js` (cœur, fabrique, vrai sidecar, 4 outils Cron interdits), témoin `fixtures/protocole/claude-reveil-demande-chunk.json`, `ui/src/reveilAgent.test.ts`, `ui/src/protocole.test.ts`. Doc : `docs/protocol.md`, `docs/spec-reveil.md` § 5.2. Limites : un réveil « au reset » sans réouverture connue ni heure valide est refusé côté UI (notice + `warn`), mais le modèle a déjà lu « armé » (le sidecar ne connaît pas le magasin de quota) ; le réveil n'est écrit sur disque qu'à la fin du tour ; non vérifié en réel (app non relancée, le sidecar en place n'a pas été recompilé).
+
+### T-218 — Session neuve sur un relais Remote Control impossible : `organizationUuid` introuvable dans `.credentials.json`
+
+**Type** bug · **Prio** P1 · **Statut** ouvert · **Créé** 2026-11-18
+
+**Constat** (2026-11-18) : ouvrir une session neuve sur un relais Remote Control (`ouvrirFil` → `creerSurRelais` → `poster`, `sidecar/src/filsSessionsDistantes.ts`) échoue à chaque essai avec le message « Aucun « organizationUuid » dans `~/.claude/.credentials.json` : reconnectez Claude Code à claude.ai (/login). ». Se reconnecter ne change rien.
+
+**Cause** : non confirmée. Piste consignée au constat, à vérifier sur le fichier réel : `lireOrganisation` lit `organizationUuid` à la racine de `.credentials.json` ; le CLI actuel n'y écrit plus que `claudeAiOauth.{accessToken, refreshToken, expiresAt, refreshTokenExpiresAt, scopes, subscriptionType, subscriptionTypeSource, rateLimitTier}`. L'organisation se trouverait sous `oauthAccount.organizationUuid` dans le `.claude.json` du compte (`~/.claude.json` pour le compte par défaut, `$CLAUDE_CONFIG_DIR/.claude.json` sinon ; emplacement du cas par défaut à vérifier).
+
+**Correction attendue** : lire `oauthAccount.organizationUuid` dans le `.claude.json` du compte, en tenant compte de `CLAUDE_CONFIG_DIR` (compatible avec le compte Teams) ; garder l'ancien emplacement en repli ; un test. Les sessions interactives et la liste ne sont pas touchées (aucun POST).
+
+**Liens** : bloque la validation en réel de T-180 ; concerne le compte Teams de T-189.
 
 ### T-217 — CI Windows : garde-fou de source en `\n` sur un fichier extrait en CRLF
 
@@ -88,7 +217,7 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 
 ### T-216 — L'agent programme lui-même le compactage de sa conversation
 
-**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-13
+**Type** feat · **Prio** P2 · **Statut** fait · **Clos** 2026-11-19 · **Créé** 2026-11-13
 
 **Demande** (David, 2026-11-13) : « Ajoute le compact accessible dans l'outil directement. » L'agent d'un onglet Projets répondait « tu peux lancer /compact, je ne peux pas le faire moi-même ».
 
@@ -102,6 +231,8 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 **Vérification** (app ouverte, garde T-111 active) : étapes de `verif` rejouées une à une, toutes à 0 sauf `test -w ui` (1 échec, déjà connu, T-213) ; `cargo test` non joué.
 
 **Reste à faire** : relancer l'app (le sidecar en cours n'a pas l'outil), puis valider en usage réel : l'agent appelle l'outil, l'avis s'affiche, Annuler marche, `/compact` part en fin de tour.
+
+**Clôture** (2026-11-19) : validé par David dans l'application.
 
 ### T-215 — Un blocage Cloudflare (403) est présenté comme un problème de connexion, et n'est pas journalisé
 
@@ -232,7 +363,7 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 
 ### T-207 — L'agent ajuste lui-même son modèle et son effort
 
-**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-08
+**Type** feat · **Prio** P2 · **Statut** fait · **Clos** 2026-11-19 · **Créé** 2026-11-08
 
 **Demande** (David, 2026-11-08) : la suggestion « Opus suffit / Fable serait plus adapté » marche ; l'agent doit pouvoir appliquer lui-même le changement de modèle et d'effort. Décisions : dans les deux sens sans validation, effet immédiat (`setModel` / `applyFlagSettings` du SDK), bandeau avec Annuler.
 
@@ -243,6 +374,8 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 **Écart validé** : outil réservé aux tours interactifs (pas d'orchestration ni de planificateur, où personne ne verrait le bandeau ; le modèle fixé par le manifeste d'un agent n'y serait pas protégé).
 
 **Reste à faire** : validation par David dans l'app (un tour où l'agent change de modèle, bandeau, Annuler pendant et après le tour).
+
+**Clôture** (2026-11-19) : validé par David dans l'application.
 
 ### T-208 — Le backlog peut contredire ses tickets : statut et corps divergent sans que rien ne le signale
 
@@ -313,7 +446,7 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 **Reste à valider** : vérifier à l'écran un `implementeur` appelé avec `model` opus.
 ### T-202 — Un agent ne peut pas lire la consommation de l'abonnement
 
-**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-07
+**Type** feat · **Prio** P2 · **Statut** fait · **Clos** 2026-11-19 · **Créé** 2026-11-07
 
 **Constat** (2026-11-07, utilisateur) : dans un tour d'agent du moteur Claude, l'agent répond « je ne vois pas ton usage » alors que l'interface affiche en haut les jauges d'abonnement (Session 54 % · 2 h, Semaine 2 % · 7 j, Fable 0 %).
 
@@ -324,6 +457,8 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 **Correctif** : outil `lire_usage` (`mcp__iaction__lire_usage`) dans le serveur MCP in-process `iaction`, logique dans `sidecar/src/outilUsage.ts`. Il lit le dernier relevé de `claude-windows.jsonl` du compte du TOUR (option `compte` transmise par `claude.ts` à `buildKnowledgeMcpServer`) et rend : % de la fenêtre 5 h, % de la fenêtre 7 jours, % des fenêtres propres à un modèle (Fable…), heure de reprise de chacune, et l'ÂGE du relevé (écrit par battement, il peut être vieux). Aucun relevé : texte clair, pas une erreur. Lecture en échec : `isError` et journal.
 
 **Reste à faire** : relancer l'application, puis demander à un agent de lire sa consommation (outil `lire_usage`).
+
+**Clôture** (2026-11-19) : validé par David dans l'application.
 
 ### T-201 — Seuils de la pyramide de délégation calés sur des tarifs périmés
 
@@ -486,7 +621,7 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 
 ### T-189 — Deux comptes Claude : sélecteur, conso par compte, défaut par projet
 
-**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-05
+**Type** feat · **Prio** P2 · **Statut** fait · **Clos** 2026-11-19 · **Créé** 2026-11-05
 
 **Besoin** : utiliser un second compte Claude (abonnement Team, autre organisation) à côté du compte principal, en choisissant à la main lequel sert une session. Cadre et preuve : [etude-deux-comptes.md](etude-deux-comptes.md) (§ 7 bis), contrat : [spec-deux-comptes.md](spec-deux-comptes.md).
 
@@ -502,6 +637,8 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 **À tracer** : la sauvegarde de fin de tour recopie encore `providerId`, `model` et `selectedAgent` depuis l'état d'affichage vers la session ACTIVE (`buildLiveSessions` d'AgentPage et de ChatPage) : même défaut de fermeture périmée que celui corrigé ici pour le compte, antérieur à T-189 et non corrigé. `events.jsonl` sans compte : T-191.
 
 **Non vérifié** : tour réel sur le compte Teams depuis l'application (la preuve P0 a été faite hors IAction), format exact du champ `refreshTokenExpiresAt` du fichier d'identifiants réel (lu par extraction textuelle, ms, secondes ou ISO acceptés), tenue au-delà de 8 jours.
+
+**Clôture** (2026-11-19) : validé par David dans l'application. Le défaut « à tracer » (recopie de `providerId`, `model` et `selectedAgent` depuis l'état d'affichage à la sauvegarde de fin de tour) part dans T-223.
 
 ### T-188 — Le skill « Claude in Chrome » se charge alors qu'aucun outil navigateur n'est exposé
 
@@ -574,7 +711,7 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 **Reste à valider** : aucune reproduction. Valider à l'usage (bascule d'une fenêtre secondaire de projet) ; toute occurrence de « écriture du projet refusée » dans `logs/app.jsonl` est un signal à consigner ici. `ecrireEntreeProjet` reste à garder.
 ### T-185 — Session distante : fenêtre quand le poste du bureau est mal branché ou attend une validation
 
-**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-03
+**Type** feat · **Prio** P2 · **Statut** fait · **Clos** 2026-11-19 · **Créé** 2026-11-03
 
 **Demande utilisateur** (2026-11-03) : « un pop up quand je veux utiliser Claude remote, si c'est mal branché sur le poste du bureau et s'il y a une chose à valider sur le poste du bureau ». Jusque-là, l'outil `session_distante_demander` (T-178) rendait une erreur à l'agent (session absente ou déconnectée), envoyait en file sans rien dire vers une session `requires_action`, et refusait d'office toute permission demandée par la session distante.
 
@@ -589,6 +726,8 @@ Fichiers : `sidecar/src/outilsSessionsDistantes.ts` (`problemeBranchement`, `que
 **Limite connue** : l'appel d'outil MCP reste borné par `MCP_TOOL_TIMEOUT` (10 min sur les tours interactifs). Le temps passé dans les fenêtres compte dans ce délai, en plus du tour distant.
 
 **Non vérifié en réel** : aucun lancement de l'application ni vraie session sur le poste du bureau. À valider : arrêter `remote-control` sur le poste du bureau, faire appeler l'outil par l'agent, vérifier la fenêtre puis « Réessayer » après relance ; déclencher une commande qui demande permission là-bas et l'autoriser depuis IAction.
+
+**Clôture** (2026-11-19) : validé par David dans l'application.
 
 ### T-184 — Un lien web cliqué s'ouvrait DANS la fenêtre d'IAction, sans retour possible
 
@@ -1110,7 +1249,7 @@ Dans journal.log, chaque étape en erreur est consignée « OK étape "veille" t
 
 ### T-148 — Choisir le micro ET la sortie audio (casque) depuis le composeur
 
-**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-10-05
+**Type** feat · **Prio** P2 · **Statut** fait · **Clos** 2026-11-19 · **Créé** 2026-10-05
 
 **Constat** (2026-10-05, journal) : l'utilisateur dicte avec son casque Bluetooth ; rien ne part. Le journal dit « dictée : échec — Micro silencieux ». Cause : l'app captait le micro PAR DÉFAUT du système, c'est-à-dire le micro interne (coupé), le casque étant en profil A2DP (sortie seule). Le choix du micro existait (`config.stt.inputDeviceId`, Configuration › Voix) mais enfoui, donc introuvable au moment où il servait.
 
@@ -1142,6 +1281,8 @@ Dans journal.log, chaque étape en erreur est consignée « OK étape "veille" t
 - La bascule réelle de la sortie par défaut avec un casque Bluetooth, la relecture de la coche, et le message si `pactl` manque.
 
 **Constat après livraison** (2026-10-05, premier essai utilisateur) : trois sorties sur six s'affichaient « (null) » dans le menu. Cause : le JSON de `pactl` remplace par la chaîne « (null) » toute description contenant un caractère non ASCII (« Audio interne Stéréo analogique »), quelle que soit la locale — vérifié en `fr_FR.UTF-8` comme en `C`. **Correction** : `libelle_peripherique` (`audio_peripheriques.rs`) tient « (null) » pour une valeur manquante et reconstruit le libellé depuis `device.description` et le port actif (« Audio interne — Haut-parleurs ») ; test `analyse_reconstruit_un_libelle_null`. Leçon : l'échantillon de test d'origine avait été écrit à la main avec une description accentuée que le vrai `pactl` ne rend jamais.
+
+**Clôture** (2026-11-19) : validé par David dans l'application.
 
 ### T-146 — Plus de bouton « Nouvelle fenêtre » : relancer IAction ouvre une fenêtre dans l'instance en cours
 
@@ -4384,6 +4525,16 @@ dépassé ; succès ⇒ cadence nominale). **98 tests Rust au vert, code de sort
 
 | ID    | Type | Prio | Statut    | Titre |
 |-------|------|------|-----------|-------|
+| T-224 | bug  | P1   | fait      | CI de la PR 0.8.0 rouge sans changement de code : binaire CUDA d'onnxruntime-node en 404 (Linux), `Expand-Archive` cassé sur l'image Windows, et une regex de test signalée par CodeQL |
+| T-220 | bug  | P2   | fait      | Un agent ne trouve pas le format du coffre MCP et pose un jeton d'API dans un `.env` d'un projet synchronisé par Nextcloud ; aucun moyen de découvrir le coffre depuis une session |
+| T-222 | bug  | P2   | fait      | Un message glissé pendant qu'un agent de fond tourne fait disparaître ce dernier du fil et marque l'ancienne bulle « interrompue(s) avant leur terme » |
+| T-219 | bug  | P1   | fait      | L'agent annonce « je programme moi-même le réveil » via `CronCreate`, outil du CLI qui meurt avec le tour SDK : rien ne part ; aucun outil ne lui permet d'armer le réveil d'IAction |
+| T-207 | feat | P2   | fait      | L'agent ajuste lui-même son modèle et son effort (outil `changer_modele`, effet immédiat, bandeau Annuler) au lieu de seulement suggérer le changement |
+| T-216 | feat | P2   | fait      | L'agent programme lui-même le compactage de sa conversation (outil `compacter`, « /compact » en file, avis Annuler) au lieu de demander à l'utilisateur de taper /compact |
+| T-202 | feat | P2   | fait      | Un agent ne voit pas la consommation de l'abonnement que l'interface affiche : outil MCP `lire_usage`, appelé à la demande, sans rien injecter dans le prompt |
+| T-148 | feat | P2   | fait      | Choisir le micro ET la sortie audio (casque) depuis le composeur : le réglage du micro était enfoui dans Configuration › Voix, et la dictée au casque Bluetooth partait sur le micro interne coupé |
+| T-189 | feat | P2   | fait      | Deux comptes Claude (« Claude Perso » / « Claude Teams ») : sélecteur dans le moteur, conso, historique et débord par compte, compte par défaut d'un projet — invisible sans second compte |
+| T-185 | feat | P2   | fait      | Session distante (poste du bureau) : fenêtre de question quand elle est mal branchée ou attend une validation, et permissions distantes posées à l'utilisateur au lieu d'être refusées d'office |
 | T-217 | bug  | P2   | fait      | CI Windows de la PR 0.7.0 : le garde-fou de source de `comptesClaude.test.ts` cherche un motif en `\n` dans un fichier extrait en CRLF |
 | T-190 | bug  | P3   | fait      | `npm run audit` échoue (6 traces) : `docs/etude-deux-comptes.md` (un motif local, trois URL externes) et deux URL de tests/Rust déjà présentes ; `npm run verif` ne passerait pas avant publication |
 | T-208 | tech | P3   | fait      | Le backlog peut contredire ses tickets : statut et corps divergent sans que rien ne le signale |

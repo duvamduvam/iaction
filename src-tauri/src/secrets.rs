@@ -21,6 +21,10 @@
 //! Le repli disparaîtra quand plus aucun poste ne portera l'ancien nommage.
 
 use keyring::{Entry, Error as KeyringError};
+use tauri::AppHandle;
+
+use crate::coffre::Etat;
+use crate::coffre_commandes;
 
 /// Nom de service utilisé pour toutes les entrées du trousseau créées par IAction.
 const SERVICE: &str = "iaction";
@@ -60,22 +64,79 @@ fn migrer_depuis_ancien(account: &str, valeur: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Trousseau brut — utilisé par le coffre pour la classe `sans-fenetre` et
+// pour retirer la copie d'avant le coffre (coffre_commandes.rs).
+// ---------------------------------------------------------------------------
+
+/// Écrit au trousseau, sans passer par le coffre.
+pub(crate) fn trousseau_poser(account: &str, value: &str) -> Result<(), String> {
+    entry_for(account)?
+        .set_password(value)
+        .map_err(|err| format!("échec de l'écriture dans le trousseau pour « {account} » : {err}"))
+}
+
+/// Lit le trousseau (service courant, puis l'ancien). `Ok(None)` : absent.
+pub(crate) fn trousseau_lire(account: &str) -> Result<Option<String>, String> {
+    match entry_for(account)?.get_password() {
+        Ok(v) => Ok(Some(v)),
+        Err(KeyringError::NoEntry) => Ok(lire_ancien(account)),
+        Err(err) => Err(format!("échec de la lecture du trousseau pour « {account} » : {err}")),
+    }
+}
+
+/// Retire du trousseau, sous les deux noms de service. Best-effort : une
+/// entrée absente ou un trousseau indisponible ne sont pas des erreurs ici.
+pub(crate) fn trousseau_retirer(account: &str) {
+    if let Ok(ancien) = Entry::new(LEGACY_SERVICE, account) {
+        let _ = ancien.delete_credential();
+    }
+    if let Ok(entry) = entry_for(account) {
+        let _ = entry.delete_credential();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Commandes Tauri — signatures inchangées pour l'interface (`account`, `value`).
+//
+// Depuis le coffre (docs/etude-coffre-secrets.md § 4.2) :
+// - coffre ABSENT (pas encore créé sur ce poste) : trousseau, comme avant ;
+// - coffre OUVERT : le coffre répond pour la classe `coffre` ; la classe
+//   `sans-fenetre` reste au trousseau ;
+// - coffre VERROUILLÉ : lecture au trousseau seulement (secrets pas encore
+//   migrés, ou `sans-fenetre`) ; écriture et suppression refusées, pour ne
+//   jamais créer de copie divergente hors du coffre.
+// ---------------------------------------------------------------------------
+
 /// Commande Tauri : enregistre (ou remplace) le secret associé à `account`.
 #[tauri::command]
-pub fn secret_set(account: String, value: String) -> Result<(), String> {
-    let entry = entry_for(&account)?;
-    entry
-        .set_password(&value)
-        .map_err(|err| format!("échec de l'écriture dans le trousseau pour « {account} » : {err}"))
+pub fn secret_set(app: AppHandle, account: String, value: String) -> Result<(), String> {
+    match coffre_commandes::etat(&app) {
+        Etat::Absent => trousseau_poser(&account, &value),
+        Etat::Verrouille => Err(format!(
+            "coffre verrouillé : déverrouille-le pour enregistrer « {account} »"
+        )),
+        Etat::Ouvert => coffre_commandes::poser(&app, &account, &value).map(|_| ()),
+    }
 }
 
 /// Commande Tauri : lit le secret associé à `account`. Une entrée absente n'est pas
 /// une erreur : elle renvoie `Ok(None)`.
 ///
-/// Absente du service courant, la clé est cherchée sous l'ancien nom et migrée
-/// (voir l'en-tête du module).
+/// Le coffre ouvert répond d'abord. Sinon, trousseau : c'est la place des
+/// secrets `sans-fenetre` (lisibles coffre fermé, par choix), et celle de
+/// tout secret d'un poste qui n'a pas encore créé son coffre. Absente du
+/// service courant, la clé est cherchée sous l'ancien nom et migrée (voir
+/// l'en-tête). Coffre fermé, une clé qui n'existe QUE dans le coffre lit
+/// `None` : les modèles locaux restent utilisables, et l'interface repousse
+/// ses fournisseurs au déverrouillage (événement `coffre:etat`). Après la
+/// migration (coffre_gestion.rs), une clé de classe `coffre` n'a plus de copie
+/// au trousseau : ce chemin ne la retrouve donc pas.
 #[tauri::command]
-pub fn secret_get(account: String) -> Result<Option<String>, String> {
+pub fn secret_get(app: AppHandle, account: String) -> Result<Option<String>, String> {
+    if let Some(valeur) = coffre_commandes::lire_pour_secret_get(&app, &account)? {
+        return Ok(Some(valeur));
+    }
     let entry = entry_for(&account)?;
     match entry.get_password() {
         Ok(value) => Ok(Some(value)),
@@ -98,7 +159,18 @@ pub fn secret_get(account: String) -> Result<Option<String>, String> {
 /// Supprime AUSSI l'entrée de l'ancien service : sans cela, une clé « supprimée »
 /// réapparaîtrait à la lecture suivante par le repli de migration.
 #[tauri::command]
-pub fn secret_delete(account: String) -> Result<(), String> {
+pub fn secret_delete(app: AppHandle, account: String) -> Result<(), String> {
+    match coffre_commandes::etat(&app) {
+        Etat::Verrouille => {
+            return Err(format!(
+                "coffre verrouillé : déverrouille-le pour supprimer « {account} »"
+            ))
+        }
+        Etat::Ouvert => {
+            coffre_commandes::retirer(&app, &account)?;
+        }
+        Etat::Absent => {}
+    }
     if let Ok(ancien) = Entry::new(LEGACY_SERVICE, &account) {
         let _ = ancien.delete_credential();
     }

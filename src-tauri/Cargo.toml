@@ -1,6 +1,6 @@
 [package]
 name = "iaction"
-version = "0.7.0"
+version = "0.8.0"
 description = "IAction — desktop multi-fournisseur pour le développement assisté par IA"
 authors = ["Dadou"]
 edition = "2021"
@@ -27,6 +27,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # (leurs deps sont gated par `target_os` dans le Cargo.toml de `keyring`) : elles ne
 # servent qu'à préparer la compilation future sur macOS/Windows.
 keyring = { version = "3", features = ["sync-secret-service", "apple-native", "windows-native"] }
+# Coffre de secrets (docs/etude-coffre-secrets.md) : format `age` public et
+# relu, implémentation Rust pure ; un coffre reste déchiffrable hors IAction
+# par l'outil `age`. `zeroize` efface les valeurs en mémoire à la fermeture.
+age = "0.11"
+zeroize = "1"
 # Sélecteur de dossier natif (page Agent : choix du répertoire projet).
 tauri-plugin-dialog = "2"
 # Une seule instance : relancer IAction ouvre une fenêtre dans l'instance en
@@ -49,3 +54,14 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # compiler une seconde. À réaligner si une mise à jour de tauri/wry la change.
 [target."cfg(target_os = \"linux\")".dependencies]
 webkit2gtk = "=2.0.2"
+# Verrouillage du coffre à la mise en veille et au verrouillage de session :
+# signaux de logind sur le bus système. Même crate que celle qu'embarque déjà
+# le trousseau (`keyring` → Secret Service) : aucune compilation en plus.
+dbus = "0.9"
+
+# Verrouillage de session sous Windows (`OpenInputDesktop`), et poste joint
+# à un domaine (`NetGetJoinInformation`, avertissement des secrets sans
+# fenêtre). Version déjà
+# présente dans l'arbre (Cargo.lock).
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_StationsAndDesktops", "Win32_Foundation", "Win32_NetworkManagement_NetManagement"] }
