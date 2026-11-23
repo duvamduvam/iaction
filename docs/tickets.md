@@ -72,6 +72,123 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 | T-218 | bug  | P1   | ouvert    | Session neuve sur un relais Remote Control impossible : « Aucun « organizationUuid » dans `.credentials.json` », message qui n'est pas corrigeable par une reconnexion (bloque T-180) |
 | T-223 | bug  | P3   | ouvert    | La sauvegarde de fin de tour recopie `providerId`, `model` et `selectedAgent` depuis l'état d'affichage vers la session active (`buildLiveSessions`) : fermeture périmée, même défaut que celui corrigé pour le compte dans T-189 |
 | T-221 | feat | P1   | en cours  | Coffre de secrets chiffré par mot de passe (0.8.0) : plus aucun secret en clair sur le disque, et des agents qui ne peuvent plus écrire de jeton ailleurs — lots 1 et 2 faits, reste § 9.3 et § 9.4 |
+| T-226 | bug  | P3   | ouvert    | Réveil annulé dans ⏰ : la notice « Réveil armé par l'agent — HH:MM (annulable dans ⏰) » reste affichée au-dessus du fil |
+| T-227 | feat | P2   | en cours  | Veilleur du relais : deux IAction se confient des tâches en autonomie par les boîtes aux lettres (remplace l'ancien outil séparé) — codé de bout en bout, relu deux fois, essai réel à venir (0.9.0) |
+| T-229 | bug  | P2   | en cours  | Indexation des connaissances relancée pour rien à chaque ouverture (dates comparées en égalité stricte de flottants), sur tous les cœurs et sans une ligne au journal |
+
+### T-229 — Indexation des connaissances : relancée pour rien, sur tous les cœurs, sans trace
+
+**Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-22
+
+**Constat** (2026-11-22, signalé par David) : à l'ouverture de l'application, le serveur d'embeddings local a occupé jusqu'à 17 cœurs sur 24 pendant plusieurs minutes (115 minutes de calcul cumulées), processeur à 95 °C un autre jour, au point de gêner les autres travaux du poste. Aucune ligne du journal ne disait qu'une indexation avait eu lieu, ni ce qu'elle avait fait.
+
+**Cause** (mesurée sur l'index d'un projet de 217 fichiers et 1 413 morceaux) :
+1. **Faux « périmé »** : l'index compare la date de modification mémorisée à celle du fichier en ÉGALITÉ STRICTE de flottants (`meta.files[label] !== mtimeMs`). Quand l'index a été écrit par un autre outil, la même date en nanosecondes donne des doubles qui diffèrent au dernier bit (…352.0872 contre …352.0874). 50 fichiers sur 217 étaient ainsi jugés modifiés à chaque ouverture ; l'auto-indexation (T-115) repartait donc à chaque lancement et les ré-embarquait.
+2. **Aucune borne de charge** : la requête `/api/embed` ne fixe pas le nombre de fils, le serveur prend tous les cœurs.
+3. **Aucune trace** : `knowledge.index` ne journalisait rien en cas de succès (échec muet inversé : un travail coûteux invisible).
+4. **Hors d'IAction** (à traiter dans le projet concerné) : un script de réindexation tiers réécrit ce même index sans rien réutiliser et par un appel par morceau ; les deux outils se renvoyaient l'index « périmé » l'un à l'autre.
+
+**Correction** (2026-11-22, sidecar seul) :
+- `sidecar/src/knowledgeCharge.ts` : `memeDate` (tolérance d'une milliseconde), utilisée par `isIndexStale` et par la réutilisation des morceaux ; `threadsEmbeddings` (un quart des cœurs, entre 2 et 8 ; `IACTION_EMBED_THREADS` pour le changer, 0 = pas de borne), envoyée dans `options.num_thread`. Vérifié contre le vrai serveur : la requête est acceptée.
+- journal `knowledge` : « indexation terminée » (fichiers, réutilisés, recalculés, morceaux embarqués, durée, force) et « indexation interrompue » (cause).
+- test `sidecar/test/knowledgeCharge.test.js` : feuilles pures, et de bout en bout — un méta-index décalé au dernier bit n'est ni jugé périmé ni ré-embarqué, une vraie modification l'est toujours, la borne de fils part bien dans la requête.
+
+**Mesure et réglage du poste** (2026-11-22, hors dépôt) : le serveur d'embeddings local tournait sans carte graphique. Passé sur le GPU : 64 morceaux en 0,6 s, contre environ 2 s PAR morceau sur le processeur surchargé ; le modèle prend ~0,7 Go de mémoire graphique, rendus après 5 minutes d'inactivité. Piège constaté : un conteneur qui perd l'accès au GPU retombe sur le processeur sans le dire — la borne de fils reste donc utile comme filet.
+
+**Reste à faire** :
+- essai réel après relance de l'application : la ligne « indexation terminée » doit montrer `recalcules: 0` sur un projet inchangé ;
+- interface : différer l'auto-indexation d'une minute après l'ouverture et ne pas la lancer pendant un tour ; réglage du nombre de fils dans Configuration ;
+- fraîcheur par empreinte de contenu plutôt que par date seule (une synchro qui touche les dates sans changer le contenu relance encore l'embedding) ;
+- le script tiers (point 4), dans son dépôt.
+
+**Liens** : T-115 (auto-indexation), spec R5.
+
+### T-227 — Veilleur du relais : dialogue autonome entre deux IAction
+
+**Type** feat · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-20
+
+**Besoin** : remplacer un ancien outil séparé qui traitait sur un poste les demandes d'un autre. Un IAction (la maison) confie une tâche à l'autre (le bureau) par le relais de fichiers (0.8.0) ; le bureau la traite sans personne devant l'écran et répond par le même relais. Étude grillée : [etude-veilleur-relais.md](etude-veilleur-relais.md) (§ 0 et § 5, décisions arrêtées le 2026-11-20).
+
+**Décisions clés** (grill) : premier usage = publier le site docs ; émetteurs écoutés = la maison seule (jeton prouvé par le broker) ; compte perso ; Bash complet au bureau ; plafonds 6 allers-retours / 5 $ par message / 100 tours par jour / 20 min par tour ; retour en bulle dans la conversation d'origine ; jeton de la maison versé au coffre (condition de mise en service).
+
+**Fait — cœur + plomberie** (2026-11-20, non encore commité : plage sans commit) : six feuilles, ~53 cas de test, lint et cliquet verts, suite sidecar entière verte.
+- `veilleurMessage.ts` : format `msg-<id>.md`, lecture stricte, pièces en basename pur.
+- `veilleurPolitique.ts` : garde-fous purs — maison seule, dédoublonnage, profondeur, quota ; refus silencieux vs répondu.
+- `veilleurCycle.ts` : une relève, dépendances injectées. Ordre sûr : marquer l'`id` AVANT l'effet de bord, dépôt avant suppression ; un dépôt raté ne supprime pas et ne rejoue jamais l'action.
+- `veilleurBoite.ts` : client HTTP réel des boîtes (requête injectable, testée sans réseau).
+- `veilleurEtat.ts` : ids traités (purge 8 j) et quota/jour, persistés atomiquement.
+- `veilleurConfig.ts` : `.iaction/veilleur.json` lu et validé (compte « perso » forcé) ; son écriture est interdite aux agents (`estConfigVeilleur`, `fichiersSecrets.ts`).
+
+**Fait — moteur, outils, interface** (2026-11-20, second lot) :
+- correctif du cycle : seule une `demande` lance un tour ; une `reponse` ou une `info` reçue reste en boîte, non marquée, journalisée une fois par id (sans cela deux veilleurs se répondraient sans fin) ;
+- pièces jointes : `<id>-<nom>` dans la boîte, écrites avant le tour dans `relais-recu/<fil>/` avec les règles du relais, désormais dans une feuille commune (`relaisFichiers.ts`, reprise par `relaisServeur.ts`) ; une pièce manquante ou refusée est dite à l'agent et au journal ;
+- `veilleurLanceur.ts` : tour headless, compte perso imposé, session par fil (`veilleurFils.ts`, hors projet), borne de durée, permission refusée d'office, sans shell ni sous-agent quand Bash est faux, corps d'échec lisible ;
+- coût constaté en fin de tour : au-delà du plafond, réponse déposée avec une ligne qui le dit, puis suspension persistante (`EtatVeilleur.suspension/suspendre/lever`) ;
+- config : `bypassPermissions` exigé avec Bash, `acceptEdits` sans ; `cadenceSec` (10–600) ; `ecrireConfigVeilleur` (sidecar seul) ;
+- `veilleurService.ts` : un projet veilleur par poste (`poste.json`), redémarrage au lancement, états `inactif`/`actif`/`suspendu`/`en-attente-coffre`/`invalide`, une relève à la fois, arrêt qui interrompt le tour ; journal canal `relais` ;
+- protocole : `veilleur.statut|lire|configurer|activer|desactiver`, événement non sollicité `veilleur` ; témoin `veilleur-statut-done.json` ;
+- outils d'agent `relais_demander` (pièces contrôlées avant tout dépôt, profondeur d'un fil poursuivi, refus local au plafond, attente de la réponse) et `relais_reponse`, seulement dans un projet qui a un `veilleur.json`, jamais dans un tour du veilleur ;
+- interface : section « Veilleur » (page Projets, repliée par défaut) et indicateur d'en-tête ; section « MCP » sortie d'`AgentPage.tsx` (`McpSection.tsx`) et événements non sollicités sortis de `sidecar.ts` (`evenementsSidecar.ts`) pour tenir le cliquet ;
+- écarts à l'étude : [§ 3.6](etude-veilleur-relais.md).
+
+**Relecture adverse** (2026-11-20, verdict « pas en l'état », deux bloquants confirmés par exécution) — corrigé, chaque protection couverte par un test qui rougit si on la retire (22 mutations du code compilé, toutes rouges) :
+- B1 : la config relue à chaud était réécrivable par un agent avec Bash (adresse, nom du secret envoyé en jeton, émetteurs, plafonds). Elle est désormais **scellée** : empreinte SHA-256 rangée au coffre à l'activation, vérifiée à chaque battement avant toute requête ;
+- B2 : un arrêt pouvait laisser un tour vivant sans borne, affiché « inactif ». Plus de `demarrer` après un arrêt, interruption réessayée tant que le moteur ne connaît pas le tour, main rendue au seul vrai `done`, état `arret-en-cours` ;
+- I1 à I10 et mineurs : émetteur testé avant tout téléchargement ; `fil`/`id` en segment sûr (pollution du prototype) ; une demande ne disparaît plus sans réponse (réponse gardée et redéposée, tour interrompu signalé) ; état illisible ⇒ `invalide` au lieu d'un état neuf ; bornes réelles et plafond passé au moteur (`maxBudgetUsd`) ; tour du veilleur sans navigateur, sans MCP hors in-process, sans réglages du poste ; liste en échec remontée ; garde sur chemins normalisés et étendue à `.mcp.json`/`.claude/settings*.json`/`.iaction/` ; réponse porteuse d'un secret retenue ; contenu relisté après lecture (substitution par le broker) ; noms réservés de Windows ; réponses acceptées du seul destinataire du fil.
+- Point ouvert côté demandeur (`relais_demander`/`relais_reponse` lisaient l'adresse et le nom du secret sans scellé) — **tranché et corrigé** : c'est l'enregistrement dans l'interface qui scelle (`veilleur.configurer`, un scellé par projet `veilleur.empreinte.<projet>`) ; outils et service refusent une config non approuvée avant toute requête ; `activer` exige l'approbation, `desactiver` re-scelle `actif: false`, nouvelle méthode `veilleur.oublier` (config et scellé supprimés).
+- Tour du veilleur : les outils de sessions distantes sont retirés du serveur `iaction` (sortie vers une autre machine).
+- Limite résiduelle, assumée : une substitution de même taille dans la même seconde de dépôt ne serait pas vue ; la fermer demande au broker de refuser l'écrasement du fichier d'un autre émetteur.
+
+**Seconde relecture adverse** (2026-11-20, verdict « essai encadré possible, pas de service sans surveillance ») — corrigé, chaque point couvert par un test de comportement (45 mutations du code compilé, toutes rouges ; plus aucun test par recherche de chaîne dans les sources) :
+- le scellé se forgeait par la classe `sans-fenetre` (trousseau, écrivable par un shell du compte) : la coquille transmet la classe de chaque secret, le sidecar n'accepte un scellé que de la classe `coffre` ; côté coquille, un scellé n'est jamais lu, poussé, reclassé ni migré hors du coffre chiffré ;
+- « Enregistrer et approuver » scellait `actif` et `agent` repris du disque sans les montrer : ils sont affichés, jamais repris d'une config non approuvée, et les champs qui diffèrent sont listés ; l'empreinte couvre le contenu du fichier d'agent et du certificat ;
+- périmètre du tour constaté à l'`init` (serveur ou navigateur inattendu ⇒ interruption et suspension) ; `--no-chrome` et `CLAUDE_CODE_ENABLE_CFC=0` ;
+- état `bloque`, activation refusée pendant un arrêt, session par (émetteur, fil), journal une fois par nom, garde étendue sans Bash, liste d'outils positive, émetteur testé avant téléchargement dans les outils, `relais_supprimer` refuse un `msg-*.md`, exclusion git locale, arrêt du veilleur à la sortie du sidecar ;
+- limites écrites dans l'étude : le scellé ne protège pas la disponibilité (`etat.json`, `fils.json`, `poste.json` écrivables par un tour avec Bash) ; « zéro geste » ne vaut que session ouverte sur un poste sans déverrouillage automatique ; tout tour ordinaire d'un projet doté d'une config de veilleur reçoit les outils `relais_*`.
+
+**Non vérifié en réel** : aucun tour Claude réel n'a été lancé par le veilleur (moteur factice en test) ; aucun échange avec le vrai broker (fausse boîte en test) ; proxy et autorité de certification du poste du bureau non essayés ; interface non ouverte (typecheck et tests seulement) ; délai réel des outils MCP d'un tour non interactif inconnu (l'attente de `relais_demander` est bornée par `MCP_TOOL_TIMEOUT` ou, à défaut, par le plafond des tâches de fond).
+
+**Reste à faire** :
+- relecture adverse : faite deux fois (2026-11-20), verdict « essai encadré possible, pas de service sans surveillance » ;
+- essai réel encadré (publier le site), avec la 0.9.0 installée sur les deux postes, puis retrait de l'ancien outil ;
+- reportés : bulle de réponse automatique hors tour ; pièces jointes dans la réponse du veilleur.
+
+**Liens** : relais entre studios (T-221, 0.8.0), coffre (T-221), canal `reveil` oublié (T-228).
+
+### T-228 — Canal de journal `reveil` absent de la liste de lecture de l'interface
+
+**Type** bug · **Prio** P3 · **Statut** fait · **Clos** 2026-11-20 · **Créé** 2026-11-20
+
+**Constat** (2026-11-20, en ajoutant le canal `relais` pour T-227) : `ui/src/logsClient.ts` tient sa propre liste fermée des canaux, sans `reveil` (T-120), alors que le sidecar et `ui/src/journal.ts` l'ont. Une entrée `reveil` relue par la page Système était ramenée à `sidecar`, et le filtre par canal ne la proposait pas.
+
+**Corrigé** : `reveil` et `relais` ajoutés à `LOG_SCOPES` de `logsClient.ts`. Trois listes du même contrat restent à tenir à la main (sidecar `journal.ts`, interface `journal.ts` et `logsClient.ts`) : aucun test ne les compare encore.
+
+[logsClient.ts](../ui/src/logsClient.ts) · [journal.ts](../sidecar/src/journal.ts)
+
+### T-226 — Réveil annulé : la notice du haut reste affichée
+
+**Type** bug · **Prio** P3 · **Statut** ouvert · **Créé** 2026-11-19
+
+**Constat** (2026-11-19, capture de David, page Projets) : un réveil armé par l'agent (T-219) puis désactivé dans ⏰ laisse la notice « Réveil armé par l'agent — 23:35 (annulable dans ⏰) » au-dessus du fil de l'onglet. Elle annonce un réveil qui n'existe plus.
+
+**Piste** : `reveilNotice` du runtime de conversation est posé à l'armement (`ui/src/reveilAgent.ts`) et au déclenchement (`ui/src/useReveil.ts`), mais rien ne l'efface quand le réveil est annulé ou retiré : l'annulation dans ⏰ (`ReveilControl.tsx`) ne touche que `reveils`. À l'annulation, effacer la notice si elle porte sur ce réveil (ou la remplacer par « Réveil annulé »). Vérifier aussi le même cas côté page Chat.
+
+### T-225 — Déverrouiller automatiquement le coffre sur un poste hors domaine
+
+**Type** feat · **Prio** P2 · **Statut** fait · **Clos** 2026-11-19 · **Créé** 2026-11-19
+
+**Besoin** (décision du 2026-11-19) : le coffre (T-221) demande son mot de passe à chaque lancement. Le poste du bureau, Windows joint à un domaine, doit le garder ; le poste perso, sous Linux, doit s'ouvrir sans saisie. Option D de l'étude (clé du coffre au trousseau), écartée au § 3 pour le bureau à cause du DPAPI du domaine, rouverte pour les seuls postes hors domaine, au choix par poste.
+
+**Réalisé** :
+- `Coffre::deverrouiller_par_identite` et `Coffre::identite_courante` : une identité illisible ou étrangère au coffre rend une erreur, ne change pas l'état et ne compte pas comme un essai de mot de passe ; table absente, l'identité ne réécrit rien (le mot de passe seul recrée la table vide) ;
+- `coffre_auto.rs` : entrée de trousseau `iaction` / `coffre:deverrouillage-auto` ; permis seulement si la jonction à un domaine est connue et fausse (`auto_permis`) ; commandes `coffre_auto_etat`, `coffre_auto_activer`, `coffre_auto_desactiver`, `coffre_auto_ouvrir` ; au lancement, dans le `setup`, synchrone et avant le sidecar : ouverture par le trousseau, ou entrée retirée et journal `warn` (poste non permis, coffre absent, identité refusée) ;
+- `coffre_veille.rs` : déverrouillage automatique actif, la veille et le verrouillage de session laissent le coffre ouvert (journal `info`, une fois par événement) ; trousseau illisible à ce moment : fermeture par prudence ; le verrouillage manuel reste immédiat ;
+- interface : case « Déverrouiller automatiquement sur ce poste » (onglet « Mot de passe », grisée hors permis), bouton « Déverrouiller (automatique sur ce poste) » dans la modale d'ouverture ;
+- doc : `docs/protocol.md` (« Coffre de secrets »), étude § 3 ligne D et § 4.3.
+
+**Non vérifié** : essai réel sur le poste perso (activation, relance sans modale, veille sans fermeture, verrouillage manuel puis réouverture par le bouton) ; refus réel sur le poste du bureau (case grisée, entrée retirée au lancement si elle existait). Le code Windows n'est pas compilé ici.
+
+[coffre_auto.rs](../src-tauri/src/coffre_auto.rs) · [coffre.rs](../src-tauri/src/coffre.rs) · [coffre_veille.rs](../src-tauri/src/coffre_veille.rs) · [SecretsCoffre.tsx](../ui/src/SecretsCoffre.tsx) · [CoffreControle.tsx](../ui/src/CoffreControle.tsx) · [protocol.md](protocol.md)
 
 ### T-224 — CI de la 0.8.0 : deux pannes d'environnement GitHub et une alerte CodeQL
 
@@ -4525,6 +4642,8 @@ dépassé ; succès ⇒ cadence nominale). **98 tests Rust au vert, code de sort
 
 | ID    | Type | Prio | Statut    | Titre |
 |-------|------|------|-----------|-------|
+| T-228 | bug  | P3   | fait      | Le canal de journal `reveil` manquait à la liste de lecture de l'interface : ses entrées apparaissaient comme `sidecar` dans la page Système, et le filtre ne le proposait pas |
+| T-225 | feat | P2   | fait      | Déverrouiller automatiquement le coffre sur ce poste : clé du coffre au trousseau du système, permis seulement hors domaine — le poste du bureau reste au mot de passe |
 | T-224 | bug  | P1   | fait      | CI de la PR 0.8.0 rouge sans changement de code : binaire CUDA d'onnxruntime-node en 404 (Linux), `Expand-Archive` cassé sur l'image Windows, et une regex de test signalée par CodeQL |
 | T-220 | bug  | P2   | fait      | Un agent ne trouve pas le format du coffre MCP et pose un jeton d'API dans un `.env` d'un projet synchronisé par Nextcloud ; aucun moyen de découvrir le coffre depuis une session |
 | T-222 | bug  | P2   | fait      | Un message glissé pendant qu'un agent de fond tourne fait disparaître ce dernier du fil et marque l'ancienne bulle « interrompue(s) avant leur terme » |

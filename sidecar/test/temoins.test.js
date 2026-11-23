@@ -343,8 +343,18 @@ async function testTemoinErreur() {
   });
 }
 
+/* veilleur.statut (T-227) — poste sans veilleur : la forme que l'interface lit au démarrage. */
+async function testTemoinVeilleurStatut() {
+  await avecSidecar(async ({ send, waitFor }) => {
+    send({ id: "temoin-veilleur-1", method: "veilleur.statut", params: {} });
+    const done = await waitFor((e) => e.id === "temoin-veilleur-1", "done veilleur.statut");
+    await confronter("veilleur-statut-done", done);
+  });
+}
+
 await lancer(
   capturer ? "témoins du protocole — CAPTURE" : "témoins du protocole",
+  testTemoinVeilleurStatut,
   testTemoinChatSend,
   testTemoinClaudeStart,
   testTemoinClaudeComptes,

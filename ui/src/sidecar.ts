@@ -25,8 +25,10 @@ import type { ProviderTraits } from "./providerTraits";
 import type { EffortLevel } from "./modelesAbonnementClaude";
 import { parseCommandesSlash, type SlashCommandInfo } from "./commandesSlash";
 import { parseTitreDiscussion } from "./titresDiscussions";
+import { diffuserSansId } from "./evenementsSidecar";
 
 export type { SlashCommandInfo } from "./commandesSlash";
+export { subscribeReady } from "./evenementsSidecar";
 
 export type { ModelDetail, ModelPricing } from "./modelDetail";
 
@@ -45,7 +47,7 @@ export interface ReadyInfo {
 
 interface RawSidecarEvent {
   id?: string;
-  event: "chunk" | "done" | "error" | "ready";
+  event: "chunk" | "done" | "error" | "ready" | "veilleur";
   data: Record<string, unknown>;
 }
 
@@ -94,7 +96,6 @@ export interface RequestHandle {
 
 const pending = new Map<string, PendingRequest>();
 const statusSubscribers = new Set<(status: StatusPayload) => void>();
-const readySubscribers = new Set<(info: ReadyInfo) => void>();
 const logSubscribers = new Set<(line: string) => void>();
 
 let requestCounter = 0;
@@ -146,13 +147,8 @@ export function messageErreurProtocole(data: Record<string, unknown>): string {
 }
 
 function handleSidecarEvent(payload: RawSidecarEvent): void {
-  if (payload.event === "ready") {
-    const info = payload.data as unknown as ReadyInfo;
-    for (const cb of readySubscribers) cb(info);
-    return;
-  }
-
-  if (!payload.id) return;
+  // Sans `id` : événement non sollicité (`ready`, `veilleur`…), voir evenementsSidecar.ts.
+  if (!payload.id) return diffuserSansId(payload.event, payload.data);
   const handlers = pending.get(payload.id);
   if (!handlers) return;
 
@@ -289,11 +285,6 @@ export async function fetchStatus(): Promise<StatusPayload> {
 export function subscribeStatus(cb: (status: StatusPayload) => void): () => void {
   statusSubscribers.add(cb);
   return () => statusSubscribers.delete(cb);
-}
-
-export function subscribeReady(cb: (info: ReadyInfo) => void): () => void {
-  readySubscribers.add(cb);
-  return () => readySubscribers.delete(cb);
 }
 
 export function subscribeLog(cb: (line: string) => void): () => void {

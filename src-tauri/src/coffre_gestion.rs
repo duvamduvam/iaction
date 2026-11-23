@@ -74,12 +74,41 @@ pub(crate) fn ecrire_index(dossier: &Path, noms: &BTreeSet<String>) -> Result<()
     ecrire_atomique(&dossier.join(FICHIER_INDEX), &contenu)
 }
 
+/// Préfixe des scellés du veilleur du relais (T-227) : l'empreinte d'une config
+/// approuvée. Un scellé ne vaut que s'il vient du coffre CHIFFRÉ.
+pub const PREFIXE_SCELLE: &str = "veilleur.empreinte";
+
+/// Un compte (avec ou sans le préfixe `mcp:`) est-il un scellé du veilleur ?
+/// Pure (testée). Un tel secret n'est jamais lu, poussé, reclassé ni migré
+/// depuis la classe `sans-fenetre` ou l'ancien fichier en clair : l'index des
+/// `sans-fenetre` et le trousseau sont écrivables par un shell du compte, un
+/// scellé y serait forgeable.
+pub fn est_nom_scelle(compte: &str) -> bool {
+    compte.strip_prefix(PREFIXE_MCP).unwrap_or(compte).starts_with(PREFIXE_SCELLE)
+}
+
+/// Refus d'un reclassement (pure, testée) : jamais un scellé en `sans-fenetre`.
+pub fn reclassement_refuse(compte: &str, classe: Classe) -> Option<String> {
+    (classe == Classe::SansFenetre && est_nom_scelle(compte))
+        .then(|| format!("« {compte} » est un scellé du veilleur : il reste dans le coffre chiffré"))
+}
+
+/// Comptes de l'index réellement lus au trousseau : les scellés en sont exclus.
+pub fn comptes_sans_fenetre_lisibles(index: &BTreeSet<String>) -> Vec<&str> {
+    index.iter().map(String::as_str).filter(|c| !est_nom_scelle(c)).collect()
+}
+
 /// Secrets MCP `sans-fenetre`, lus au trousseau, sous leur nom `${SECRET:…}`.
-/// Poussés au sidecar quel que soit l'état du coffre.
+/// Poussés au sidecar quel que soit l'état du coffre. Jamais un scellé.
 pub fn secrets_sans_fenetre_mcp(app: &AppHandle) -> BTreeMap<String, String> {
     let Ok(d) = dossier(app) else { return BTreeMap::new() };
+    let index = lire_index(&d);
+    for c in index.iter().filter(|c| est_nom_scelle(c)) {
+        journal(app, "warn", "scellé du veilleur dans l'index sans fenêtre : ignoré", json!({ "nom": c }));
+    }
     let mut out = BTreeMap::new();
-    for compte in lire_index(&d) {
+    for compte in comptes_sans_fenetre_lisibles(&index) {
+        let compte = compte.to_owned();
         let Some(nom) = compte.strip_prefix(PREFIXE_MCP) else { continue };
         match trousseau_lire(&compte) {
             Ok(Some(v)) => {
@@ -119,6 +148,9 @@ pub fn coffre_reclasser(app: AppHandle, nom: String, classe: Classe) -> Result<(
     if actuelle == classe {
         return Ok(());
     }
+    if let Some(refus) = reclassement_refuse(&nom, classe) {
+        return Err(refus);
+    }
     let mut index = lire_index(&d);
     match classe {
         Classe::SansFenetre => {
@@ -155,7 +187,7 @@ pub fn coffre_poste_domaine() -> Option<bool> {
 }
 
 #[cfg(windows)]
-fn poste_joint_domaine() -> Option<bool> {
+pub(crate) fn poste_joint_domaine() -> Option<bool> {
     use windows_sys::Win32::NetworkManagement::NetManagement::{
         NetApiBufferFree, NetGetJoinInformation, NetSetupDomainName, NETSETUP_JOIN_STATUS,
     };
@@ -173,7 +205,7 @@ fn poste_joint_domaine() -> Option<bool> {
 }
 
 #[cfg(not(windows))]
-fn poste_joint_domaine() -> Option<bool> {
+pub(crate) fn poste_joint_domaine() -> Option<bool> {
     Some(false)
 }
 
@@ -217,7 +249,8 @@ pub fn coffre_migration_candidats(app: AppHandle, comptes: Vec<String>) -> Resul
             out.push(Candidat { compte, source: "trousseau" });
         }
     }
-    for nom in lire_fichier_mcp(&d).into_keys() {
+    // Un scellé du veilleur ne s'importe jamais depuis l'ancien fichier en clair (forgeable).
+    for nom in lire_fichier_mcp(&d).into_keys().filter(|n| !est_nom_scelle(n)) {
         let compte = format!("{PREFIXE_MCP}{nom}");
         let source = if connus.contains(&compte) { "reliquat-mcp" } else { "fichier-mcp" };
         out.push(Candidat { compte, source });
@@ -230,6 +263,9 @@ pub fn coffre_migration_candidats(app: AppHandle, comptes: Vec<String>) -> Resul
 /// (`coffre_migration::migrer`, testé sans Tauri).
 #[tauri::command]
 pub fn coffre_migrer(app: AppHandle, choix: Vec<Choix>) -> Result<Bilan, String> {
+    if let Some(c) = choix.iter().find(|c| est_nom_scelle(&c.compte)) {
+        return Err(format!("« {} » est un scellé du veilleur : il ne s'importe pas", c.compte));
+    }
     let d = dossier(&app)?;
     let mut fichier = lire_fichier_mcp(&d);
     let mut index = lire_index(&d);
@@ -346,6 +382,22 @@ mod tests {
         fs::write(d.join(FICHIER_INDEX), "pas du json").unwrap();
         assert!(lire_index(&d).is_empty(), "illisible : vide, sans erreur");
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn scelles_du_veilleur_jamais_hors_du_coffre_chiffre() {
+        assert!(est_nom_scelle("mcp:veilleur.empreinte.abcd1234"));
+        assert!(est_nom_scelle("veilleur.empreinte.abcd1234"));
+        assert!(est_nom_scelle("mcp:veilleur.empreinte"), "ancienne forme aussi");
+        assert!(!est_nom_scelle("mcp:relais.jeton"));
+        assert!(!est_nom_scelle("fournisseur:veilleur.empreinte"), "autre préfixe : pas un nom MCP");
+        // Reclassement en sans-fenetre refusé pour un scellé, permis sinon.
+        assert!(reclassement_refuse("mcp:veilleur.empreinte.abcd1234", Classe::SansFenetre).is_some());
+        assert!(reclassement_refuse("mcp:veilleur.empreinte.abcd1234", Classe::Coffre).is_none());
+        assert!(reclassement_refuse("mcp:relais.jeton", Classe::SansFenetre).is_none());
+        // Un scellé glissé dans l'index n'est jamais lu au trousseau.
+        let index: BTreeSet<String> = ["mcp:veilleur.empreinte.abcd1234", "mcp:relais.jeton"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(comptes_sans_fenetre_lisibles(&index), vec!["mcp:relais.jeton"]);
     }
 
     #[test]

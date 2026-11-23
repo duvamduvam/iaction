@@ -964,8 +964,8 @@ export async function handleOrchDelete(
 // d'exécution lui-même ne duplique jamais la logique des moteurs.
 // ---------------------------------------------------------------------------
 
-/** Résout un agent par NOM (pas par chemin) : projet > global > import Claude Code (docs/etude-orchestration.md §4.2). */
-async function resolveAgentForStep(cwd: string, name: string): Promise<ValidationResult<AgentNormalized>> {
+/** Résout un agent par NOM (pas par chemin) : projet > global > import Claude Code (docs/etude-orchestration.md §4.2). Aussi pour le veilleur (veilleurLanceur.ts). */
+export async function resolveAgentForStep(cwd: string, name: string): Promise<ValidationResult<AgentNormalized>> {
   for (const f of await listFilesWithExt(projectDir(cwd, "agents"), ".yaml")) {
     const entry = await loadYamlAgentEntry(f, "project");
     if (entry.name === name) {

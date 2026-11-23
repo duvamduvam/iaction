@@ -12,6 +12,9 @@
  *   la recopie de sa fin pour confirmer qu'elle est rangée. La migration
  *   (écran « Secrets du coffre », SecretsCoffre.tsx) s'ouvre ensuite.
  * - Coffre ouvert, « Secrets… » ouvre l'écran des secrets.
+ * - Déverrouillage automatique actif sur ce poste (T-225) : la coquille a
+ *   déjà rouvert le coffre au lancement ; après un verrouillage manuel, la
+ *   modale propose de le rouvrir par le trousseau, sans mot de passe.
  *
  * Les mots de passe ne vivent que dans l'état local du formulaire, vidé
  * aussitôt après l'appel.
@@ -20,6 +23,8 @@ import { useEffect, useState } from "react";
 import { Modal } from "./Modal";
 import { SecretsCoffre, type OngletCoffre } from "./SecretsCoffre";
 import {
+  coffreAutoEtat,
+  coffreAutoOuvrir,
   coffreCreer,
   coffreDeverrouiller,
   coffreDeverrouillerSecours,
@@ -169,6 +174,37 @@ function Ouverture({ onClose }: Readonly<{ onClose: () => void }>) {
   const [saisie, setSaisie] = useState("");
   const [erreur, setErreur] = useState("");
   const [occupe, setOccupe] = useState(false);
+  // Déverrouillage automatique actif sur ce poste (T-225) : rouvrir sans mot de passe.
+  const [auto, setAuto] = useState(false);
+
+  useEffect(() => {
+    let vivant = true;
+    coffreAutoEtat()
+      .then((e) => {
+        if (vivant) setAuto(e.actif && e.permis);
+      })
+      .catch((err: unknown) => {
+        if (vivant) setErreur(message(err));
+      });
+    return () => {
+      vivant = false;
+    };
+  }, []);
+
+  async function ouvrirAuto() {
+    setOccupe(true);
+    setErreur("");
+    try {
+      await coffreAutoOuvrir();
+      onClose();
+    } catch (err) {
+      setErreur(message(err));
+      // Entrée périmée : la coquille l'a retirée, le bouton disparaît.
+      setAuto(false);
+    } finally {
+      setOccupe(false);
+    }
+  }
 
   async function valider() {
     const valeur = saisie;
@@ -225,6 +261,11 @@ function Ouverture({ onClose }: Readonly<{ onClose: () => void }>) {
         <button type="button" className="btn btn--ghost" onClick={onClose}>
           Plus tard
         </button>
+        {auto && (
+          <button type="button" className="btn" disabled={occupe} onClick={() => void ouvrirAuto()}>
+            Déverrouiller (automatique sur ce poste)
+          </button>
+        )}
         <button type="submit" className="btn" disabled={occupe || saisie.length === 0}>
           {occupe ? "Ouverture…" : "Déverrouiller"}
         </button>

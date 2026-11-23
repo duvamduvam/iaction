@@ -1,0 +1,23 @@
+{
+  "quoi": "done de veilleur.statut sur un poste sans veilleur : l'état que l'interface affiche au démarrage (section « Veilleur » et indicateur d'en-tête). Le même objet est poussé, sans id, par l'événement non sollicité `veilleur` à chaque changement d'état. Aucun jeton n'y figure jamais.",
+  "parseur": "parseStatutVeilleur",
+  "evenement": {
+    "id": "temoin-veilleur-1",
+    "event": "done",
+    "data": {
+      "etat": "inactif",
+      "cwd": null,
+      "toursAujourdhui": 0,
+      "enCours": false
+    }
+  },
+  "attendu": {
+    "etat": "inactif",
+    "cwd": null,
+    "motif": null,
+    "derniereReleve": null,
+    "dernierBilan": null,
+    "toursAujourdhui": 0,
+    "enCours": false
+  }
+}

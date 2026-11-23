@@ -316,3 +316,61 @@ fn disque_conforme_apres_retrait_et_ecriture() {
     c.retirer("mcp:x").unwrap();
     assert!(c.disque_conforme("mcp:x").unwrap(), "absent des deux côtés");
 }
+
+// ---------------------------------------------------------------------------
+// Déverrouillage automatique par l'identité (T-225)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn identite_courante_coffre_ferme_est_verrouille() {
+    let d = Dossier::nouveau("id-ferme");
+    let (mut c, _) = coffre_cree(&d);
+    c.verrouiller();
+    assert!(matches!(c.identite_courante(), Err(Erreur::Verrouille)));
+}
+
+#[test]
+fn aller_retour_par_l_identite_courante() {
+    let d = Dossier::nouveau("id-aller-retour");
+    let (mut c, secours) = coffre_cree(&d);
+    c.poser("provider:x", VALEUR, Classe::Coffre).unwrap();
+    let identite = c.identite_courante().expect("coffre ouvert").expose_secret().to_owned();
+    assert_eq!(identite, secours, "l'identité est la clé de secours");
+    c.verrouiller();
+
+    let mut c2 = Coffre::pour_tests(d.0.clone());
+    c2.deverrouiller_par_identite(&identite).expect("ouverture par l'identité");
+    assert_eq!(c2.etat(), Etat::Ouvert);
+    assert_eq!(c2.lire("provider:x").unwrap().as_deref(), Some(VALEUR));
+}
+
+#[test]
+fn mauvaise_identite_refusee_sans_compter_d_echec() {
+    let d = Dossier::nouveau("id-mauvaise");
+    let (mut c, _) = coffre_cree(&d);
+    c.verrouiller();
+    let etrangere = age::x25519::Identity::generate().to_string().expose_secret().to_owned();
+    for _ in 0..(ECHECS_SANS_DELAI + 2) {
+        let e = c.deverrouiller_par_identite(&etrangere).expect_err("identité étrangère");
+        assert!(matches!(e, Erreur::Technique(_)), "pas « mot de passe incorrect » : {e:?}");
+        assert!(!e.to_string().contains(&etrangere), "l'identité ne paraît pas dans l'erreur");
+    }
+    let e = c.deverrouiller_par_identite("pas une identité").expect_err("illisible");
+    assert!(matches!(e, Erreur::Technique(_)));
+    assert_eq!(c.etat(), Etat::Verrouille, "état inchangé");
+    assert_eq!(c.echecs, 0, "aucun essai de mot de passe compté");
+    assert!(c.prochain_essai.is_none(), "aucun délai imposé");
+    c.deverrouiller(MDP).expect("le mot de passe reste utilisable aussitôt");
+}
+
+#[test]
+fn identite_sans_table_ne_reecrit_pas_le_coffre() {
+    let d = Dossier::nouveau("id-sans-table");
+    let (mut c, _) = coffre_cree(&d);
+    c.verrouiller();
+    fs::remove_file(d.0.join(FICHIER_COFFRE)).unwrap();
+    let etrangere = age::x25519::Identity::generate().to_string().expose_secret().to_owned();
+    assert!(c.deverrouiller_par_identite(&etrangere).is_err());
+    assert!(!d.0.join(FICHIER_COFFRE).exists(), "aucune table écrite sous une identité étrangère");
+    c.deverrouiller(MDP).expect("le mot de passe recrée la table vide, comme avant");
+}

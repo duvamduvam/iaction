@@ -9,6 +9,51 @@ versions selon [SemVer](https://semver.org/lang/fr/).
 > Les entrées commencent à la 0.3.0 ; les versions antérieures ne sont pas
 > reconstituées après coup.
 
+## [Non publié]
+
+## [0.9.0] — 2026-11-23
+
+Depuis la 0.8.0 (2026-11-19) : **le veilleur du relais**, par lequel un studio
+confie une tâche à un autre qui la traite seul, et **le coffre qui s'ouvre
+sans mot de passe** sur un poste hors domaine.
+
+### Ajouté
+
+- **Déverrouiller automatiquement le coffre sur ce poste** (onglet « Mot de
+  passe » des secrets) : la clé du coffre est rangée au trousseau du système,
+  plus de mot de passe au lancement, et le coffre ne se ferme plus à la veille.
+  Refusé sur un Windows joint à un domaine (ou dont la jonction n'a pas pu être
+  vérifiée) : le poste du bureau reste au mot de passe. Après un verrouillage
+  manuel, la modale propose de rouvrir sans mot de passe (T-225).
+- **Veilleur du relais** (en cours de mise au point, pas encore à mettre en
+  service) : un studio confie une tâche à un autre par le relais de fichiers,
+  et le veilleur de l'autre poste la traite seule, dans un projet dédié, puis
+  répond. Section « Veilleur » de la page Projets (adresse, nom du secret du
+  coffre, émetteurs écoutés, modèle, Bash, plafonds, cadence), indicateur
+  « Veilleur actif » dans l'en-tête. Garde-fous : seuls les émetteurs écoutés
+  et les demandes s'exécutent, compte perso imposé, tour borné en durée,
+  suspension si un tour coûte plus que le plafond, nombre d'allers-retours
+  borné par fil. Côté qui demande : outils d'agent `relais_demander` (avec
+  attente de la réponse) et `relais_reponse` (T-227). « Enregistrer et
+  approuver » scelle la config de ce projet au coffre : modifiée hors de
+  l'interface, ni le veilleur ni les outils du relais ne l'utilisent, et la
+  section dit quoi faire ; l'agent et l'état actif/inactif scellés sont
+  affichés dans le formulaire. « Supprimer la configuration » retire config et
+  approbation. Un tour du veilleur qui annonce un serveur ou un outil
+  inattendu s'arrête avant toute action, et le veilleur se suspend. Un tour lancé par le relais n'a ni navigateur, ni serveur MCP
+  du projet ou du poste, ni accès aux sessions des autres machines, et son
+  coût est borné par le moteur.
+
+### Corrigé
+
+- La page Système ne proposait pas le canal de journal `reveil` dans ses
+  filtres : ses entrées y apparaissaient comme `sidecar` (T-228).
+- L'indexation des connaissances repartait à chaque ouverture sur des
+  fichiers inchangés, en occupant tous les cœurs du poste et sans rien écrire
+  au journal : les dates se comparent maintenant à la milliseconde, le nombre
+  de fils du serveur d'embeddings est borné (`IACTION_EMBED_THREADS`), et le
+  journal `knowledge` dit ce que chaque indexation a fait (T-229).
+
 ## [0.8.0] — 2026-11-19
 
 Depuis la 0.7.0 (2026-11-16) : **un coffre de secrets chiffré par mot de

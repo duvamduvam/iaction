@@ -19,18 +19,19 @@ import { describe, expect, it } from "vitest";
 import { parseChatDone, parseClaudeDone, parseCompactionDemandee, parseModelChange, parseNeutralDone, parseReveilDemande } from "./protocole";
 import { parseComptes } from "./comptesClaude";
 import { parseTitreDiscussion } from "./titresDiscussions";
+import { parseStatutVeilleur } from "./veilleurClient";
 
 const dossier = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures", "protocole");
 
 interface Temoin {
   quoi: string;
-  parseur: "parseChatDone" | "parseClaudeDone" | "parseNeutralDone" | "parseComptes" | "parseTitreDiscussion" | "parseModelChange" | "parseCompactionDemandee" | "parseReveilDemande" | null;
+  parseur: "parseChatDone" | "parseClaudeDone" | "parseNeutralDone" | "parseComptes" | "parseTitreDiscussion" | "parseModelChange" | "parseCompactionDemandee" | "parseReveilDemande" | "parseStatutVeilleur" | null;
   evenement: { id: string; event: string; data: Record<string, unknown> };
   attendu: unknown;
 }
 
 // `parseComptes` prend le `data` brut du done, comme les autres.
-const PARSEURS = { parseChatDone, parseClaudeDone, parseNeutralDone, parseComptes, parseTitreDiscussion, parseModelChange, parseCompactionDemandee, parseReveilDemande } as const;
+const PARSEURS = { parseChatDone, parseClaudeDone, parseNeutralDone, parseComptes, parseTitreDiscussion, parseModelChange, parseCompactionDemandee, parseReveilDemande, parseStatutVeilleur } as const;
 
 const temoins = readdirSync(dossier)
   .filter((f) => f.endsWith(".json"))
