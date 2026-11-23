@@ -2165,7 +2165,7 @@ par processus et par collage — jamais plus, voir Attachments.tsx
   décroissant). `debug` n'est PAS écrit par défaut — voir `IACTION_LOG_LEVEL`.
 - `scope` : énumération **fermée** — `sidecar`, `rust`, `ui`, `claude`,
   `neutral`, `orchestrator`, `taches`, `knowledge`, `speech`, `router`,
-  `usage`, `mcp`, `reveil`. Un scope inconnu est ramené à `sidecar` (jamais un rejet).
+  `usage`, `mcp`, `reveil`, `relais` (veilleur du relais, T-227). Un scope inconnu est ramené à `sidecar` (jamais un rejet).
 - `msg` : une ligne, sans saut de ligne (les sauts sont remplacés par des
   espaces à l'écriture — une entrée = une ligne JSONL).
 - `reqId` / `runId` / `stepId` : corrélation, `null` par défaut. Un `reqId` de
@@ -3262,6 +3262,35 @@ de passe, scrypt), `coffre.age.prec` (version précédente de la table).
   coffre ouvert par la clé de secours ; sa vérification est soumise au même
   délai d'essais que l'ouverture. Ne réécrit que `coffre.cle.age`.
 
+Déverrouillage automatique sur ce poste (T-225) — l'identité X25519 du coffre
+est rangée au trousseau du système (service `iaction`, compte
+`coffre:deverrouillage-auto`). **Permis seulement si le poste n'est pas joint à
+un domaine** (`coffre_poste_domaine` vaut `false`) : refusé sur un Windows
+joint à un domaine, et quand la jonction est indéterminée. Jamais l'identité
+dans une erreur ni au journal.
+
+- `coffre_auto_etat() -> {actif, permis}` — `actif` : une entrée est au
+  trousseau ; `permis` : voir ci-dessus. Trousseau illisible : erreur.
+- `coffre_auto_activer()` — coffre ouvert ; écrit son identité au trousseau.
+  Refusé si non permis ou coffre fermé.
+- `coffre_auto_desactiver()` — retire l'entrée (absente : pas une erreur).
+- `coffre_auto_ouvrir()` — rouvre le coffre par l'identité du trousseau (après
+  un verrouillage manuel), sans mot de passe. Une identité que le coffre
+  refuse (coffre recréé, table abîmée) est une erreur qui **ne compte pas**
+  comme un essai de mot de passe ; l'entrée est alors retirée.
+
+**Au lancement**, dans le `setup` de la coquille, synchrone, avant le sidecar
+et avant que l'interface ne lise `coffre_etat` : entrée présente et coffre
+verrouillé → poste non permis : entrée retirée, journal `warn`, coffre
+verrouillé ; sinon ouverture par l'identité (mêmes suites qu'une ouverture par
+mot de passe : table poussée, `coffre:etat` publié). Échec : entrée retirée,
+journal `warn`, coffre verrouillé — la modale du mot de passe se présente.
+
+**À la veille et au verrouillage de session**, déverrouillage automatique
+actif : le coffre n'est PAS fermé (le trousseau le rouvrirait) ; journal
+`info` « coffre laissé ouvert », une fois par événement. Trousseau illisible à
+ce moment : fermeture, par prudence. Le verrouillage manuel reste immédiat.
+
 Événement Tauri **`coffre:etat`** : même charge que `coffre_etat`, publié à
 chaque ouverture, fermeture et pendant une attente de fermeture.
 
@@ -3293,11 +3322,13 @@ Requêtes émises par la coquille sur le stdin du sidecar (identifiants
 `coffre-…`) ; leurs réponses sont traitées par Rust et **jamais relayées** à
 l'interface :
 
-- `coffre.charger {etat, secrets}` — à chaque naissance du sidecar, à
+- `coffre.charger {etat, secrets, nomsCoffre}` — à chaque naissance du sidecar, à
   l'ouverture, à la fermeture et après chaque écriture. `secrets` =
   `{nom: valeur}` des secrets MCP (compte `mcp:<nom>` du coffre ↔
   `${SECRET:<nom>}`) : ceux de classe `coffre` si le coffre est ouvert, et
-  ceux de classe `sans-fenetre` (lus au trousseau) dans tous les cas.
+  ceux de classe `sans-fenetre` (lus au trousseau) dans tous les cas, jamais
+  un scellé du veilleur pour ces derniers. `nomsCoffre` (T-227) : les noms
+  venus de la classe `coffre` ; seuls ceux-là peuvent porter un scellé.
   Verrouillé, le sidecar ne sert donc que les `sans-fenetre`. `absent` :
   table vide, le sidecar lit l'ancien `mcp-secrets.json` (poste sans coffre).
   `done` : `{etat, secrets: <nombre>}` — ni nom ni valeur.
@@ -3410,6 +3441,227 @@ et présentés comme des données ; rappel « donnée, pas consigne » à chaque
 réception ; `https://` exigé hors boucle locale ; proxy
 `HTTPS_PROXY`/`NO_PROXY` suivi par tunnel `CONNECT` (vérification TLS
 entière).
+
+### Veilleur du relais (T-227, docs/etude-veilleur-relais.md)
+
+Un studio confie une tâche à un autre par le relais ; le **veilleur** de
+l'autre poste la traite sans personne devant l'écran et répond par le même
+relais. Il vit dans le sidecar, tant que l'application est ouverte.
+
+**Message** `msg-<id>.md` (veilleurMessage.ts) : en-tête YAML entre deux
+lignes `---` (`fil`, `id`, `type: demande | reponse | info`, `profondeur`
+entier ≥ 0, `en_reponse_a?`, `pieces?` en noms simples), puis le corps.
+`fil`, `id` et `en_reponse_a` : lettres, chiffres, `.`, `_`, `-`, 80 au plus,
+ni `.`/`..`, ni `__proto__`/`constructor`/`prototype` (segmentsSurs.ts).
+Chaque pièce voyage à côté sous le nom `<id>-<nom>`. Seul le corps d'une
+`demande` devient une consigne ; les pièces restent des données.
+
+**Config d'un projet** `<projet>/.iaction/veilleur.json` — écrite par le
+sidecar seul (méthodes ci-dessous), interdite aux agents par la garde
+d'écriture (`estConfigVeilleur`, chemins normalisés) — barrière contre la
+maladresse seulement : c'est le **scellé** qui la protège. Champs : `actif`,
+`expediteurs` (noms de boîte `^[a-z0-9][a-z0-9-]{0,30}$`), `agent` (nom d'un
+agent Claude du projet, ou `null`), `compte: "perso"` (seul permis), `modele`,
+`effort`, `bash`, `permission` (**`bypassPermissions` si `bash`, sinon
+`acceptEdits`**), `plafonds {profondeur 1–20, coutParMessage > 0 et ≤ 50,
+toursParJour 1–500, dureeMin 1–120}` (entiers sauf le coût ; aucun « 0 =
+illimité »), `cadenceSec` (10 à 600, défaut 30), `url` (`https://`),
+`jetonSecret` (NOM de l'entrée du coffre, jamais le jeton ; jamais un nom qui
+commence par `veilleur.empreinte`), `ca?` (fichier PEM), `proxy?`. Fichier présent mais
+illisible : `invalide`, jamais « absent ».
+
+**Scellé** : c'est l'ENREGISTREMENT par l'interface (`veilleur.configurer`)
+qui approuve une config pour ce poste. Il range au coffre, sous
+`veilleur.empreinte.<8 premiers hex du SHA-256 du chemin réel du projet>` (un
+scellé par projet), le SHA-256 de `{cwd réel, config}` normalisés (clés
+triées, tous les champs, plus le SHA-256 du contenu du fichier de l'agent
+désigné et de celui de l'autorité de certification). Il n'est lu que dans la
+table du coffre ouvert ET de classe `coffre` (`coffreChiffreContient`) : la
+coquille déclare ces noms dans `coffre.charger {…, nomsCoffre}` ; un scellé
+servi par `sans-fenetre`, par l'ancien fichier, ou par une coquille qui
+n'envoie pas `nomsCoffre` ne compte pas. Côté coquille, un nom
+`veilleur.empreinte…` n'est jamais lu ni poussé depuis `sans-fenetre`, ne peut
+pas y être reclassé (`coffre_reclasser` refuse), ne s'importe pas à la
+migration, et `poser` le range toujours en classe `coffre`. Le service, à
+chaque battement, et les outils `relais_*`, à chaque appel, relisent le
+fichier et recalculent AVANT toute requête : empreinte différente ou absente
+⇒ refus (état `invalide` pour le service), motif « config du relais modifiée
+hors de l'interface : ré-enregistre-la dans la section Veilleur », aucune
+requête réseau, aucun tour. Un secret `veilleur.empreinte` de la forme
+précédente (sans suffixe) n'est jamais lu. Ces méthodes ne sont joignables que
+par le protocole : aucun outil d'agent n'écrit la config ni un scellé
+(`secrets_lister` ne rend que des noms).
+
+**Fichiers du poste**, hors projet, sous `<config>/net.duvam.iaction/veilleur/` :
+`poste.json` (`{cwd}` du seul projet veilleur du poste), `etat.json` (par
+id : `en-cours` ou `repondu`, et la réponse à déposer tant que son dépôt n'a
+pas réussi ; tours du jour ; suspension), `fils.json` (session Claude, cumul
+de coût de la session, profondeur maximale et destinataire de chaque fil).
+Purge à 8 jours, écritures atomiques, mémoire mise à jour après l'écriture
+seulement. Seul un fichier ABSENT donne un état neuf ; illisible ou
+corrompu ⇒ `invalide`.
+
+**États** : `inactif`, `actif`, `suspendu` (coût au-delà du plafond, ou
+inconnu après une interruption ; persistant, levé par `veilleur.activer`),
+`en-attente-coffre` (coffre non ouvert : rien ne se relève), `invalide`
+(config, scellé, secret absent, autorité illisible, état illisible, liste de
+la boîte en échec — jeton refusé, proxy, broker ; `motif` le dit, sans
+jeton ; retour à `actif` dès que la liste réussit), `arret-en-cours` (arrêt
+demandé, le tour interrompu n'a pas encore rendu la main), `bloque` (tour
+qui a accepté son interruption sans rendre la main après 60 s : plus aucun
+tour, geste : relancer l'application). Journal et événement à la transition,
+pas à chaque battement ; un message invalide ou un redépôt raté n'est dit
+qu'une fois par nom jusqu'au changement d'état. Sortie du sidecar (fermeture
+de l'entrée standard) : le veilleur s'arrête et son tour est interrompu, 10 s
+au plus, avant le vidage du journal.
+
+**Ce que le scellé ne protège pas** : `etat.json`, `fils.json` et
+`poste.json` sont écrivables par un tour avec Bash (quota et suspension
+remis à zéro, sessions perdues, veilleur relancé sur un projet déjà
+approuvé). **Limite fonctionnelle** : sur un poste où le déverrouillage
+automatique du coffre est interdit, le coffre se ferme au verrouillage de
+session et le veilleur attend le déverrouillage manuel.
+
+**Cycle** (veilleurCycle.ts), à chaque battement, jamais deux à la fois :
+config relue → suspension ? → coffre ouvert ? → scellé → jeton résolu au
+coffre → client de boîte (`proxy` en `HTTPS_PROXY`, `ca` lu depuis son
+fichier) → relève :
+
+1. **reprise** : chaque réponse gardée est redéposée, puis le message
+   retiré ; un id `en-cours` sans réponse (application arrêtée pendant le
+   tour) reçoit une `info` « traitement interrompu avant la réponse, renvoie
+   la demande si besoin » — jamais de ré-exécution ;
+2. message d'un émetteur non écouté : ni téléchargé ni lu, laissé en boîte
+   (journal une fois par nom) ;
+3. message téléchargé, puis boîte relistée : même nom, émetteur, `taille` et
+   `depose_le` exigés (le broker écrase un fichier de même nom), sinon rien
+   n'est exécuté ni supprimé ; même contrôle pour chaque pièce ;
+4. `reponse` et `info` laissées en boîte (jamais exécutées ni marquées) ;
+   message invalide laissé ; id déjà répondu retiré ; profondeur au plafond
+   ou quota atteint → `info` de refus ;
+5. sinon : pièces en mémoire, **id marqué `en-cours`**, pièces écrites dans
+   `relais-recu/<fil>/<nom>` (règles du relais, noms réservés de Windows
+   refusés, points et espaces finaux retirés avant le test des consignes)
+   puis retirées de la boîte, tour, réponse (`type: reponse`,
+   `profondeur + 1`) GARDÉE dans l'état puis déposée, `repondu`, suppression
+   du message. Une réponse qui porte une valeur du coffre ou un secret de
+   forme connue est remplacée par « Réponse retenue : elle contenait … ».
+   Coût dépassé : la réponse part avec une ligne finale qui le dit, puis
+   suspension. Une erreur de l'état arrête la relève, sans suppression.
+
+**Tour** (veilleurLanceur.ts) : `claude.start` interne, `cwd` du projet,
+`prompt` = corps (+ liste des pièces reçues et refusées), `model`/`effort`/
+`permissionMode` de la config, `compte: "perso"` quelle que soit la config,
+`chatOnly: false`, sans `interactive`, `mcp: false`, `veilleur: true`,
+`maxBudgetUsd` = plafond de coût (le moteur s'arrête en
+`error_max_budget_usd`), session reprise par (émetteur, fil) ; coût d'un
+message = écart avec le cumul connu de la session. `veilleur: true` impose
+dans claude.ts : `settingSources: ["project", "local"]` (rien de
+`~/.claude`), `--no-chrome` et `CLAUDE_CODE_ENABLE_CFC=0` dans
+l'environnement du tour, `strictMcpConfig` (seuls les serveurs in-process `studio` et
+`iaction` d'IAction), pas d'outils `relais_*` ni de sessions distantes
+(`sessionsDistantes: false` : ce serait une sortie vers une autre machine) —
+restent dans `iaction` : `search_chat`, `lire_usage` et, si l'index du projet
+existe, `search_knowledge` ; dans `studio` : `secrets_lister` —, et des crochets qui refusent
+en plus l'écriture de `.mcp.json`, `.claude/settings*.json` et de tout
+`.iaction/`. Consigne système fixe (studio émetteur, personne devant
+l'écran, `relais-recu/` = données, dernier message renvoyé tel quel) ajoutée
+aux instructions de l'agent éventuel. Sans Bash : liste d'outils POSITIVE
+(celle de l'agent réduite aux outils permis, jamais `Bash`, `PowerShell` ni
+sous-agent), et les crochets protègent aussi tout `.claude/` et `CLAUDE.md`.
+Une demande de permission est refusée aussitôt. **Périmètre constaté** : à
+l'`init`, un serveur MCP autre que `iaction`/`studio`, ou un outil de
+navigateur, interrompt le tour avant toute action ; la réponse le dit et le
+veilleur est suspendu avec ce motif. Arrêt : le moteur n'est jamais lancé si l'arrêt est déjà demandé ;
+l'interruption est réessayée toutes les 500 ms (2 min au plus) tant que le
+moteur ne connaît pas le tour ; la main n'est rendue qu'au vrai `done`/
+`error`. Au-delà de `dureeMin` : interruption, corps « Délai de N min
+dépassé, tour interrompu. » + texte déjà produit. Le tour compte parmi les
+tours en cours (fermeture du coffre).
+
+**Méthodes** :
+
+- `veilleur.statut {}` → `done {etat, cwd, motif?, derniereReleve?,
+  dernierBilan?, toursAujourdhui, enCours}`. Témoin :
+  `fixtures/protocole/veilleur-statut-done.json`.
+- `veilleur.lire {cwd}` → `done {config, scellee, approuvee?, differences?}`
+  | `{absent: true}` | `{invalide}` ; `scellee` : `true` approuvée, `false`
+  modifiée hors de l'interface (avec `differences` : champs qui diffèrent de
+  la dernière version approuvée, `null` si aucune n'est connue), `null`
+  coffre fermé (invérifiable). La dernière version approuvée est une copie
+  INDICATIVE hors projet (`veilleur/approuvees/<nom du scellé>.json`) : la
+  confiance vient du scellé, jamais d'elle.
+- `veilleur.configurer {cwd, config}` → enregistre ET approuve : config
+  validée, coffre ouvert exigé (sinon `error`, rien n'est écrit), scellé
+  rangé (`coffre:ecrire`, attente de l'accusé de la coquille) PUIS fichier
+  écrit ; si le projet est un dépôt git, `/.iaction/veilleur.json` et
+  `/relais-recu/` sont ajoutés sans doublon à `.git/info/exclude` (dossier
+  commun pour un worktree ; jamais au `.gitignore`) → `done {config,
+  avertissement?}` (échec de l'exclusion = avertissement).
+- `veilleur.activer {cwd}` → refusé pendant `arret-en-cours` (« attends la
+  fin de l'arrêt ») et en `bloque` ; coffre ouvert exigé ; la config du fichier doit
+  correspondre à son scellé (sinon `error` avec le motif du scellé) ; pose
+  `actif: true` en re-scellant ce seul changement, mémorise le poste, lève une
+  suspension, démarre → `done` statut.
+- `veilleur.desactiver {}` → arrête (tour en cours interrompu : `etat:
+  "arret-en-cours"` jusqu'à sa fin, puis `inactif` par l'événement), oublie
+  le poste (`poste.json` supprimé), pose `actif: false` en re-scellant (sinon
+  la config deviendrait invalide pour les outils) ; le scellé est GARDÉ.
+  Coffre fermé, ou config déjà modifiée hors de l'interface : `actif: false`
+  n'est pas posé (re-sceller l'approuverait) → `done` statut, avec
+  `avertissement`.
+- `veilleur.oublier {cwd}` → coffre ouvert exigé ; arrête le veilleur s'il
+  est celui de ce projet, supprime la config et son scellé, oublie le poste
+  → `done {oublie: true, …statut}`. L'interface demande une confirmation.
+
+`cwd` : chemin absolu exigé. Au lancement du sidecar, si `poste.json` désigne
+un projet dont la config est valide et `actif`, le veilleur repart seul — et
+le scellé est vérifié au premier battement.
+
+**Événement** `veilleur` (sans `id`, comme `ready`, relayé tel quel par
+`sidecar:event`) : le statut, à chaque transition d'état et après une relève
+qui a traité, refusé ou repris un message.
+
+**Outils d'agent** (serveur in-process `iaction`, tours de projet Claude
+seulement, et seulement si `.iaction/veilleur.json` existe ; jamais dans un
+tour du veilleur) :
+
+- `relais_demander {destinataire, consigne, fichiers?, fil?, attendreMin?}` :
+  adresse et secret lus dans la config du projet (absente ou invalide :
+  erreur qui renvoie à la section « Veilleur » ; jeton absent : « coffre
+  fermé » ou « secret absent »). `destinataire` : nom de boîte. Toutes les
+  pièces sont contrôlées AVANT le moindre dépôt (règles de `relais_deposer`,
+  valeurs du coffre, et jamais un `msg-*.md`) ; puis dépôt des pièces
+  `<id>-<nom>` et du message `demande`. `fil` absent : nouveau fil,
+  profondeur 0 ; fourni : il doit être adressé au même destinataire, et la
+  profondeur = plus grande connue (boîte ou `fils.json`) + 1, refus local au
+  plafond. `attendreMin` (défaut 15, 0 = rendre la main, borné par le délai
+  des outils MCP du tour moins une minute) : relève de la boîte locale toutes
+  les 15 s, rend la première `reponse`/`info` DU DESTINATAIRE dont
+  `en_reponse_a` est l'id déposé (pièces écrites dans `relais-recu/<fil>/`),
+  puis la retire. Délai dépassé : rend l'id et le fil, et dit d'appeler
+  `relais_reponse`.
+- `relais_reponse {fil}` : fil ouvert depuis ce poste seulement ; rend les
+  `reponse`/`info` de ce fil venues de son destinataire et les retire, ou
+  « Rien pour l'instant ».
+
+Ce qui revient est présenté comme une DONNÉE (même phrase que
+`relais_recuperer`), corps entre `<<<` et `>>>`. Journal : canal `relais`
+(transitions, bilans, tours, dépôts, refus) ; jamais de jeton nulle part.
+
+Les deux outils exigent une config SCELLÉE (coffre ouvert) avant toute
+requête : réécrite hors de l'interface, « Rien n'est parti — config du relais
+modifiée hors de l'interface : ré-enregistre-la dans la section Veilleur ».
+Comme le cycle, ils ne téléchargent que les messages du destinataire du fil,
+et relistent la boîte après chaque lecture (message et pièce) : un contenu
+changé entre-temps est ignoré. `relais_supprimer` (connecteur classique)
+refuse de retirer un `msg-*.md`. **Effet de bord** : tout tour ordinaire d'un
+projet doté d'une config de veilleur reçoit ces deux outils.
+
+**Limite résiduelle** : le contrôle de substitution compare émetteur, taille
+et `depose_le` (à la seconde) ; une substitution de même taille dans la même
+seconde ne serait pas vue. La fermer demande au broker de refuser
+l'écrasement du fichier d'un autre émetteur.
 
 ### Fermeture automatique
 

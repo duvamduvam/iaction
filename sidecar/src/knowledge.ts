@@ -22,6 +22,7 @@
  */
 
 import { promises as fsp } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   buildHeaders,
@@ -33,10 +34,12 @@ import {
 import { isNonEmptyString, isPlainObject, readBoundedBody } from "./base.js";
 import { formatChatSearchResults, sanitizeLimit, searchChatHistory } from "./chatHistory.js";
 import { creerOutilsSessionsDistantes } from "./outilsSessionsDistantes.js";
+import { creerOutilsRelaisVeilleur, exposerOutilsRelais } from "./outilsRelaisVeilleur.js";
 import { creerOutilUsage } from "./outilUsage.js";
 import type { CompteId } from "./compteClaude.js";
 import type { AskUserBridge } from "./askUser.js";
 import * as journal from "./journal.js";
+import { memeDate, threadsEmbeddings } from "./knowledgeCharge.js";
 import { getEmbeddingsConfig } from "./router.js";
 import { projectDir } from "./appPaths.js";
 import { formatSearchResults } from "./rechercheFormat.js";
@@ -337,6 +340,8 @@ export async function embedTexts(texts: string[]): Promise<EmbedResult> {
     };
   }
 
+  // T-229 — borne de fils : sans elle, le serveur d'embeddings prend tous les cœurs.
+  const fils = threadsEmbeddings(os.availableParallelism(), process.env);
   const embeddings: number[][] = [];
   for (let start = 0; start < texts.length; start += EMBED_BATCH_SIZE) {
     const batch = texts.slice(start, start + EMBED_BATCH_SIZE);
@@ -344,7 +349,7 @@ export async function embedTexts(texts: string[]): Promise<EmbedResult> {
       const res = await fetch(joinUrl(ollamaNativeBase(provider.baseUrl), "api/embed"), {
         method: "POST",
         headers: buildHeaders(provider, { "Content-Type": "application/json" }),
-        body: JSON.stringify({ model: config.model, input: batch }),
+        body: JSON.stringify({ model: config.model, input: batch, ...(fils > 0 ? { options: { num_thread: fils } } : {}) }),
         // Timeout long : le premier appel peut charger le modèle à froid.
         signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
       });
@@ -386,7 +391,7 @@ async function isIndexStale(cwd: string, meta: IndexMeta, pinned: string[]): Pro
   const sources = await collectSources(cwd, pinned);
   const sourceLabels = new Set(sources.map((s) => s.label));
   return (
-    sources.some((s) => meta.files[s.label] !== s.mtimeMs) ||
+    sources.some((s) => !memeDate(meta.files[s.label], s.mtimeMs)) || // T-229 : jamais d'égalité stricte de flottants
     Object.keys(meta.files).some((label) => !sourceLabels.has(label))
   );
 }
@@ -464,14 +469,40 @@ export { formatSearchResults };
  * journal). Import dynamique : le SDK n'est chargé qu'au besoin, comme dans
  * claude.ts.
  */
+/**
+ * Options du serveur interne selon le tour (claude.ts) : un tour du VEILLEUR
+ * (`veilleur: true`, lancé par un message) n'a ni outils `relais_*` (il ne
+ * relance pas un autre studio) ni sessions distantes (sortie vers une autre machine).
+ */
+export function optionsServeurInterne(params: Record<string, unknown>): { relais: boolean; sessionsDistantes: boolean } {
+  const veilleur = params.veilleur === true;
+  return { relais: !veilleur, sessionsDistantes: !veilleur };
+}
+
+/**
+ * Noms des outils du serveur `iaction` pour un tour — décision PURE (testée),
+ * appliquée telle quelle par `buildKnowledgeMcpServer`.
+ */
+export function composerOutilsIaction(c: { sessionsDistantes: boolean; relais: boolean; knowledge: boolean }): string[] {
+  return [
+    "search_chat",
+    "lire_usage",
+    ...(c.sessionsDistantes ? ["sessions_distantes_lister", "session_distante_demander"] : []),
+    ...(c.relais ? ["relais_demander", "relais_reponse"] : []),
+    ...(c.knowledge ? ["search_knowledge"] : []),
+  ];
+}
+
 export async function buildKnowledgeMcpServer(
   cwd: string,
-  options: { demanderUtilisateur?: AskUserBridge; compte?: CompteId; conversationId?: string } = {},
+  options: { demanderUtilisateur?: AskUserBridge; compte?: CompteId; conversationId?: string; relais?: boolean; sessionsDistantes?: boolean } = {},
 ): Promise<unknown | null> {
   if (process.env.IACTION_FAKE_CLAUDE === "1") {
     return null;
   }
   const withKnowledge = await knowledgeIndexExists(cwd);
+  // T-227 — outils du veilleur : seulement si le projet en a un, et jamais dans un tour du veilleur (`relais: false`).
+  const avecRelais = await exposerOutilsRelais(cwd, options.relais);
   try {
     const sdk = await import("@anthropic-ai/claude-agent-sdk");
     const { z } = await import("zod/v4");
@@ -490,13 +521,17 @@ export async function buildKnowledgeMcpServer(
         return { content: [{ type: "text" as const, text: formatChatSearchResults(outcome) }] };
       },
     );
-    // T-178 — outils « sessions distantes » : toujours présents (tout tour local, sous-agents compris).
+    // T-227 — la composition est décidée par `composerOutilsIaction` (pure, testée) : un tour du veilleur
+    // n'a ni sessions distantes (T-178, sortie vers une autre machine) ni outils `relais_*`.
+    const voulus = new Set(composerOutilsIaction({ sessionsDistantes: options.sessionsDistantes !== false, relais: avecRelais, knowledge: withKnowledge }));
+    const garder = (outils: unknown[]) => (outils as typeof chatTool[]).filter((t) => voulus.has((t as unknown as { name: string }).name));
     // T-185 — `demanderUtilisateur` (tours interactifs seulement) : fenêtres de question sur branchement et permissions distantes.
-    const distants = creerOutilsSessionsDistantes(sdk, z, { demanderUtilisateur: options.demanderUtilisateur, conversationId: options.conversationId }) as typeof chatTool[];
+    const distants = voulus.has("session_distante_demander") ? garder(creerOutilsSessionsDistantes(sdk, z, { demanderUtilisateur: options.demanderUtilisateur, conversationId: options.conversationId })) : [];
     // T-202 — consommation de l'abonnement, à la demande : rien n'est injecté dans le prompt.
     const usageTool = creerOutilUsage(sdk, z, { compte: options.compte }) as typeof chatTool;
+    const relais = voulus.has("relais_demander") ? garder(creerOutilsRelaisVeilleur(sdk, z as never, { cwd })) : [];
     if (!withKnowledge) {
-      return sdk.createSdkMcpServer({ name: "iaction", tools: [chatTool, usageTool, ...distants] });
+      return sdk.createSdkMcpServer({ name: "iaction", tools: garder([chatTool, usageTool, ...distants, ...relais]) });
     }
     const searchTool = sdk.tool(
       "search_knowledge",
@@ -515,7 +550,7 @@ export async function buildKnowledgeMcpServer(
         };
       },
     );
-    return sdk.createSdkMcpServer({ name: "iaction", tools: [chatTool, usageTool, ...distants, searchTool] });
+    return sdk.createSdkMcpServer({ name: "iaction", tools: garder([chatTool, usageTool, ...distants, ...relais, searchTool]) });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // `warn` : l'agent tourne sans les outils de recherche (connaissances, Chat).
@@ -586,12 +621,17 @@ export async function handleKnowledgeIndex(
   const files: Record<string, number> = {};
   let done = 0;
   let dim = 0;
+  // T-229 — ce que l'indexation a réellement fait, pour le journal.
+  const debut = Date.now();
+  let reutilises = 0;
+  let morceauxEmbarques = 0;
 
   for (const source of sources) {
     const previous = previousByFile.get(source.label);
-    if (reusable && previous && reusable.files[source.label] === source.mtimeMs) {
-      // mtime inchangé : chunks conservés tels quels, aucun ré-embedding.
+    if (reusable && previous && memeDate(reusable.files[source.label], source.mtimeMs)) {
+      // mtime inchangé (à la milliseconde, T-229) : chunks conservés, aucun ré-embedding.
       nextChunks.push(...previous);
+      reutilises += 1;
     } else {
       const text = await readTextSource(source.abs, await sizeOf(source.abs));
       if (text !== null) {
@@ -599,9 +639,11 @@ export async function handleKnowledgeIndex(
         if (parts.length > 0) {
           const embedded = await embedTexts(parts);
           if (!embedded.ok) {
+            journal.warn("knowledge", "indexation interrompue", { reqId: id, fields: { cwd, fichier: source.label, faits: done, total, dureeMs: Date.now() - debut, cause: embedded.message } });
             emitter.error(id, embedded.message);
             return;
           }
+          morceauxEmbarques += parts.length;
           for (let i = 0; i < parts.length; i++) {
             nextChunks.push({
               file: source.label,
@@ -643,6 +685,10 @@ export async function handleKnowledgeIndex(
     return;
   }
 
+  journal.info("knowledge", "indexation terminée", {
+    reqId: id,
+    fields: { cwd, fichiers: total, reutilises, recalcules: total - reutilises, morceauxEmbarques, morceaux: nextChunks.length, dureeMs: Date.now() - debut, force, modele: config.model },
+  });
   emitter.done(id, { files: total, chunks: nextChunks.length, model: config.model });
 }
 

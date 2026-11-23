@@ -100,6 +100,17 @@ import { balayerFilsInactifs, handleSessionsDistantesArchiverConversation } from
 import { handleSpeechConfigure, handleSpeechSynthesize, handleSpeechTranscribe } from "./speech.js";
 import { signalerPeremption } from "./peremption.js";
 import { handleMajVerifier } from "./maj.js";
+import {
+  arreterVeilleurPourSortir,
+  definirNotificationVeilleur,
+  demarrerVeilleurAuLancement,
+  handleVeilleurActiver,
+  handleVeilleurConfigurer,
+  handleVeilleurDesactiver,
+  handleVeilleurLire,
+  handleVeilleurOublier,
+  handleVeilleurStatut,
+} from "./veilleurProtocole.js";
 
 /**
  * T-016 — la version est LUE, plus recopiée.
@@ -131,7 +142,8 @@ redirigerConsoleVersStderr();
 
 // `coffre:ecrire` / `coffre:retirer` : demandes adressées à la COQUILLE (coffre
 // de secrets), interceptées par Rust et jamais relayées à l'interface.
-type EventName = "ready" | "chunk" | "done" | "error" | "coffre:ecrire" | "coffre:retirer";
+// `veilleur` : non sollicité (sans id, comme `ready`), le statut du veilleur à chaque changement.
+type EventName = "ready" | "chunk" | "done" | "error" | "coffre:ecrire" | "coffre:retirer" | "veilleur";
 
 interface OutgoingEvent {
   id?: string;
@@ -478,6 +490,25 @@ async function dispatch(
       case "speech.synthesize":
         await handleSpeechSynthesize(id, params, engineEmitter);
         break;
+      // T-227 — veilleur du relais (veilleurProtocole.ts).
+      case "veilleur.statut":
+        await handleVeilleurStatut(id, engineEmitter);
+        break;
+      case "veilleur.lire":
+        await handleVeilleurLire(id, params, engineEmitter);
+        break;
+      case "veilleur.configurer":
+        await handleVeilleurConfigurer(id, params, engineEmitter);
+        break;
+      case "veilleur.activer":
+        await handleVeilleurActiver(id, params, engineEmitter);
+        break;
+      case "veilleur.desactiver":
+        await handleVeilleurDesactiver(id, engineEmitter);
+        break;
+      case "veilleur.oublier":
+        await handleVeilleurOublier(id, params, engineEmitter);
+        break;
       default:
         emitMethodeInconnue(id, method);
     }
@@ -568,6 +599,10 @@ function main(): void {
   // T-180 — archive les sessions distantes de fil inactives depuis plus de 7 jours (rien à faire, donc aucun appel réseau, sans association).
   void balayerFilsInactifs();
 
+  // T-227 — veilleur du relais : statut poussé à l'interface ; repart seul si le poste en a un actif.
+  definirNotificationVeilleur((statut) => emit({ event: "veilleur", data: statut }));
+  void demarrerVeilleurAuLancement();
+
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
   rl.on("line", handleLine);
@@ -578,10 +613,13 @@ function main(): void {
     // ralentir un tour), donc un `process.exit(0)` franc jetterait les lignes en
     // vol — dont les dernières avant l'arrêt, exactement celles qui expliquent
     // un plantage. `flushWrites` ne rejette jamais et se borne à quelques tours.
-    void flushWrites().then(
-      () => process.exit(0),
-      () => process.exit(0),
-    );
+    // T-227 — d'abord le veilleur : son tour en cours est interrompu (10 s au plus), pas abandonné en vol.
+    void arreterVeilleurPourSortir(10_000)
+      .then(() => flushWrites())
+      .then(
+        () => process.exit(0),
+        () => process.exit(0),
+      );
   });
 }
 

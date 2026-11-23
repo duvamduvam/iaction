@@ -64,6 +64,40 @@ export async function coffreChangerMotDePasse(ancien: string | null, nouveau: st
   await invoke("coffre_changer_mot_de_passe", { ancien, nouveau });
 }
 
+/**
+ * Déverrouillage automatique sur ce poste (T-225) : l'identité du coffre au
+ * trousseau du système. `permis` est faux sur un Windows joint à un domaine,
+ * ou quand la jonction est indéterminée.
+ */
+export interface EtatAuto {
+  actif: boolean;
+  permis: boolean;
+}
+
+/** Normalise la réponse de `coffre_auto_etat` ; illisible = inactif, non permis. */
+export function lireEtatAuto(brut: unknown): EtatAuto {
+  const o = typeof brut === "object" && brut !== null ? (brut as Record<string, unknown>) : {};
+  return { actif: o.actif === true, permis: o.permis === true };
+}
+
+export async function coffreAutoEtat(): Promise<EtatAuto> {
+  return lireEtatAuto(await invoke("coffre_auto_etat"));
+}
+
+/** Range l'identité du coffre ouvert au trousseau. Refusé si non permis. */
+export async function coffreAutoActiver(): Promise<void> {
+  await invoke("coffre_auto_activer");
+}
+
+export async function coffreAutoDesactiver(): Promise<void> {
+  await invoke("coffre_auto_desactiver");
+}
+
+/** Rouvre le coffre par le trousseau, sans mot de passe. */
+export async function coffreAutoOuvrir(): Promise<void> {
+  await invoke("coffre_auto_ouvrir");
+}
+
 /** S'abonne à l'événement `coffre:etat` ; renvoie le désabonnement. */
 export function ecouterEtatCoffre(f: (etat: EtatPublicCoffre) => void): () => void {
   let fin: (() => void) | null = null;

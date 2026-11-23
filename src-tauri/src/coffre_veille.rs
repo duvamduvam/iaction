@@ -12,17 +12,22 @@
 //!   pour ne pas fermer sur une invite UAC brève. La veille est constatée
 //!   AU RÉVEIL (saut d'horloge) : limite assumée, voir plus bas.
 //!
-//! Chaque détection appelle `coffre_commandes::demander_fermeture`, qui
-//! attend la fin des tours en cours. Un écouteur qui ne peut pas démarrer le
-//! dit dans le journal : jamais d'échec muet.
+//! Chaque détection passe par `fermeture_auto`, qui appelle
+//! `coffre_commandes::demander_fermeture` (attente de la fin des tours en
+//! cours) — sauf si le déverrouillage automatique est actif sur ce poste
+//! (coffre_auto.rs, T-225) : fermer ne protégerait rien, le trousseau
+//! rouvrirait le coffre. Un écouteur qui ne peut pas démarrer le dit dans le
+//! journal : jamais d'échec muet.
 
+use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::json;
 use tauri::AppHandle;
 
-use crate::coffre_commandes::demander_fermeture;
+use crate::coffre::Etat;
+use crate::coffre_commandes::{demander_fermeture, journal};
 
 pub const CAUSE_VEILLE: &str = "mise en veille";
 pub const CAUSE_SESSION: &str = "verrouillage de session";
@@ -30,6 +35,55 @@ pub const CAUSE_SESSION: &str = "verrouillage de session";
 /// Saut d'horloge au-delà duquel on conclut que la machine a dormi.
 const SAUT_VEILLE: Duration = Duration::from_secs(60);
 const PAS_SONDE: Duration = Duration::from_secs(3);
+
+/// Un même verrouillage arrive par plusieurs signaux (`Lock` puis
+/// `LockedHint` sous logind) : une fermeture ignorée ne se dit qu'une fois
+/// par cause dans cette fenêtre.
+const FENETRE_AVIS: Duration = Duration::from_secs(30);
+
+static DERNIER_AVIS: Mutex<Option<(&'static str, Instant)>> = Mutex::new(None);
+
+/// Fermeture automatique, ou son abandon motivé si le déverrouillage
+/// automatique est actif. Trousseau illisible : on ferme, par prudence.
+fn fermeture_auto(app: &AppHandle, cause: &'static str) {
+    if crate::coffre_commandes::etat(app) != Etat::Ouvert {
+        return;
+    }
+    match crate::coffre_auto::actif_ici() {
+        Ok(false) => demander_fermeture(app, cause),
+        Ok(true) => {
+            if premier_avis(cause, Instant::now()) {
+                journal(
+                    app,
+                    "info",
+                    "coffre laissé ouvert : déverrouillage automatique actif sur ce poste",
+                    json!({ "cause": cause }),
+                );
+            }
+        }
+        Err(e) => {
+            journal(
+                app,
+                "warn",
+                "déverrouillage automatique : trousseau illisible, coffre fermé par prudence",
+                json!({ "cause": cause, "erreur": e }),
+            );
+            demander_fermeture(app, cause);
+        }
+    }
+}
+
+fn premier_avis(cause: &'static str, maintenant: Instant) -> bool {
+    let mut dernier = match DERNIER_AVIS.lock() {
+        Ok(g) => g,
+        Err(empoisonne) => empoisonne.into_inner(),
+    };
+    let deja = matches!(*dernier, Some((c, t)) if c == cause && maintenant.duration_since(t) < FENETRE_AVIS);
+    if !deja {
+        *dernier = Some((cause, maintenant));
+    }
+    !deja
+}
 
 /// Démarre les écouteurs de la plateforme.
 pub fn demarrer(app: &AppHandle) {
@@ -76,7 +130,7 @@ fn sonder_saut_horloge(app: &AppHandle) {
         thread::sleep(PAS_SONDE);
         let maintenant = SystemTime::now();
         if est_saut_de_veille(avant, maintenant) {
-            demander_fermeture(app, CAUSE_VEILLE);
+            fermeture_auto(app, CAUSE_VEILLE);
         }
         avant = maintenant;
     }
@@ -99,8 +153,7 @@ mod linux {
     use dbus::message::{MatchRule, SignalArgs};
     use tauri::AppHandle;
 
-    use super::{CAUSE_SESSION, CAUSE_VEILLE};
-    use crate::coffre_commandes::demander_fermeture;
+    use super::{fermeture_auto, CAUSE_SESSION, CAUSE_VEILLE};
 
     const LOGIND: &str = "org.freedesktop.login1";
 
@@ -113,7 +166,7 @@ mod linux {
             MatchRule::new_signal("org.freedesktop.login1.Manager", "PrepareForSleep"),
             move |(avant,): (bool,), _, _| {
                 if avant {
-                    demander_fermeture(&a, CAUSE_VEILLE);
+                    fermeture_auto(&a, CAUSE_VEILLE);
                 }
                 true
             },
@@ -134,7 +187,7 @@ mod linux {
                 conn.add_match(
                     MatchRule::new_signal("org.freedesktop.login1.Session", "Lock").with_path(chemin.clone()),
                     move |(): (), _, _| {
-                        demander_fermeture(&a, CAUSE_SESSION);
+                        fermeture_auto(&a, CAUSE_SESSION);
                         true
                     },
                 )
@@ -144,7 +197,7 @@ mod linux {
                     PropertiesPropertiesChanged::match_rule(None, Some(&chemin)).static_clone(),
                     move |pc: PropertiesPropertiesChanged, _, _| {
                         if verrouille(&pc.changed_properties) {
-                            demander_fermeture(&a, CAUSE_SESSION);
+                            fermeture_auto(&a, CAUSE_SESSION);
                         }
                         true
                     },
@@ -180,8 +233,7 @@ mod windows {
     use tauri::AppHandle;
     use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, OpenInputDesktop, DESKTOP_SWITCHDESKTOP};
 
-    use super::{est_saut_de_veille, CAUSE_SESSION, CAUSE_VEILLE, PAS_SONDE};
-    use crate::coffre_commandes::demander_fermeture;
+    use super::{est_saut_de_veille, fermeture_auto, CAUSE_SESSION, CAUSE_VEILLE, PAS_SONDE};
 
     /// Vrai quand le bureau d'entrée n'est pas accessible (écran verrouillé).
     fn ecran_verrouille() -> bool {
@@ -204,13 +256,13 @@ mod windows {
             thread::sleep(PAS_SONDE);
             let maintenant = SystemTime::now();
             if est_saut_de_veille(avant, maintenant) {
-                demander_fermeture(app, CAUSE_VEILLE);
+                fermeture_auto(app, CAUSE_VEILLE);
             }
             avant = maintenant;
             if ecran_verrouille() {
                 sondes_verrouillees += 1;
                 if sondes_verrouillees == 2 {
-                    demander_fermeture(app, CAUSE_SESSION);
+                    fermeture_auto(app, CAUSE_SESSION);
                 }
             } else {
                 sondes_verrouillees = 0;
@@ -230,5 +282,14 @@ mod tests {
         assert!(est_saut_de_veille(t0, t0 + Duration::from_secs(600)));
         // Horloge reculée (réglage NTP) : pas une veille.
         assert!(!est_saut_de_veille(t0, t0 - Duration::from_secs(600)));
+    }
+
+    #[test]
+    fn fermeture_ignoree_dite_une_fois_par_evenement() {
+        let t0 = Instant::now();
+        assert!(premier_avis(CAUSE_SESSION, t0));
+        assert!(!premier_avis(CAUSE_SESSION, t0 + Duration::from_secs(1)), "Lock puis LockedHint : un seul avis");
+        assert!(premier_avis(CAUSE_VEILLE, t0 + Duration::from_secs(2)), "autre cause : nouvel avis");
+        assert!(premier_avis(CAUSE_VEILLE, t0 + Duration::from_secs(2) + FENETRE_AVIS), "fenêtre passée : nouvel avis");
     }
 }

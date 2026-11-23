@@ -28,7 +28,7 @@ import { createTurnPrompt } from "./claudeTurnPrompt.js";
 import { OUTILS_CRON_INTERDITS } from "./reveilOutil.js";
 import { buildStudioMcpServer, outilStudioSansValidation, type AskUserAnswer } from "./askUser.js";
 import { appliquerSurQuery, executerClaudeSetModel, type PontChangerModele } from "./changerModele.js";
-import { buildKnowledgeMcpServer } from "./knowledge.js";
+import { buildKnowledgeMcpServer, optionsServeurInterne } from "./knowledge.js";
 import {
   buildRuntimeSnapshot,
   ensureMcpDoc,
@@ -82,7 +82,7 @@ export type {
 export { extractContextTokens, extractUsage, summarizeToolResult, type Usage } from "./claudeMesures.js";
 import type { CanUseTool, ClaudeQuery, ClaudeQueryFn, ClaudeQueryOptions, PermissionResult } from "./claudeTypes.js";
 import { extractContextTokens, extractUsage, summarizeToolResult } from "./claudeMesures.js";
-import { crochetsSecrets } from "./gardeSecrets.js";
+import { crochetsSecrets, modeVeilleur } from "./gardeSecrets.js";
 
 // ---------------------------------------------------------------------------
 // Utilitaires
@@ -353,7 +353,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
     // `mcp__iaction__search_knowledge`, voir knowledge.ts), exposé SEULEMENT
     // quand l'index du projet existe — même flux de permission que les autres
     // outils MCP (canUseTool). Jamais en mode chat pur. T-185 : pont de question pour les sessions distantes.
-    const knowledgeServer = chatOnly ? null : await buildKnowledgeMcpServer(cwd, { ...(interactive ? { demanderUtilisateur: askUser } : {}), compte: compte.compte, ...(isPlainObject(params.meta) && isNonEmptyString(params.meta.conversationId) ? { conversationId: params.meta.conversationId } : {}) }); // T-180 : conversation IAction = clé des sessions distantes sur relais
+    const knowledgeServer = chatOnly ? null : await buildKnowledgeMcpServer(cwd, { ...(interactive ? { demanderUtilisateur: askUser } : {}), compte: compte.compte, ...(isPlainObject(params.meta) && isNonEmptyString(params.meta.conversationId) ? { conversationId: params.meta.conversationId } : {}), ...optionsServeurInterne(params) }); // T-180 : conversation IAction = clé des sessions distantes sur relais ; T-227 : ni outils relais_* ni sessions distantes dans un tour du veilleur (knowledge.ts)
 
     const canUseTool: CanUseTool = (toolName, toolInput, toolOptions) => {
       // `ask_user`, `changer_modele`, `compacter`, `programmer_reveil` : sans modale (raisons dans askUser.ts).
@@ -390,7 +390,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       permissionMode: isNonEmptyString(permissionModeParam) ? permissionModeParam : "default",
       env: {
         ...process.env,
-        ...compte.env, // CLAUDE_CONFIG_DIR du compte choisi (vide pour perso) — seul ajout, aucun jeton
+        ...compte.env, ...(params.veilleur === true ? { CLAUDE_CODE_ENABLE_CFC: "0" } : {}), // CLAUDE_CONFIG_DIR du compte choisi (vide pour perso), aucun jeton ; T-227 : Claude in Chrome explicitement éteint dans un tour du veilleur
         // Une question posée à l'humain occupe l'outil `ask_user` le temps
         // qu'il réponde : sans plafond relevé, le délai d'exécution des outils
         // MCP du CLI couperait la question au bout de quelques dizaines de
@@ -401,7 +401,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
           : {}),
         ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
       },
-      canUseTool, hooks: chatOnly ? undefined : crochetsSecrets(cwd), // T-220 : garde des fichiers de secrets (gardeSecrets.ts)
+      canUseTool, hooks: chatOnly ? undefined : crochetsSecrets(cwd, modeVeilleur(params)), // T-220 : garde des fichiers de secrets (gardeSecrets.ts) ; T-227 : plus la config du projet dans un tour du veilleur
     };
     if (chatOnly) {
       options.tools = webSearch ? ["WebSearch", "WebFetch"] : [];
@@ -412,12 +412,12 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       // dans chaque projet. Contrepartie assumée : les réglages utilisateur
       // globaux (~/.claude/settings.json : permissions, effortLevel) entrent
       // aussi dans les tours de l'app. 'project' → CLAUDE.md du projet.
-      options.settingSources = ["user", "project", "local"];
+      options.settingSources = params.veilleur === true ? ["project", "local"] : ["user", "project", "local"]; // T-227 : rien des réglages du poste dans un tour du veilleur
       // T-205 — Claude in Chrome TOUJOURS activé pour le moteur projet
       // (décision de David, 2026-11-07, risque accepté : un agent autonome
       // pilote le vrai Chrome et ses sessions ouvertes). Sans `--chrome`, le
       // CLI n'expose aucun outil `mcp__claude-in-chrome__*`.
-      options.extraArgs = { chrome: null };
+      if (params.veilleur !== true) options.extraArgs = { chrome: null }; else { options.strictMcpConfig = true; options.extraArgs = { "no-chrome": null }; } // T-227 : tour du veilleur = ni navigateur (--no-chrome), ni MCP hors des serveurs in-process passés ici
       // AskUserQuestion retiré : non fonctionnel via le SDK (voir le champ
       // `disallowedTools`) — le modèle pose ses questions en texte, ce qui
       // marche. Le mode chat pur n'a de toute façon aucun outil. S'y ajoutent
@@ -453,7 +453,7 @@ export function createClaudeEngine(deps: { queryFn: ClaudeQueryFn }): ClaudeEngi
       options.model = modelParam;
     }
     const effort = effortValide(params.effort); // effort de raisonnement, posé seulement s'il est valide (claudeEffort.ts)
-    if (effort) options.effort = effort;
+    if (effort) options.effort = effort; if (typeof params.maxBudgetUsd === "number" && params.maxBudgetUsd > 0) options.maxBudgetUsd = params.maxBudgetUsd; // T-227 : plafond de coût tenu par le moteur (`error_max_budget_usd`)
     // Instruction système, voir paletteTour.ts : preset Claude Code hors chat pur (T-052), annonce des outils `studio` armés (T-019, T-210).
     const instr = composerInstructionSysteme(isNonEmptyString(systemPromptParam) ? systemPromptParam : null, studio?.ask === true, !chatOnly, studio);
     if (instr) options.systemPrompt = instr;

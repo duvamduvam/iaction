@@ -95,7 +95,8 @@ import {
 import { FileEditorView, type OpenFileState } from "./FileEditor";
 import { FileTree } from "./FileTree";
 import { fsReadFile, fsWriteFile, sondesDisque, type DirEntry } from "./fsClient";
-import { McpPanel } from "./McpPanel";
+import { McpSection } from "./McpSection";
+import { VeilleurSection } from "./VeilleurSection";
 import { useFavorisModeles } from "./useFavorisModeles";
 import { agentsList, type AgentInfo, type AgentScope } from "./orchestrationClient";
 import {
@@ -679,10 +680,9 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
   // FileTree comme celui des références de fichiers du fil (menuReference.tsx).
   const apps = useApps();
 
-  // MCP : le panneau (McpPanel.tsx) interroge `mcp.status` lui-même — la page
-  // ne garde que le compteur du badge et un jeton de rafraîchissement, bumpé
-  // au chunk `init` de chaque tour (l'état constaté vient d'être réécrit).
-  const [mcpServerCount, setMcpServerCount] = useState(0);
+  // MCP : la section (McpSection.tsx) interroge `mcp.status` et tient son badge
+  // — la page ne garde qu'un jeton de rafraîchissement, bumpé au chunk `init`
+  // de chaque tour (l'état constaté vient d'être réécrit).
   const [mcpReloadToken, setMcpReloadToken] = useState(0);
 
   // Les compteurs d'appels par serveur MCP sont PAR CONVERSATION (portés par
@@ -2751,19 +2751,8 @@ export const AgentPage = forwardRef<AgentPageHandle, AgentPageProps>(function Ag
             pinKnowledge={pinKnowledge}
           />
 
-          <SidebarSection
-            id="mcp"
-            title="MCP"
-            defaultOpen={false}
-            badge={mcpServerCount > 0 ? <span className="sidebar-section__count">{mcpServerCount}</span> : undefined}
-          >
-            <McpPanel
-              cwd={cwd}
-              usage={mcpUsage}
-              reloadToken={mcpReloadToken}
-              onServerCount={setMcpServerCount}
-            />
-          </SidebarSection>
+          <McpSection cwd={cwd} usage={mcpUsage} reloadToken={mcpReloadToken} />
+          <VeilleurSection cwd={cwd} />
         </PanneauLateral>
       </div>
 

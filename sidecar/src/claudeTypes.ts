@@ -87,6 +87,10 @@ export interface ClaudeQueryOptions {
   settingSources?: ("user" | "project" | "local")[];
   /** Drapeaux CLI bruts transmis par le SDK (`null` = drapeau sans valeur). */
   extraArgs?: Record<string, string | null>;
+  /** Plafond de coût de la requête, en $ : au-delà, le moteur s'arrête (`error_max_budget_usd`). T-227. */
+  maxBudgetUsd?: number;
+  /** Seuls les `mcpServers` passés ici : ni `.mcp.json`, ni réglages utilisateur, ni plugins (`--strict-mcp-config`). T-227. */
+  strictMcpConfig?: boolean;
   /**
    * Outils intégrés retirés du contexte du modèle. On y met `AskUserQuestion` :
    * son formulaire interactif ne peut PAS être rendu ni répondu via l'API

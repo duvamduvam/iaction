@@ -50,6 +50,8 @@ export const LOG_SCOPES = [
   "mcp",
   /** T-120 — réveil d'une conversation (docs/spec-reveil.md §6) : échéance honorée ou abandonnée. */
   "reveil",
+  /** T-227 — veilleur du relais : relèves, tours, dépôts, transitions d'état. */
+  "relais",
 ] as const;
 
 export type LogScope = (typeof LOG_SCOPES)[number];

@@ -31,6 +31,9 @@ export const LOG_SCOPES = [
   "router",
   "usage",
   "mcp",
+  // Oubliés ici jusqu'à T-227 : `reveil` (T-120) était relu comme `sidecar`.
+  "reveil",
+  "relais",
 ] as const;
 
 export type LogScope = (typeof LOG_SCOPES)[number];

@@ -7617,3 +7617,61 @@ html.sonde-nu--3 *:not([data-sonde-frappe]) {
   margin: var(--space-3) 0;
   padding: var(--space-2) var(--space-3);
 }
+
+/* Veilleur du relais (VeilleurSection.tsx, VeilleurIndicateur.tsx) — même
+   vocabulaire que la pastille du coffre ; la couleur dit l'état. */
+.veilleur {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.veilleur__etat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.veilleur__etat > p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.veilleur__projet {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-2);
+}
+
+.veilleur__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.veilleur-bouton {
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--status-ok);
+  background: transparent;
+  color: var(--status-ok);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.veilleur-bouton--warn {
+  border-color: var(--status-warn);
+  color: var(--status-warn);
+}
+
+.veilleur-bouton--bad {
+  border-color: var(--status-error);
+  color: var(--status-error);
+}
+
+.mcp-pill--off {
+  opacity: 0.7;
+}

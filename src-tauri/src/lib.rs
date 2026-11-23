@@ -1,6 +1,7 @@
 mod audio_peripheriques;
 mod clipboard;
 mod coffre;
+mod coffre_auto;
 mod coffre_commandes;
 mod coffre_gestion;
 mod coffre_migration;
@@ -170,6 +171,11 @@ pub fn run() {
             // peut pas journaliser sa propre mort subite ; on peut constater
             // sa propre résurrection.
             session_vie::ouvrir(app.handle());
+            // T-225 — déverrouillage automatique du coffre (poste hors
+            // domaine, entrée au trousseau) : SYNCHRONE, avant que l'interface
+            // ne demande `coffre_etat`, pour que la modale du mot de passe ne
+            // se présente pas ; avant le sidecar, qui naît alors avec la table.
+            coffre_auto::tenter_au_lancement(app.handle());
             sidecar::spawn_supervisor(app.handle().clone(), sidecar::ORIGINE_PREMIER_DEMARRAGE);
             // Coffre de secrets : fermeture à la veille et au verrouillage de
             // session (docs/etude-coffre-secrets.md § 4.3).
@@ -261,6 +267,10 @@ pub fn run() {
             coffre_commandes::coffre_deverrouiller_secours,
             coffre_commandes::coffre_verrouiller,
             coffre_commandes::coffre_changer_mot_de_passe,
+            coffre_auto::coffre_auto_etat,
+            coffre_auto::coffre_auto_activer,
+            coffre_auto::coffre_auto_desactiver,
+            coffre_auto::coffre_auto_ouvrir,
             coffre_gestion::coffre_secrets,
             coffre_gestion::coffre_reclasser,
             coffre_gestion::coffre_poste_domaine,

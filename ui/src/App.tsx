@@ -30,6 +30,7 @@ import { Nav } from "./barreNavigation";
 import { basculerTousPanneaux } from "./panneauxLateraux";
 import { UsageWidget } from "./encartConso";
 import { CoffreControle } from "./CoffreControle";
+import { VeilleurIndicateur } from "./VeilleurIndicateur";
 
 /* ---------- Sonde système (CPU / RAM / GPU) ---------- */
 
@@ -267,6 +268,7 @@ function Header({
           <ContextWidget source={contextSourceFor(page)} />
           <SystemStatsWidget />
           <UsageWidget />
+          <VeilleurIndicateur onOuvrir={() => onSelectPage("projects")} />
           <CoffreControle />
         </div>
       </div>

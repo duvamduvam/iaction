@@ -130,12 +130,17 @@ pub fn pousser_au_sidecar(app: &AppHandle) {
     } else {
         crate::coffre_gestion::secrets_sans_fenetre_mcp(app)
     };
-    secrets.extend(table.unwrap_or_default());
+    let table = table.unwrap_or_default();
+    // T-227 — la CLASSE voyage avec la table : le sidecar n'accepte un scellé
+    // du veilleur que de la classe `coffre` (jamais du trousseau `sans-fenetre`).
+    let noms_coffre: Vec<&String> = table.keys().collect();
+    let noms_coffre = json!(noms_coffre);
+    secrets.extend(table);
     let nombre = secrets.len();
     let requete = json!({
         "id": nouvel_id("charger"),
         "method": "coffre.charger",
-        "params": { "etat": etat, "secrets": secrets },
+        "params": { "etat": etat, "secrets": secrets, "nomsCoffre": noms_coffre },
     });
     if let Err(err) = ecrire_requete(app, requete) {
         // Pas d'erreur visible : sidecar en (re)démarrage, il sera servi à sa naissance.
@@ -287,7 +292,9 @@ pub fn etat(app: &AppHandle) -> Etat {
 
 /// Pose une valeur au coffre (classe conservée, `coffre` par défaut).
 pub fn poser(app: &AppHandle, compte: &str, valeur: &str) -> Result<Classe, String> {
-    let classe = classe(app, compte).unwrap_or_default();
+    // T-227 — un scellé du veilleur va TOUJOURS au coffre chiffré, même si une
+    // version antérieure l'avait classé `sans-fenetre` (il en sort alors).
+    let classe = if crate::coffre_gestion::est_nom_scelle(compte) { Classe::Coffre } else { classe(app, compte).unwrap_or_default() };
     if classe == Classe::SansFenetre {
         crate::secrets::trousseau_poser(compte, valeur)?;
     }
@@ -296,6 +303,14 @@ pub fn poser(app: &AppHandle, compte: &str, valeur: &str) -> Result<Classe, Stri
         // La copie au trousseau (d'avant le coffre) n'a plus lieu d'être.
         // Après l'écriture réussie du coffre, jamais avant.
         crate::secrets::trousseau_retirer(compte);
+    }
+    if crate::coffre_gestion::est_nom_scelle(compte) {
+        // Ancien classement `sans-fenetre` : le nom quitte aussi l'index.
+        let d = crate::config_store::app_config_dir(app)?;
+        let mut index = crate::coffre_gestion::lire_index(&d);
+        if index.remove(compte) {
+            crate::coffre_gestion::ecrire_index(&d, &index)?;
+        }
     }
     Ok(classe)
 }
@@ -317,7 +332,9 @@ pub fn retirer(app: &AppHandle, compte: &str) -> Result<bool, String> {
 // Commandes de l'interface
 // ---------------------------------------------------------------------------
 
-fn apres_ouverture(app: &AppHandle, comment: &str) {
+/// Suites communes à toute ouverture (mot de passe, clé de secours,
+/// déverrouillage automatique de coffre_auto.rs) : table poussée, état publié.
+pub(crate) fn apres_ouverture(app: &AppHandle, comment: &str) {
     verrou(app).attente = None;
     journal(app, "info", "coffre ouvert", json!({ "par": comment }));
     if avec_coffre(app, |c| c.repli_precedent()).unwrap_or(false) {

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { fragmentDeControle, libelleEtat, lireEtatCoffre, texteMcpEcartes } from "./coffreClient";
+import { fragmentDeControle, libelleEtat, lireEtatAuto, lireEtatCoffre, texteMcpEcartes } from "./coffreClient";
+
+describe("lireEtatAuto — déverrouillage automatique (T-225)", () => {
+  it("ne retient que des booléens vrais", () => {
+    expect(lireEtatAuto({ actif: true, permis: true })).toEqual({ actif: true, permis: true });
+    expect(lireEtatAuto({ actif: "oui", permis: 1 })).toEqual({ actif: false, permis: false });
+    expect(lireEtatAuto(null)).toEqual({ actif: false, permis: false });
+  });
+});
 
 describe("coffreClient", () => {
   it("lit un état valide et refuse le reste", () => {

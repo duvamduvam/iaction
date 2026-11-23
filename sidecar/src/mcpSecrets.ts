@@ -126,6 +126,13 @@ export type EtatCoffre = "absent" | "verrouille" | "ouvert";
 
 let etatCoffre: EtatCoffre = "absent";
 let tableCoffre: Record<string, string> = {};
+/**
+ * T-227 — noms de la table venus de la classe `coffre` (chiffrée), tels que
+ * la coquille les déclare (`nomsCoffre`). Les autres viennent du trousseau
+ * `sans-fenetre`, écrivable par un shell du compte. Coquille ancienne (sans
+ * `nomsCoffre`) : vide — aucun scellé n'est alors reconnu.
+ */
+let nomsClasseCoffre = new Set<string>();
 /** La coquille a-t-elle déjà poussé un état ? Faux = sidecar sans coquille (tâche de fond). */
 let chargeParCoquille = false;
 
@@ -188,11 +195,21 @@ export function etatDuCoffre(): EtatCoffre {
 }
 
 /** Remplace l'état et la table (méthode `coffre.charger`). */
-export function chargerCoffre(etat: EtatCoffre, secrets: Record<string, string>): void {
+export function chargerCoffre(etat: EtatCoffre, secrets: Record<string, string>, nomsCoffre: string[] = []): void {
   etatCoffre = etat;
   chargeParCoquille = true;
   // Verrouillé, la coquille ne pousse que les `sans-fenetre` : on les garde.
   tableCoffre = etat === "absent" ? {} : { ...secrets };
+  nomsClasseCoffre = etat === "ouvert" ? new Set(nomsCoffre.filter((n) => Object.hasOwn(tableCoffre, n))) : new Set();
+}
+
+/**
+ * Le coffre CHIFFRÉ (classe `coffre`, coffre ouvert) sert-il `nom` avec
+ * exactement `valeur` ? Seule source acceptée pour un scellé du veilleur :
+ * ni la classe `sans-fenetre` (trousseau), ni l'ancien fichier en clair.
+ */
+export function coffreChiffreContient(nom: string, valeur: string): boolean {
+  return coffreContient(nom, valeur) && nomsClasseCoffre.has(nom);
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +404,7 @@ export async function handleMcpSecretDelete(
 // ---------------------------------------------------------------------------
 
 /**
- * `coffre.charger {etat, secrets}` — la coquille pousse l'état du coffre et,
+ * `coffre.charger {etat, secrets, nomsCoffre?}` — la coquille pousse l'état du coffre et,
  * ouvert, la table des secrets MCP. Réponse : le NOMBRE de secrets, jamais
  * un nom ni une valeur (la réponse n'est pas relayée, mais par principe).
  */
@@ -403,8 +420,10 @@ export function handleCoffreCharger(id: string, params: Record<string, unknown>,
       if (typeof v === "string") secrets[k] = v;
     }
   }
+  // T-227 — classe `coffre` déclarée par la coquille (absente : coquille ancienne, aucun scellé reconnu).
+  const nomsCoffre = Array.isArray(params.nomsCoffre) ? params.nomsCoffre.filter((n): n is string => typeof n === "string") : [];
   const avant = etatCoffre;
-  chargerCoffre(etat, secrets);
+  chargerCoffre(etat, secrets, nomsCoffre);
   const nombre = Object.keys(tableCoffre).length;
   if (avant !== etat) {
     journal.info("mcp", "état du coffre reçu de la coquille", { fields: { etat, secrets: nombre } });

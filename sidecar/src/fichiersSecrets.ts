@@ -13,9 +13,24 @@
 
 import path from "node:path";
 
+/**
+ * Chemin comparable (T-227) : séparateurs unifiés, barres doubles réduites,
+ * minuscules, et points/espaces finaux de CHAQUE segment retirés — Windows
+ * les ignore, si bien que `.iaction\\veilleur.json.` y désigne le même fichier.
+ */
+export function cheminNormalise(chemin: string): string {
+  return chemin
+    .replace(/\\/g, "/")
+    .replace(/\/{2,}/g, "/")
+    .toLowerCase()
+    .split("/")
+    .map((s) => (s === "." || s === ".." ? s : s.replace(/[. ]+$/, "")))
+    .join("/");
+}
+
 /** Nom de base, séparateurs des deux systèmes acceptés. */
 function nomDeBase(chemin: string): string {
-  return path.basename(chemin.replace(/\\/g, "/")).toLowerCase();
+  return path.posix.basename(cheminNormalise(chemin));
 }
 
 /** `.env`, `.env.local`, `api.env`… mais pas `.env.example`. */
@@ -58,10 +73,39 @@ export function motifSecretDansContenu(contenu: Buffer, connus: string[] = []): 
   return null;
 }
 
+/**
+ * Config du veilleur (`.iaction/veilleur.json`) : elle AUTORISE l'exécution
+ * autonome de messages reçus (T-227). Un agent ne doit jamais l'écrire —
+ * sinon un message piégé pourrait élargir son propre périmètre.
+ */
+export function estConfigVeilleur(chemin: string): boolean {
+  const c = cheminNormalise(chemin);
+  return c === ".iaction/veilleur.json" || c.endsWith("/.iaction/veilleur.json");
+}
+
+/**
+ * Ce qu'un tour du VEILLEUR (lancé par un message, sans humain) ne peut pas
+ * écrire, en plus des secrets : la config MCP, les réglages Claude du projet,
+ * et tout `.iaction/`. Barrière contre la maladresse : avec Bash, un agent
+ * déterminé passe (cp, mv, interpréteur) — c'est le scellé de la config qui
+ * la protège (veilleurConfig.ts, `empreinteConfig`).
+ */
+export function estCheminProtegeVeilleur(chemin: string, sansBash = false): boolean {
+  const c = cheminNormalise(chemin);
+  const segments = c.split("/");
+  const nom = segments[segments.length - 1] ?? "";
+  if (nom === ".mcp.json") return true;
+  if (segments.includes(".iaction")) return true;
+  // Sans Bash, la garde n'est plus contournable par un shell : tout `.claude/` et `CLAUDE.md` en plus.
+  if (sansBash && (segments.includes(".claude") || nom === "claude.md")) return true;
+  const i = segments.lastIndexOf(".claude");
+  return i >= 0 && i === segments.length - 2 && /^settings.*\.json$/.test(nom);
+}
+
 /** Ce qu'un agent ne peut pas écrire dans un projet. */
 export function estFichierSecretBloque(chemin: string): boolean {
   const nom = nomDeBase(chemin);
-  return estFichierEnv(chemin) || nom.endsWith(".pem") || nom.endsWith(".key");
+  return estFichierEnv(chemin) || nom.endsWith(".pem") || nom.endsWith(".key") || estConfigVeilleur(chemin);
 }
 
 const NOMS_SENSIBLES = new Set([
@@ -90,7 +134,7 @@ export function estFichierSensible(chemin: string): boolean {
   if (NOMS_SENSIBLES.has(nom)) return true;
   if (PREFIXES_SENSIBLES.some((p) => nom.startsWith(p))) return true;
   if (SUFFIXES_SENSIBLES.some((s) => nom.endsWith(s))) return true;
-  const segments = chemin.replace(/\\/g, "/").toLowerCase().split("/");
+  const segments = cheminNormalise(chemin).split("/");
   return segments.some((s) => DOSSIERS_SENSIBLES.has(s));
 }
 

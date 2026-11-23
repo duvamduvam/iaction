@@ -277,6 +277,38 @@ impl Coffre {
         }
     }
 
+    /// Ouvre le coffre par son identité X25519, lue au trousseau du système
+    /// (déverrouillage automatique, coffre_auto.rs — T-225). Une identité
+    /// illisible ou étrangère à ce coffre est une erreur qui ne change pas
+    /// l'état et ne compte PAS comme un essai raté : ce n'est pas une saisie,
+    /// c'est une entrée de trousseau périmée.
+    pub fn deverrouiller_par_identite(&mut self, identite: &str) -> Result<(), Erreur> {
+        let Some(identite) = lire_identite(identite) else {
+            return Err(Erreur::Technique("clé du déverrouillage automatique illisible".into()));
+        };
+        // Table absente sans version précédente : `ouvrir_avec` réécrirait une
+        // table vide sous CETTE identité, sans vérifier qu'elle est celle de
+        // `coffre.cle.age`. Acceptable au mot de passe (l'identité en sort),
+        // pas pour une entrée de trousseau qui peut dater d'un autre coffre.
+        if !self.chemin(FICHIER_COFFRE).exists() && !self.chemin(FICHIER_PRECEDENT).exists() {
+            return Err(Erreur::Technique(
+                "table du coffre absente : ouvre le coffre par le mot de passe".into(),
+            ));
+        }
+        match self.ouvrir_avec(identite, false) {
+            Err(Erreur::CleDeSecoursInvalide) => Err(Erreur::Technique(
+                "clé du déverrouillage automatique sans rapport avec ce coffre".into(),
+            )),
+            autre => autre,
+        }
+    }
+
+    /// Identité du coffre ouvert (`AGE-SECRET-KEY-1…`), pour la ranger au
+    /// trousseau (déverrouillage automatique). Jamais journalisée.
+    pub fn identite_courante(&self) -> Result<SecretString, Erreur> {
+        self.ouvert.as_ref().map(|o| o.identite.to_string()).ok_or(Erreur::Verrouille)
+    }
+
     /// Ferme le coffre : la table et l'identité quittent la mémoire (effacées).
     pub fn verrouiller(&mut self) {
         self.ouvert = None;

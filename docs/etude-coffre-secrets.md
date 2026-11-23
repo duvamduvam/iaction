@@ -89,7 +89,7 @@ n'y change rien ; c'est à savoir, pas à corriger ici.
 |---|---|---|
 | A | Verser les secrets MCP dans le trousseau | ne protège pas du DPAPI du domaine, donc pas de la menace prioritaire |
 | C | Gestionnaire externe (KeePassXC, Bitwarden en ligne de commande) | installation souvent refusée sur un poste administré ; comportement différent selon l'OS |
-| D | Clé du coffre mémorisée dans le trousseau | la remet à portée du DPAPI : annule le gain au bureau |
+| D | Clé du coffre mémorisée dans le trousseau | la remet à portée du DPAPI : annule le gain au bureau. **Rouverte le 2026-11-19 pour les postes hors domaine, au choix par poste (T-225)** : toujours refusée sur un Windows joint à un domaine ou de jonction indéterminée |
 
 Retenue : **B**, coffre `age` intégré. `age` plutôt qu'un format maison : format
 public et relu, crate Rust pure, et **récupérable sans IAction** (`age -d`).
@@ -165,6 +165,14 @@ interface                    sidecar : table MCP en mémoire,
   immédiat.
 - **Bouton** de verrouillage manuel dans l'en-tête, à côté des jauges.
 - **Tentatives** : délai croissant après trois échecs.
+- **Déverrouillage automatique** (option D, rouverte le 2026-11-19 pour les
+  postes hors domaine, au choix par poste — T-225) : case « Déverrouiller
+  automatiquement sur ce poste ». L'identité du coffre va au trousseau du
+  système ; au lancement, le coffre s'ouvre sans mot de passe, et la veille
+  comme le verrouillage de session ne le ferment plus (le trousseau le
+  rouvrirait). Refusée, et toute entrée retirée au lancement, sur un Windows
+  joint à un domaine ou de jonction indéterminée : le poste du bureau reste au
+  mot de passe.
 - **Journal** : ouverture, fermeture (et sa cause), échec, secret posé, retiré
   ou reclassé, avec le **nom** seulement. La valeur ne sort jamais.
 

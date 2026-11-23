@@ -4,13 +4,20 @@
  *
  * Quatre onglets : la liste des secrets (noms, classe, reclassement), la
  * migration du trousseau et de l'ancien fichier MCP, l'inventaire des `.env`
- * des projets, le changement de mot de passe. Aucune valeur n'est jamais
+ * des projets, le changement de mot de passe et le déverrouillage
+ * automatique sur ce poste (T-225). Aucune valeur n'est jamais
  * affichée ni reçue ici.
  */
 import { useEffect, useState } from "react";
 import { toMessage } from "./base";
 import { Modal } from "./Modal";
-import { coffreChangerMotDePasse } from "./coffreClient";
+import {
+  coffreAutoActiver,
+  coffreAutoDesactiver,
+  coffreAutoEtat,
+  coffreChangerMotDePasse,
+  type EtatAuto,
+} from "./coffreClient";
 import {
   avertissementSansFenetre,
   coffrePosteDomaine,
@@ -64,7 +71,12 @@ export function SecretsCoffre({ onClose, onglet: initial }: Readonly<{ onClose: 
           {onglet === "secrets" && <ListeSecrets />}
           {onglet === "migration" && <Migration />}
           {onglet === "env" && <FichiersEnv />}
-          {onglet === "mdp" && <MotDePasse />}
+          {onglet === "mdp" && (
+            <>
+              <MotDePasse />
+              <DeverrouillageAuto />
+            </>
+          )}
         </div>
       </div>
     </Modal>
@@ -229,5 +241,64 @@ function MotDePasse() {
         </button>
       </div>
     </form>
+  );
+}
+
+/** Déverrouillage automatique sur ce poste (T-225) : identité du coffre au trousseau. */
+function DeverrouillageAuto() {
+  const [etat, setEtat] = useState<EtatAuto | null>(null);
+  const [erreur, setErreur] = useState("");
+  const [occupe, setOccupe] = useState(false);
+
+  async function recharger() {
+    try {
+      setEtat(await coffreAutoEtat());
+    } catch (err) {
+      setErreur(message(err));
+    }
+  }
+
+  useEffect(() => {
+    void recharger();
+  }, []);
+
+  async function basculer(actif: boolean) {
+    setErreur("");
+    setOccupe(true);
+    try {
+      if (actif) await coffreAutoActiver();
+      else await coffreAutoDesactiver();
+    } catch (err) {
+      setErreur(message(err));
+    } finally {
+      setOccupe(false);
+      await recharger();
+    }
+  }
+
+  const permis = etat?.permis === true;
+  return (
+    <div className="field">
+      <label htmlFor="coffre-auto">
+        <input
+          id="coffre-auto"
+          type="checkbox"
+          checked={etat?.actif === true}
+          disabled={etat === null || occupe || (!permis && etat.actif !== true)}
+          onChange={(e) => void basculer(e.currentTarget.checked)}
+        />{" "}
+        Déverrouiller automatiquement sur ce poste
+      </label>
+      <p className="empty-hint">
+        La clé du coffre est rangée dans le trousseau du système, ouvert à ta connexion : plus de mot de passe au
+        lancement, et le coffre ne se ferme plus à la veille. Refusé sur un Windows joint à un domaine.
+      </p>
+      {etat !== null && !permis && (
+        <p className="empty-hint">
+          Indisponible ici : ce poste est un Windows joint à un domaine, ou sa jonction n'a pas pu être vérifiée.
+        </p>
+      )}
+      {erreur && <p className="empty-hint empty-hint--error">{erreur}</p>}
+    </div>
   );
 }

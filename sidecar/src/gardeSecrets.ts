@@ -26,7 +26,7 @@
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { isPlainObject } from "./base.js";
-import { ciblesEcritureShell, estFichierSecretBloque, messageRefusEcriture, motifSecretDansContenu } from "./fichiersSecrets.js";
+import { ciblesEcritureShell, estCheminProtegeVeilleur, estFichierSecretBloque, messageRefusEcriture, motifSecretDansContenu } from "./fichiersSecrets.js";
 import * as journal from "./journal.js";
 import { readSecrets } from "./mcpSecrets.js";
 
@@ -40,7 +40,19 @@ function dansLeProjet(cwd: string, chemin: string): boolean {
  * Chemin refusé pour un appel d'outil (noms Claude Code ET neutres), `null`
  * s'il passe. Pure : testée sans SDK.
  */
-export function cheminRefuse(cwd: string, outil: string, entree: unknown): string | null {
+/** Tour du veilleur (T-227) : `sansBash` = liste d'outils sans shell, la garde s'étend à tout `.claude/` et `CLAUDE.md`. */
+export interface ModeVeilleur {
+  sansBash: boolean;
+}
+
+/** Mode de garde d'un tour, d'après ses paramètres `claude.start` (pure, testée). */
+export function modeVeilleur(params: Record<string, unknown>): ModeVeilleur | null {
+  if (params.veilleur !== true) return null;
+  return { sansBash: Array.isArray(params.tools) && !params.tools.includes("Bash") };
+}
+
+export function cheminRefuse(cwd: string, outil: string, entree: unknown, veilleurBrut: boolean | ModeVeilleur | null = false): string | null {
+  const veilleur = veilleurBrut === true ? { sansBash: false } : veilleurBrut || null;
   if (!isPlainObject(entree)) return null;
   const candidats: string[] = [];
   if (outil === "Write" || outil === "Edit" || outil === "MultiEdit") {
@@ -52,7 +64,21 @@ export function cheminRefuse(cwd: string, outil: string, entree: unknown): strin
   } else if (outil === "Bash" || outil === "bash" || outil === "PowerShell") {
     if (typeof entree.command === "string") candidats.push(...ciblesEcritureShell(entree.command));
   }
-  return candidats.find((c) => estFichierSecretBloque(c) && dansLeProjet(cwd, c)) ?? null;
+  // T-227 — tour du veilleur : .mcp.json, .claude/settings*.json et tout .iaction/ en plus ; sans Bash, tout .claude/ et CLAUDE.md.
+  return (
+    candidats.find(
+      (c) =>
+        (estFichierSecretBloque(c) || (veilleur !== null && estCheminProtegeVeilleur(path.relative(path.resolve(cwd), path.resolve(cwd, c)), veilleur.sansBash))) &&
+        dansLeProjet(cwd, c),
+    ) ?? null
+  );
+}
+
+/** Message d'un refus propre au tour du veilleur (fichier de configuration, pas de secret). */
+function messageRefus(chemin: string, veilleur: ModeVeilleur | null): string {
+  return veilleur !== null && !estFichierSecretBloque(chemin)
+    ? `Écriture refusée : « ${chemin} » configure le projet ou le veilleur ; un tour lancé par le relais ne le modifie pas.`
+    : messageRefusEcriture(chemin);
 }
 
 function journaliser(cwd: string, outil: string, chemin: string): void {
@@ -113,17 +139,18 @@ function refuser(raison: string): Record<string, unknown> {
 }
 
 /** Crochets du SDK pour un tour Claude (`options.hooks`). */
-export function crochetsSecrets(cwd: string): Record<string, unknown> {
+export function crochetsSecrets(cwd: string, veilleurBrut: boolean | ModeVeilleur | null = null): Record<string, unknown> {
+  const veilleur = veilleurBrut === true ? { sansBash: false } : veilleurBrut || null;
   const garde = async (input: unknown): Promise<Record<string, unknown>> => {
     if (!isPlainObject(input) || typeof input.tool_name !== "string") return {};
     if (OUTIL_DEPOT_RELAIS.test(input.tool_name)) {
       const refus = await refusDepotRelais(cwd, input.tool_input);
       return refus === null ? {} : refuser(refus);
     }
-    const chemin = cheminRefuse(cwd, input.tool_name, input.tool_input);
+    const chemin = cheminRefuse(cwd, input.tool_name, input.tool_input, veilleur);
     if (chemin === null) return {};
     journaliser(cwd, input.tool_name, chemin);
-    return refuser(messageRefusEcriture(chemin));
+    return refuser(messageRefus(chemin, veilleur));
   };
   return {
     PreToolUse: [
