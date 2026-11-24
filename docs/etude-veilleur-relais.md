@@ -204,9 +204,20 @@ aujourd'hui.
   par fil) ne borne pas.
 - **Permission demandée pendant un tour : refusée aussitôt**, sinon elle
   bloquerait le tour jusqu'à sa borne de durée.
-- **Réponse du veilleur sans pièce jointe** : le tour ne désigne pas encore de
-  fichiers à renvoyer (§ 3.3) ; l'outil `relais_demander`, lui, sait recevoir
-  les pièces d'une réponse.
+- **Pièces dans la réponse du veilleur (T-230)** : chaque demande a un dossier
+  de sortie `relais-envoi/<empreinte de l'id de la demande>/` (exclu de git), créé vide avant
+  le tour et dit à l'agent dans la consigne. Après le tour, seuls les fichiers
+  réguliers posés à plat dedans (20 au plus, 200 Mo cumulés) sont collectés,
+  chacun passé au contrôle de dépôt du relais (nom sensible, consignes,
+  `msg-*.md`, secret du coffre ou du jeton dans le contenu, aussi en UTF-16) ;
+  sous-dossiers et liens symboliques sont refusés, un ZIP n'est accepté que si
+  les noms de ses entrées le sont, tout autre conteneur est refusé. Les pièces sont déposées sous
+  `<id de la réponse>-<nom>` AVANT le message, qui les annonce (`pieces`) et
+  liste en fin de corps celles qui n'ont pas pu partir. Leur contenu n'entre
+  jamais dans l'état : une reprise redépose le message seul. Réponse retenue
+  pour secret, tour interrompu ou `info` : aucune pièce. Le dossier est
+  supprimé après le dépôt du message. L'outil `relais_reponse` les reçoit déjà
+  dans `relais-recu/<fil>/`.
 
 Après relecture adverse (même jour) :
 

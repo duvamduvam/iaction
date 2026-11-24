@@ -337,7 +337,7 @@ export function champsDifferents(a: ConfigVeilleur, b: ConfigVeilleur): string[]
 }
 
 /** Lignes ajoutées à l'exclusion LOCALE de git (jamais au `.gitignore` versionné). */
-export const EXCLUSIONS_GIT = ["/.iaction/veilleur.json", "/relais-recu/"];
+export const EXCLUSIONS_GIT = ["/.iaction/veilleur.json", "/relais-recu/", "/relais-envoi/"];
 
 /** Dossier git du projet (`.git` dossier, ou fichier `gitdir:` d'un worktree → dossier commun), ou `null`. */
 async function dossierGit(cwd: string): Promise<string | null> {
@@ -360,7 +360,7 @@ async function dossierGit(cwd: string): Promise<string | null> {
 }
 
 /**
- * Ajoute la config du veilleur et `relais-recu/` à `.git/info/exclude`, sans
+ * Ajoute la config du veilleur, `relais-recu/` et `relais-envoi/` à `.git/info/exclude`, sans
  * doublon. Pas un dépôt git : rien. Rend un avertissement en cas d'échec (pas
  * une erreur : l'enregistrement a eu lieu).
  */

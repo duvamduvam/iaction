@@ -48,6 +48,7 @@ import { uneReleve, type BilanReleve, type ClientBoite, type EtatVeilleur, type 
 import { creerEtatFichier } from "./veilleurEtat.js";
 import { creerMemoireFils, type MemoireFils } from "./veilleurFils.js";
 import { creerLanceur } from "./veilleurLanceur.js";
+import { collecterSortie, nettoyerSorties, preparerSortie, supprimerSortie } from "./veilleurSortie.js";
 
 export type EtatService = "inactif" | "actif" | "suspendu" | "en-attente-coffre" | "invalide" | "arret-en-cours" | "bloque";
 
@@ -279,6 +280,11 @@ export function creerServiceVeilleur(deps: DepsService = {}): ServiceVeilleur {
       recevoirPiece,
       dejaSignales,
       valeursSecretes: async () => Object.values(await secrets()),
+      // Pièces de la réponse : dossier de sortie `relais-envoi/<id>/`, contrôlé avec les valeurs du coffre et le jeton.
+      preparerSortie: (id) => preparerSortie(projet, id),
+      collecterSortie: async (id) => collecterSortie(projet, id, [...Object.values(await secrets()), jeton]),
+      supprimerSortie: (id) => supprimerSortie(projet, id),
+      nettoyerSorties: (repondus) => nettoyerSorties(projet, repondus, 8 * 24 * 3600 * 1000),
       signal,
     });
     derniereReleve = new Date(maintenant()).toISOString();

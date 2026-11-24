@@ -76,6 +76,31 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 | T-227 | feat | P2   | en cours  | Veilleur du relais : deux IAction se confient des tâches en autonomie par les boîtes aux lettres (remplace l'ancien outil séparé) — codé de bout en bout, relu deux fois, essai réel à venir (0.9.0) |
 | T-229 | bug  | P2   | en cours  | Indexation des connaissances relancée pour rien à chaque ouverture (dates comparées en égalité stricte de flottants), sur tous les cœurs et sans une ligne au journal |
 
+### T-230 — Pièces jointes dans la réponse du veilleur
+
+**Type** feat · **Prio** P1 · **Statut** fait · **Clos** 2026-11-23 · **Créé** 2026-11-23
+
+**Besoin** : renvoyer des fichiers dans la réponse du veilleur, pour se passer de l'ancien outil séparé (T-227 laissait la réponse sans aucune pièce).
+
+**Fait** :
+- `veilleurSortie.ts` (feuille) : dossier `relais-envoi/<empreinte de l'id de la demande>/` créé vide avant le tour ; collecte après le tour des seuls fichiers réguliers à plat (sous-dossiers et liens symboliques refusés, `relais-envoi/` jamais suivi hors du projet), 20 fichiers et 200 Mo cumulés au plus, chacun passé par `controlerDepot` avec les valeurs du coffre et le jeton ; suppression du dossier ;
+- `veilleurCycle.ts` : l'id de la réponse est fixé avant les pièces, déposées par `deposerBrut` sous `<id>-<nom>` avant le message ; une pièce dont le dépôt échoue devient un refus ; refus dits en fin de corps (« Pièces non envoyées ») et au journal sans contenu ; `pieces` de l'en-tête = les seules déposées ; aucun contenu de pièce dans l'état (reprise : message seul, sans re-collecte) ; aucune pièce si la réponse est retenue pour secret, interrompue ou `info` ; dossier supprimé après le dépôt du message (ou de sa reprise), échec = ligne `warn` ;
+- `veilleurLanceur.ts` : la consigne du tour donne le chemin exact du dossier ; `veilleurService.ts` : câblage réel ; `veilleurConfig.ts` : `/relais-envoi/` ajouté à l'exclusion git locale ;
+- côté maison, rien à changer : `relais_reponse` reçoit déjà les pièces d'une réponse dans `relais-recu/<fil>/` (vérifié par un test de bout en bout avec la boîte factice).
+
+**Relecture adverse** (2026-11-23) — constats corrigés, chacun par un test de comportement (`veilleurSortie.test.js`, 31 cas ; mutations du code compilé rouges) :
+- archives : un `.env` rangé dans un conteneur passait les contrôles. ZIP (y compris .docx/.xlsx, reconnu par sa fin donc aussi polyglotte) lu par son répertoire central sans décompression, refusé si une entrée est sensible, de consignes, sous `.git`/`.iaction`, réglage `.claude/settings*`, `msg-*.md`, hors de l'archive, chiffrée ou illisible (`veilleurArchive.ts`) ; gzip, 7z, rar, xz, zstd, bz2, tar… refusés (« envoyer un .zip ») ; valeurs connues cherchées aussi en UTF-16 LE/BE, motifs par fenêtres de 1 Mo (plus de copie entière) ;
+- noms de pièces passés à la recherche de secrets (remplacés par « (nom retenu) ») ; contrôle du corps FINAL, lignes de refus comprises, avant tout dépôt de pièce ;
+- pièces orphelines : le relais ne supprime que dans SA boîte, on ne peut pas retirer une pièce chez le destinataire. Le message est donc préparé en état AVANT les pièces (noms prévus), chaque dépôt confirmé est noté, et une reprise redépose le MÊME message (même id) n'annonçant que les confirmées, les manquantes dites dans le corps ; dossier local supprimé après le message seulement ;
+- textes qui partent : code d'erreur seul (`EBUSY`…), détail au journal local ; `segmentSur` refuse les noms réservés de Windows et le point final ; dossier de sortie nommé par empreinte de l'id (collisions de casse) ; reliquat nettoyé à la préparation, dossiers des demandes répondues ou de plus de 8 jours retirés à chaque relève (échec dit une fois) ; cumul recontrôlé sur la taille lue.
+- Limites assumées : le CONTENU d'une entrée compressée n'est pas cherché (seuls les noms le sont) ; zip64 refusé ; une pièce déposée chez le destinataire puis non confirmée reste orpheline dans sa boîte (jamais annoncée) ; le contrôle du corps final est une ceinture (les noms sont déjà neutralisés).
+
+**Tests** : `sidecar/test/veilleurSortie.test.js` (31 cas), plus un cas dans `veilleurLanceur.test.js` et `veilleurConfig.test.js`.
+
+**Non vérifié en réel** : aucun tour Claude réel ni vrai broker (taille et noms de fichiers acceptés par le vrai broker inconnus) ; un projet déjà enregistré garde l'ancienne exclusion git tant qu'il n'est pas ré-enregistré dans l'interface.
+
+**Liens** : T-227 (veilleur du relais).
+
 ### T-229 — Indexation des connaissances : relancée pour rien, sur tous les cœurs, sans trace
 
 **Type** bug · **Prio** P2 · **Statut** en cours · **Créé** 2026-11-22
@@ -151,7 +176,7 @@ au backlog, jamais l'inverse (voir `docs/github.md` §5).
 **Reste à faire** :
 - relecture adverse : faite deux fois (2026-11-20), verdict « essai encadré possible, pas de service sans surveillance » ;
 - essai réel encadré (publier le site), avec la 0.9.0 installée sur les deux postes, puis retrait de l'ancien outil ;
-- reportés : bulle de réponse automatique hors tour ; pièces jointes dans la réponse du veilleur.
+- reportés : bulle de réponse automatique hors tour ; (pièces jointes dans la réponse du veilleur : fait, T-230).
 
 **Liens** : relais entre studios (T-221, 0.8.0), coffre (T-221), canal `reveil` oublié (T-228).
 
@@ -4642,6 +4667,7 @@ dépassé ; succès ⇒ cadence nominale). **98 tests Rust au vert, code de sort
 
 | ID    | Type | Prio | Statut    | Titre |
 |-------|------|------|-----------|-------|
+| T-230 | feat | P1   | fait      | Renvoyer des fichiers dans la réponse du veilleur, pour se passer de l'ancien outil séparé : dossier de sortie par demande, collecte contrôlée, pièces déposées avant le message |
 | T-228 | bug  | P3   | fait      | Le canal de journal `reveil` manquait à la liste de lecture de l'interface : ses entrées apparaissaient comme `sidecar` dans la page Système, et le filtre ne le proposait pas |
 | T-225 | feat | P2   | fait      | Déverrouiller automatiquement le coffre sur ce poste : clé du coffre au trousseau du système, permis seulement hors domaine — le poste du bureau reste au mot de passe |
 | T-224 | bug  | P1   | fait      | CI de la PR 0.8.0 rouge sans changement de code : binaire CUDA d'onnxruntime-node en 404 (Linux), `Expand-Archive` cassé sur l'image Windows, et une regex de test signalée par CodeQL |

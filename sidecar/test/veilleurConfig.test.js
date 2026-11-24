@@ -206,6 +206,16 @@ await cas("exclusion git LOCALE : ajoutée sans doublon ; pas de dépôt : rien 
   assert((await fsp.readFile(path.join(d, ".git", "info", "exclude"), "utf8")).includes("/relais-recu/"), "dossier commun du dépôt");
 });
 
+await cas("exclusion git LOCALE : `relais-envoi/` rejoint `relais-recu/`, même sur un projet déjà exclu", async () => {
+  const d = await fsp.mkdtemp(path.join(os.tmpdir(), "veilleur-git-envoi-"));
+  await fsp.mkdir(path.join(d, ".git", "info"), { recursive: true });
+  await fsp.writeFile(path.join(d, ".git", "info", "exclude"), "/.iaction/veilleur.json\n/relais-recu/\n");
+  await exclureDeGit(d);
+  await exclureDeGit(d);
+  const lignes = (await fsp.readFile(path.join(d, ".git", "info", "exclude"), "utf8")).split("\n");
+  assert(lignes.filter((l) => l === "/relais-envoi/").length === 1 && lignes.filter((l) => l === "/relais-recu/").length === 1, lignes.join("|"));
+});
+
 await cas("lecture : un fichier illisible (autre qu'absent) est invalide, pas absent", async () => {
   const d = await fsp.mkdtemp(path.join(os.tmpdir(), "veilleur-cfg-dir-"));
   await fsp.mkdir(path.join(d, ".iaction", "veilleur.json"), { recursive: true });
