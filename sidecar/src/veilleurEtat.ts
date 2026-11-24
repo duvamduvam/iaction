@@ -67,7 +67,12 @@ function lireSuspension(v: unknown): Suspension | null {
 function lireReponse(v: unknown): ReponseEnAttente | undefined {
   if (typeof v !== "object" || v === null) return undefined;
   const o = v as Record<string, unknown>;
-  return typeof o.dest === "string" && typeof o.nom === "string" && typeof o.contenu === "string" ? { dest: o.dest, nom: o.nom, contenu: o.contenu } : undefined;
+  if (typeof o.dest !== "string" || typeof o.nom !== "string" || typeof o.contenu !== "string") return undefined;
+  // Pièces (T-230) : champ facultatif, absent d'un état plus ancien.
+  const p = o.pieces as { prevues?: unknown; confirmees?: unknown } | null | undefined;
+  const noms = (x: unknown): x is string[] => Array.isArray(x) && x.every((n) => typeof n === "string");
+  const pieces = p && noms(p.prevues) && noms(p.confirmees) ? { prevues: p.prevues, confirmees: p.confirmees } : undefined;
+  return { dest: o.dest, nom: o.nom, contenu: o.contenu, ...(pieces ? { pieces } : {}) };
 }
 
 function lireEntree(v: unknown): TraiteEntree | null {

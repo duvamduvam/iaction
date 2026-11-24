@@ -11,6 +11,21 @@ versions selon [SemVer](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.9.1] — 2026-11-24
+
+Depuis la 0.9.0 (2026-11-23) : **le veilleur renvoie des fichiers** avec sa
+réponse.
+
+### Ajouté
+
+- **Le veilleur du relais renvoie des fichiers** (T-230) : la consigne du tour
+  désigne un dossier de sortie par demande (`relais-envoi/<empreinte de l'id>/`,
+  exclu de git) ; les fichiers que l'agent y pose à plat partent avec la réponse, sous
+  les mêmes contrôles que le relais (pas de clé ni de secret, 20 fichiers et
+  200 Mo au plus ; un zip n'est accepté que si aucune entrée n'est sensible,
+  les autres archives sont refusées). Ce qui ne part pas est dit dans la réponse. Remplace
+  l'ancien outil séparé sur ce point.
+
 ## [0.9.0] — 2026-11-23
 
 Depuis la 0.8.0 (2026-11-19) : **le veilleur du relais**, par lequel un studio

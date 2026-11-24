@@ -385,4 +385,14 @@ await cas("prompt : pièces reçues et refusées dites à l'agent", async () => 
   assert(composerPrompt("fais X", { ecrites: [], refusees: [] }) === "fais X", "sans pièce : le corps seul");
 });
 
+await cas("dossier de sortie : le chemin exact est dit à l'agent dans la consigne, rien sans dossier", async () => {
+  const vus = [];
+  const demarrer = async (id, params, e) => (vus.push(params), e.done(id, { subtype: "success", result: "ok" }));
+  const lancer = creerLanceur({ cwd: "/projet", config, demarrer, interrompre() {}, fils: await fils(), suivreTour, planifier: minuteurs().planifier });
+  await lancer(message, "maison", { ...sansPieces, sortie: "relais-envoi/m1" });
+  await lancer({ ...message, id: "m2" }, "maison", sansPieces);
+  assert(vus[0].systemPrompt.includes("relais-envoi/m1/") && vus[0].systemPrompt.includes("À PLAT") && vus[0].systemPrompt.includes("20 fichiers"), vus[0].systemPrompt);
+  assert(!vus[1].systemPrompt.includes("relais-envoi"), "pas de dossier : pas de ligne");
+});
+
 console.log(`veilleurLanceur : ${ok} cas OK`);

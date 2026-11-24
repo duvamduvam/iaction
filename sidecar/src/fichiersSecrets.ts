@@ -65,12 +65,42 @@ const MOTIFS_SECRETS: [RegExp, string][] = [
  */
 export function motifSecretDansContenu(contenu: Buffer, connus: string[] = []): string | null {
   for (const v of connus) {
-    if (v.length >= 8 && contenu.includes(v)) return "un secret connu (jeton du relais ou du coffre)";
+    if (v.length < 8) continue;
+    // Une même valeur peut être écrite en UTF-8, en UTF-16 (LE ou BE) ou en latin1.
+    for (const forme of formesDeValeur(v)) {
+      if (contenu.includes(forme)) return "un secret connu (jeton du relais ou du coffre)";
+    }
   }
-  // Les motifs ne portent que sur de l'ASCII : latin1 ne casse rien et ne coûte qu'une copie.
-  const texte = contenu.toString("latin1");
+  // Les motifs ne portent que sur de l'ASCII : latin1 ne casse rien. Par fenêtres
+  // (qui se recouvrent) : pas de copie de la taille du fichier entier.
+  for (let debut = 0; debut < contenu.length; debut += FENETRE_MOTIFS) {
+    const motif = motifDansTexte(contenu.toString("latin1", debut, Math.min(contenu.length, debut + FENETRE_MOTIFS + RECOUVREMENT_MOTIFS)));
+    if (motif) return motif;
+  }
+  // UTF-16 avec marque d'ordre : on décode pour y chercher les formes reconnaissables.
+  if (contenu.length >= 4 && ((contenu[0] === 0xff && contenu[1] === 0xfe) || (contenu[0] === 0xfe && contenu[1] === 0xff))) {
+    const pair = contenu.subarray(0, contenu.length - (contenu.length % 2));
+    const le = contenu[0] === 0xff ? pair : Buffer.from(pair).swap16();
+    return motifDansTexte(le.toString("utf16le"));
+  }
+  return null;
+}
+
+const FENETRE_MOTIFS = 1 << 20;
+/** Plus long qu'un motif (une clé privée, un jeton) : rien ne se perd à la jointure de deux fenêtres. */
+const RECOUVREMENT_MOTIFS = 1024;
+
+function motifDansTexte(texte: string): string | null {
   for (const [re, quoi] of MOTIFS_SECRETS) if (re.test(texte)) return quoi;
   return null;
+}
+
+function formesDeValeur(v: string): Buffer[] {
+  const le = Buffer.from(v, "utf16le");
+  const formes = [Buffer.from(v, "utf8"), le, Buffer.from(le).swap16()];
+  const l1 = Buffer.from(v, "latin1");
+  if (!l1.equals(formes[0])) formes.push(l1);
+  return formes;
 }
 
 /**

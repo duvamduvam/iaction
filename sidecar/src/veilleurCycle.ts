@@ -26,6 +26,15 @@
  *      `repondu`, et seulement alors supprimer le message.
  * Une demande ne disparaît donc jamais sans réponse.
  *
+ * Pièces de la réponse (T-230) : un dossier de sortie par demande est créé
+ * avant le tour ; après, ses fichiers sont collectés (contrôle de dépôt du
+ * relais) et déposés AVANT le message, sous un id de réponse fixé d'avance.
+ * Leur contenu n'entre jamais dans l'état, seulement leurs noms : le message est
+ * préparé AVANT les pièces, chaque dépôt confirmé est noté, et une reprise
+ * redépose le MÊME message (même id) en n'annonçant que les confirmées — une
+ * pièce ne se retire pas de la boîte d'un autre studio. Réponse retenue pour
+ * secret (lignes de refus comprises), interrompue ou `info` : aucune pièce.
+ *
  * Coût : connu en fin de tour (le moteur borne aussi la dépense). Au-delà du
  * plafond — ou inconnu après une interruption — la réponse part avec une
  * ligne qui le dit, puis le veilleur est SUSPENDU. Une réponse qui porterait
@@ -78,6 +87,21 @@ export interface ContexteTour {
   pieces: PiecesRecues;
   /** Abandon demandé (veilleur arrêté) : le lanceur interrompt le tour. */
   signal?: AbortSignal;
+  /** Dossier de sortie (relatif à la racine du projet) où l'agent dépose ce qu'il renvoie ; absent : aucun. */
+  sortie?: string;
+}
+
+/** Ce que l'agent a laissé dans le dossier de sortie, après contrôle. */
+export interface SortieCollectee {
+  pieces: { nom: string; contenu: Buffer }[];
+  /** `raison` PART avec la réponse (jamais de chemin du poste) ; `detail` reste au journal local. */
+  refusees: { nom: string; raison: string; detail?: string }[];
+}
+
+/** Code d'une erreur système (`EBUSY`, `EACCES`…) : la seule part d'une erreur qui puisse partir avec une réponse. */
+export function codeErreur(e: unknown): string {
+  const c = (e as NodeJS.ErrnoException | null)?.code;
+  return typeof c === "string" && /^[A-Z0-9_]{2,20}$/.test(c) ? c : "erreur";
 }
 
 /** Ce que rend un tour. */
@@ -105,6 +129,12 @@ export interface ReponseEnAttente {
   dest: string;
   nom: string;
   contenu: string;
+  /**
+   * Pièces de la réponse (noms seulement, jamais leur contenu) : annoncées par le
+   * message préparé, et déposées chez le destinataire avec certitude. Une reprise
+   * redépose le message (même id) en n'annonçant que les confirmées.
+   */
+  pieces?: { prevues: string[]; confirmees: string[] };
 }
 
 /** Message marqué `en-cours` (son dépôt de réponse n'a pas encore réussi). */
@@ -163,6 +193,14 @@ export interface DepsVeilleur {
   recevoirPiece?: RecevoirPiece;
   /** Valeurs du coffre : une réponse qui en porte une est retenue. */
   valeursSecretes?: () => Promise<string[]>;
+  /** Crée le dossier de sortie (vide) de la demande `id` ; rend son chemin relatif. Absente : pas de pièce en réponse. */
+  preparerSortie?: (id: string) => Promise<string>;
+  /** Collecte, contrôle et rend les fichiers du dossier de sortie. */
+  collecterSortie?: (id: string) => Promise<SortieCollectee>;
+  /** Supprime le dossier de sortie, une fois le message déposé. */
+  supprimerSortie?: (id: string) => Promise<void>;
+  /** Retire les dossiers de sortie des demandes déjà répondues (ou trop vieux) ; rend les échecs. */
+  nettoyerSorties?: (repondus: string[]) => Promise<{ retires: number; echecs: { nom: string; cause: string }[] }>;
   /** Arrêt du veilleur : plus de nouveau message, le tour en cours s'interrompt. */
   signal?: AbortSignal;
   /** Ce qui a déjà été signalé au journal (une fois par processus) ; défaut : mémoire du module. */
@@ -229,14 +267,17 @@ function reponse(
   type: TypeMessage,
   corps: string,
   nouvelId: () => string,
+  /** `id` déjà fixé (les pièces portent l'id de la réponse) et noms des pièces déposées. */
+  avec: { id?: string; pieces?: string[] } = {},
 ): { nom: string; contenu: string } {
-  const id = nouvelId();
+  const id = avec.id ?? nouvelId();
   const contenu = serialiserMessage({
     fil: m.fil,
     id,
     type,
     profondeur: profondeurSuivante(m.profondeur),
     enReponseA: m.id,
+    ...(avec.pieces && avec.pieces.length > 0 ? { pieces: avec.pieces } : {}),
     corps,
   });
   return { nom: `msg-${id}.md`, contenu };
@@ -285,6 +326,7 @@ export async function uneReleve(depsBrutes: DepsVeilleur): Promise<BilanReleve> 
   const retires = new Set<string>();
   try {
     await reprendre(deps, recus, retires, bilan);
+    await nettoyerReliquats(deps);
   } catch (e) {
     if (!(e instanceof ErreurEtat)) throw e;
     bilan.erreur = e.message;
@@ -328,6 +370,13 @@ async function reprendre(deps: DepsVeilleur, recus: FichierBoite[], retires: Set
       r = { dest: e.de, ...info };
       await deps.etat.preparerReponse(e.id, r);
       deps.journal("warn", "tour interrompu avant sa réponse : l'émetteur en est informé", { id: e.id, fil: e.fil, de: e.de });
+    } else {
+      const complete = reconstruire(r);
+      if (complete !== r) {
+        r = complete;
+        await deps.etat.preparerReponse(e.id, r);
+        deps.journal("warn", "pièces de la réponse non toutes confirmées : le message part sans les manquantes (elles ne sont pas annoncées)", { id: e.id, fil: e.fil });
+      }
     }
     try {
       await deps.boite.deposer(r.dest, r.nom, r.contenu);
@@ -338,6 +387,7 @@ async function reprendre(deps: DepsVeilleur, recus: FichierBoite[], retires: Set
       continue;
     }
     await deps.etat.marquerRepondu(e.id);
+    await retirerSortie(deps, e.id);
     (bilan.repris ??= []).push(e.id);
     if (recus.some((x) => x.nom === e.nom)) {
       await deps.boite.supprimer(e.nom).catch((err: unknown) => deps.journal("warn", "message répondu non retiré de la boîte", { nom: e.nom, cause: String(err) }));
@@ -378,6 +428,85 @@ async function telechargerPieces(
     lues.push({ nom, nomBoite, contenu });
   }
   return { lues, refusees };
+}
+
+/** Supprime le dossier de sortie d'une demande répondue ; un échec se dit, jamais une erreur. */
+async function retirerSortie(deps: DepsVeilleur, id: string): Promise<void> {
+  if (!deps.supprimerSortie) return;
+  try {
+    await deps.supprimerSortie(id);
+  } catch (e) {
+    deps.journal("warn", "dossier de sortie non supprimé", { id, cause: String(e) });
+  }
+}
+
+/** Nombre de refus détaillés dans le corps ; le reste est compté. */
+const REFUS_DETAILLES = 20;
+
+/**
+ * Collecte les pièces de la réponse. Un nom (de pièce ou de refus) qui porte un
+ * secret est remplacé : il partirait dans l'en-tête, le nom en boîte et le corps.
+ * Rien d'autre que `raison` ne quitte le poste ; `detail` va au journal.
+ */
+async function collecter(deps: DepsVeilleur, m: MessageVeilleur, valeurs: string[], collecterSortie: NonNullable<DepsVeilleur["collecterSortie"]>): Promise<SortieCollectee> {
+  let brut: SortieCollectee;
+  try {
+    brut = await collecterSortie(m.id);
+  } catch (e) {
+    brut = { pieces: [], refusees: [{ nom: "dossier de sortie", raison: `collecte impossible (${codeErreur(e)})`, detail: String(e) }] };
+  }
+  const porteSecret = (t: string) => motifSecretDansContenu(Buffer.from(t, "utf8"), valeurs) !== null;
+  const NOM_RETENU = "(nom retenu)";
+  const sortie: SortieCollectee = { pieces: [], refusees: [] };
+  for (const x of brut.refusees) sortie.refusees.push(porteSecret(`${x.nom}\n${x.raison}`) ? { nom: NOM_RETENU, raison: "refusé (le nom portait un secret)" } : x);
+  for (const p of brut.pieces) {
+    if (porteSecret(p.nom)) sortie.refusees.push({ nom: NOM_RETENU, raison: "refusé (le nom portait un secret)" });
+    else sortie.pieces.push(p);
+  }
+  for (const x of sortie.refusees) deps.journal("warn", "pièce de la réponse non envoyée", { id: m.id, fil: m.fil, piece: x.nom, raison: x.raison, ...(x.detail ? { detail: x.detail } : {}) });
+  return sortie;
+}
+
+/** Lignes « Pièces non envoyées » ajoutées en fin de corps (vide si aucun refus). */
+function ligneRefus(refusees: { nom: string; raison: string }[], titre = "Pièces non envoyées"): string {
+  if (refusees.length === 0) return "";
+  const lignes = refusees.slice(0, REFUS_DETAILLES).map((p) => `- ${p.nom} : ${p.raison}`);
+  if (refusees.length > REFUS_DETAILLES) lignes.push(`- … et ${refusees.length - REFUS_DETAILLES} autre(s)`);
+  return `\n\n${titre} :\n${lignes.join("\n")}`;
+}
+
+/**
+ * Réponse préparée dont des pièces n'ont pas été confirmées (arrêt pendant
+ * l'envoi) : MÊME id, message qui n'annonce que les confirmées et dit les
+ * manquantes. Une pièce déposée dans la boîte d'un autre studio ne se retire
+ * pas (le relais ne supprime que dans sa propre boîte) : un nouvel id la
+ * laisserait orpheline et muette.
+ */
+function reconstruire(r: ReponseEnAttente): ReponseEnAttente {
+  const p = r.pieces;
+  const manquantes = p ? p.prevues.filter((n) => !p.confirmees.includes(n)) : [];
+  if (!p || manquantes.length === 0) return r;
+  const lu = lireMessage(r.contenu);
+  if ("invalide" in lu) return r;
+  const m = { ...lu.message };
+  delete m.pieces;
+  if (p.confirmees.length > 0) m.pieces = [...p.confirmees];
+  m.corps += ligneRefus(manquantes.map((nom) => ({ nom, raison: "dépôt non confirmé : le veilleur s'est arrêté pendant l'envoi" })), "Pièces non confirmées");
+  return { dest: r.dest, nom: r.nom, contenu: serialiserMessage(m), pieces: { prevues: [...p.confirmees], confirmees: [...p.confirmees] } };
+}
+
+/** Retire les dossiers de sortie des demandes répondues dont la suppression avait échoué ; dit l'échec une fois. */
+async function nettoyerReliquats(deps: DepsVeilleur): Promise<void> {
+  if (!deps.nettoyerSorties) return;
+  const repondus: string[] = [];
+  for (const id of await deps.etat.idsTraites()) if ((await deps.etat.statutDe(id)) === "repondu") repondus.push(id);
+  try {
+    for (const x of (await deps.nettoyerSorties(repondus)).echecs) {
+      if (premiereFois(deps, `sortie:${x.nom}`)) deps.journal("warn", "dossier de sortie non supprimé, nouvel essai à chaque relève", { dossier: x.nom, cause: x.cause });
+    }
+  } catch (e) {
+    if (premiereFois(deps, "nettoyage-sorties")) deps.journal("warn", "nettoyage des dossiers de sortie impossible", { cause: String(e) });
+  }
 }
 
 async function traiterUn(deps: DepsVeilleur, f: FichierBoite, recus: FichierBoite[], bilan: BilanReleve): Promise<void> {
@@ -462,7 +591,17 @@ async function traiterUn(deps: DepsVeilleur, f: FichierBoite, recus: FichierBoit
   }
   for (const p of pieces.refusees) deps.journal("warn", "pièce non reçue", { id: m.id, fil: m.fil, piece: p.nom, raison: p.raison });
 
-  const issue = await deps.lancer(m, f.de, { pieces, ...(deps.signal ? { signal: deps.signal } : {}) });
+  // Dossier de sortie créé (vide) avant le tour ; un échec se dit, le tour part sans.
+  let sortie: string | undefined;
+  if (deps.preparerSortie) {
+    try {
+      sortie = await deps.preparerSortie(m.id);
+    } catch (e) {
+      deps.journal("warn", "dossier de sortie non créé : la réponse partira sans pièce", { id: m.id, fil: m.fil, cause: String(e) });
+    }
+  }
+
+  const issue = await deps.lancer(m, f.de, { pieces, ...(sortie ? { sortie } : {}), ...(deps.signal ? { signal: deps.signal } : {}) });
 
   const plafond = deps.config.plafonds.coutParMessage;
   const inconnuApresInterruption = issue.interrompu === true && issue.coutUsd === null;
@@ -476,8 +615,18 @@ async function traiterUn(deps: DepsVeilleur, f: FichierBoite, recus: FichierBoit
       ? "coût inconnu après l'interruption du tour, traité comme un dépassement"
       : `coût du tour ${(issue.coutUsd ?? plafond).toFixed(2)} $ au-delà du plafond de ${plafond.toFixed(2)} $/message`;
 
+  // Le contrôle porte sur le corps FINAL, lignes de refus des pièces comprises : retenu, plus aucune pièce ne part.
+  const valeurs = deps.valeursSecretes ? await deps.valeursSecretes() : [];
+  const secretDans = (t: string) => motifSecretDansContenu(Buffer.from(t, "utf8"), valeurs);
+  let motifSecret = secretDans(issue.corps);
+  let collecte: SortieCollectee = { pieces: [], refusees: [] };
+  // Aucune pièce si la réponse est retenue (secret) ou interrompue.
+  if (!motifSecret && sortie !== undefined && issue.interrompu !== true && deps.collecterSortie) {
+    collecte = await collecter(deps, m, valeurs, deps.collecterSortie);
+    motifSecret = secretDans(`${issue.corps}${ligneRefus(collecte.refusees)}`);
+    if (motifSecret) collecte = { pieces: [], refusees: [] };
+  }
   let corps = issue.corps;
-  const motifSecret = motifSecretDansContenu(Buffer.from(corps, "utf8"), deps.valeursSecretes ? await deps.valeursSecretes() : []);
   if (motifSecret) {
     deps.journal("warn", "réponse retenue : elle portait un secret", { id: m.id, fil: m.fil, motif: motifSecret });
     corps = `Réponse retenue : elle contenait ${motifSecret}.`;
@@ -485,10 +634,32 @@ async function traiterUn(deps: DepsVeilleur, f: FichierBoite, recus: FichierBoit
   if (depasse) corps = `${corps}\n\n— ${motifSuspension} : le veilleur est suspendu jusqu'à sa réactivation par un humain.`;
 
   try {
-    const r = reponse(m, "reponse", corps, deps.nouvelId);
-    if (await deposer(deps, m.id, f.de, r)) {
+    // L'id de la réponse est fixé AVANT les pièces (elles le portent dans leur nom en boîte).
+    const idReponse = deps.nouvelId();
+    const refus = [...collecte.refusees];
+    const prevues = collecte.pieces.map((p) => p.nom);
+    const confirmees: string[] = [];
+    const composer = (annoncees: string[]) => reponse(m, "reponse", `${corps}${ligneRefus(refus)}`, deps.nouvelId, { id: idReponse, pieces: annoncees });
+    if (prevues.length > 0) {
+      // Message préparé AVANT les pièces : un arrêt en cours d'envoi laisse de quoi redéposer sous le même id.
+      await deps.etat.preparerReponse(m.id, { dest: f.de, ...composer(prevues), pieces: { prevues, confirmees: [] } });
+      for (const p of collecte.pieces) {
+        try {
+          await deps.boite.deposerBrut(f.de, nomPieceEnBoite(idReponse, p.nom), p.contenu);
+        } catch (e) {
+          refus.push({ nom: p.nom, raison: `dépôt impossible (${codeErreur(e)})` });
+          deps.journal("warn", "pièce de la réponse non envoyée", { id: m.id, fil: m.fil, piece: p.nom, raison: "dépôt impossible", detail: String(e) });
+          continue;
+        }
+        confirmees.push(p.nom);
+        await deps.etat.preparerReponse(m.id, { dest: f.de, ...composer(prevues), pieces: { prevues, confirmees: [...confirmees] } });
+      }
+    }
+    const r = composer(confirmees);
+    if (await deposer(deps, m.id, f.de, r, prevues.length > 0 ? { prevues: [...confirmees], confirmees } : undefined)) {
       await deps.boite.supprimer(f.nom);
-      deps.journal("info", "réponse déposée", { fil: m.fil, enReponseA: m.id, de: f.de, coutUsd: issue.coutUsd });
+      deps.journal("info", "réponse déposée", { fil: m.fil, enReponseA: m.id, de: f.de, coutUsd: issue.coutUsd, pieces: confirmees.length });
+      await retirerSortie(deps, m.id);
     }
     bilan.traites.push(m.id);
   } finally {
@@ -505,8 +676,8 @@ async function traiterUn(deps: DepsVeilleur, f: FichierBoite, recus: FichierBoit
  * Garde la réponse dans l'état, puis la dépose et marque `repondu`. Un dépôt
  * raté laisse la réponse en attente (redéposée à la relève suivante) : `false`.
  */
-async function deposer(deps: DepsVeilleur, id: string, dest: string, r: { nom: string; contenu: string }): Promise<boolean> {
-  await deps.etat.preparerReponse(id, { dest, ...r });
+async function deposer(deps: DepsVeilleur, id: string, dest: string, r: { nom: string; contenu: string }, pieces?: ReponseEnAttente["pieces"]): Promise<boolean> {
+  await deps.etat.preparerReponse(id, { dest, ...r, ...(pieces ? { pieces } : {}) });
   try {
     await deps.boite.deposer(dest, r.nom, r.contenu);
   } catch (e) {
